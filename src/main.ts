@@ -9,6 +9,7 @@ let memberName = localStorage.getItem(KEY) || ''
 let memberId = ''
 let channel: ReturnType<typeof supabase.channel> | null = null
 let settingsChannel: ReturnType<typeof supabase.channel> | null = null
+let familySyncChannel: ReturnType<typeof supabase.channel> | null = null
 const app = document.querySelector<HTMLDivElement>('#app')!
 document.title = 'FAMILIA NOA'
 
@@ -50,7 +51,7 @@ function securityStep(name: string) {
     if(fnError||!data?.ok){error.textContent=data?.error||'No pudimos verificar tus datos.';return}
     await supabase.auth.refreshSession()
     memberName=selected.name;memberId=selected.id;localStorage.setItem(KEY,memberName)
-    renderHome();startSettingsRealtime()
+    renderHome();startSettingsRealtime();startFamilyRealtime()
   })
 }
 
@@ -78,10 +79,32 @@ function startSettingsRealtime(){
   settingsChannel=supabase.channel('familia-noa-settings').on('postgres_changes',{event:'UPDATE',schema:'public',table:'app_settings',filter:'id=eq.global'},payload=>applySettings((payload.new as any).settings)).subscribe()
 }
 
+function startFamilyRealtime(){
+  familySyncChannel?.unsubscribe()
+  familySyncChannel=supabase.channel('familia-noa-family-sync')
+    .on('postgres_changes',{event:'*',schema:'public',table:'family_members'},async()=>{
+      await loadMembers()
+      const current=members.find(m=>m.id===memberId)
+      if(!current){ localStorage.removeItem(KEY); memberName=''; memberId=''; await supabase.auth.signOut(); login('Este perfil ya no está activo.') }
+    })
+    .on('postgres_changes',{event:'UPDATE',schema:'public',table:'family_access',filter:`member_id=eq.${memberId}`},()=>{
+      if(document.querySelector('.locationbox')) renderLocation()
+    })
+    .on('postgres_changes',{event:'*',schema:'public',table:'photos'},()=>{
+      if(document.querySelector('[data-photo-page]')) renderPhotos()
+    })
+    .on('postgres_changes',{event:'*',schema:'public',table:'locations'},()=>{
+      if(document.querySelector('.family-locations')) loadLocations()
+    })
+    .on('postgres_changes',{event:'*',schema:'public',table:'wellbeing_status'},()=>{})
+    .on('postgres_changes',{event:'*',schema:'public',table:'help_alerts'},()=>{})
+    .subscribe()
+}
+
 function renderHome() {
   app.innerHTML = `<main class="shell"><header class="top"><div><p class="eyebrow">FAMILIA NOA</p><h1>Hola, ${esc(memberName)} <span>♡</span></h1></div><button class="avatar" id="change">${esc(memberName.charAt(0))}</button></header><section class="hero"><p class="eyebrow">TODOS CERCA</p><h2>¿Cómo está la familia hoy?</h2><p>Habla, comparte y revisa que todos estén bien.</p></section><section class="grid"><button class="card dark" id="chat"><i>✦</i><b>Chat</b><small>Habla con todos</small></button><button class="card photo" id="photos"><i>◌</i><b>Fotos</b><small>Momentos de familia</small></button><button class="card" id="location"><i>⌖</i><b>Ubicación</b><small>Ver dónde estamos</small></button><button class="card ok" id="ok"><i>♥</i><b>Estoy bien</b><small>Avísale a la familia</small></button><button class="card help" id="help"><i>!</i><b>Ayuda</b><small>Necesito a mi familia</small></button></section><nav><button class="active">Inicio</button><button id="navchat">Chat</button><button id="navphotos">Fotos</button><button id="navlocation">Ubicación</button></nav></main>`
   applySettings({})
-  document.querySelector('#change')!.addEventListener('click',()=>{localStorage.removeItem(KEY);memberName='';memberId='';supabase.auth.signOut();login()})
+  document.querySelector('#change')!.addEventListener('click',()=>{localStorage.removeItem(KEY);memberName='';memberId='';familySyncChannel?.unsubscribe();settingsChannel?.unsubscribe();supabase.auth.signOut();login()})
   document.querySelector('#chat')!.addEventListener('click',renderChat)
   document.querySelector('#navchat')!.addEventListener('click',renderChat)
   document.querySelector('#photos')!.addEventListener('click',renderPhotos)
@@ -119,13 +142,10 @@ function renderPhotos(){sheet('Fotos','El álbum privado se conectará a Supabas
 function sheet(title:string,text:string){const el=document.createElement('div');el.className='overlay';el.innerHTML=`<div class="sheet"><button class="close">×</button><p class="eyebrow">FAMILIA NOA</p><h2>${esc(title)}</h2><p>${esc(text)}</p><button class="primary close">Entendido</button></div>`;document.body.appendChild(el);el.querySelectorAll('.close').forEach(x=>x.addEventListener('click',()=>el.remove()))}
 
 async function start(){
-  // The identity screen must always be available. Authentication is only required
-  // when the user actually selects a family member, so a temporary auth/network
-  // issue can never replace the main entry screen with an error.
   await loadMembers()
   const session=(await supabase.auth.getSession()).data.session
   const verifiedId=session?.user?.app_metadata?.member_id as string|undefined
-  if(memberName&&verifiedId&&members.some(m=>m.id===verifiedId&&m.name===memberName)){memberId=verifiedId;renderHome();startSettingsRealtime()}
+  if(memberName&&verifiedId&&members.some(m=>m.id===verifiedId&&m.name===memberName)){memberId=verifiedId;renderHome();startSettingsRealtime();startFamilyRealtime()}
   else login()
 }
 start()
