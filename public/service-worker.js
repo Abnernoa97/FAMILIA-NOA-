@@ -1,4 +1,4 @@
-const CACHE = 'familia-noa-v1';
+const CACHE = 'familia-noa-v2';
 const BASE = '/FAMILIA-NOA-/';
 const APP_SHELL = [BASE, BASE + 'manifest.webmanifest', BASE + 'icons/icon-192.svg', BASE + 'icons/icon-512.svg'];
 self.addEventListener('install', event => { event.waitUntil(caches.open(CACHE).then(cache => cache.addAll(APP_SHELL)).then(() => self.skipWaiting())); });
