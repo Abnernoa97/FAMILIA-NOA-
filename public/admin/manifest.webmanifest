@@ -1,0 +1,16 @@
+{
+  "name":"FAMILIA NOA ADMIN",
+  "short_name":"NOA ADMIN",
+  "start_url":"/FAMILIA-NOA-/admin/",
+  "scope":"/FAMILIA-NOA-/admin/",
+  "display":"standalone",
+  "orientation":"portrait",
+  "background_color":"#f1eee7",
+  "theme_color":"#171716",
+  "lang":"es-MX",
+  "description":"Panel privado de administración de FAMILIA NOA.",
+  "icons":[
+    {"src":"/FAMILIA-NOA-/icons/icon-192.svg","sizes":"192x192","type":"image/svg+xml","purpose":"any maskable"},
+    {"src":"/FAMILIA-NOA-/icons/icon-512.svg","sizes":"512x512","type":"image/svg+xml","purpose":"any maskable"}
+  ]
+}
