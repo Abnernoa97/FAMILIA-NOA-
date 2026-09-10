@@ -14,8 +14,8 @@ function login(error=''){
 async function boot(){
   const {data:{user}}=await supabase.auth.getUser()
   if(!user){login();return}
-  const {data:admin}=await supabase.from('admin_users').select('user_id').eq('user_id',user.id).maybeSingle()
-  if(!admin){await supabase.auth.signOut();login('Esta cuenta no tiene permisos de administrador.');return}
+  const {data:isAdmin,error}=await supabase.rpc('is_current_user_admin')
+  if(error||!isAdmin){await supabase.auth.signOut();login('Esta cuenta no tiene permisos de administrador.');return}
   render()
 }
 
