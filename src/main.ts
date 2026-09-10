@@ -11,6 +11,7 @@ let memberId = ''
 let channel: ReturnType<typeof supabase.channel> | null = null
 let settingsChannel: ReturnType<typeof supabase.channel> | null = null
 let familySyncChannel: ReturnType<typeof supabase.channel> | null = null
+let replyTo: { id:string; name:string; body:string } | null = null
 const app = document.querySelector<HTMLDivElement>('#app')!
 document.title = 'FAMILIA NOA'
 
@@ -73,7 +74,34 @@ function renderHome(){
   document.querySelector('#chat')!.addEventListener('click',renderChat);document.querySelector('#navchat')!.addEventListener('click',renderChat);document.querySelector('#photos')!.addEventListener('click',renderPhotos);document.querySelector('#navphotos')!.addEventListener('click',renderPhotos);document.querySelector('#location')!.addEventListener('click',renderLocation);document.querySelector('#navlocation')!.addEventListener('click',renderLocation);document.querySelector('#ok')!.addEventListener('click',setWellbeing);document.querySelector('#help')!.addEventListener('click',sendHelp);loadSettings()
 }
 
-async function renderChat(){app.innerHTML=`<main class="page"><header class="pagehead"><button id="back">‹</button><div><p class="eyebrow">FAMILIA NOA</p><h1>Chat</h1></div></header><section class="messages" id="messages"><div class="loading">Cargando mensajes…</div></section><form class="composer" id="composer"><input id="message" maxlength="2000" placeholder="Escribe algo…" autocomplete="off"><button>Enviar</button></form></main>`;document.querySelector('#back')!.addEventListener('click',renderHome);const list=document.querySelector('#messages')!;const {data}=await supabase.from('messages').select('id,sender_id,body,created_at,sender:family_members(name)').order('created_at',{ascending:true}).limit(100);list.innerHTML=(data||[]).map((m:any)=>`<article class="bubble ${m.sender_id===memberId?'mine':''}"><b>${esc(m.sender?.name||'Familia')}</b><p>${esc(m.body)}</p><small>${time(m.created_at)}</small></article>`).join('')||'<div class="empty">Todavía no hay mensajes. Sé el primero ❤️</div>';list.scrollTop=list.scrollHeight;document.querySelector('#composer')!.addEventListener('submit',async e=>{e.preventDefault();const input=document.querySelector<HTMLInputElement>('#message')!;const body=input.value.trim();if(!body||!memberId)return;input.disabled=true;await supabase.from('messages').insert({sender_id:memberId,body});input.value='';input.disabled=false});channel?.unsubscribe();channel=supabase.channel('familia-noa-chat').on('postgres_changes',{event:'INSERT',schema:'public',table:'messages'},()=>renderChat()).subscribe()}
+async function renderChat(){
+  replyTo=null
+  app.innerHTML=`<main class="page chat-page"><header class="pagehead"><button id="back">‹</button><div><p class="eyebrow">FAMILIA NOA</p><h1>Chat</h1></div></header><section class="messages" id="messages"><div class="loading">Cargando mensajes…</div></section><div id="replyPreview"></div><form class="composer" id="composer"><input id="message" maxlength="2000" placeholder="Escribe algo…" autocomplete="off"><button>Enviar</button></form><button class="back-to-top" id="chatTop" aria-label="Volver arriba">↑</button></main>`
+  document.querySelector('#back')!.addEventListener('click',renderHome)
+  const list=document.querySelector('#messages')!
+  const {data}=await supabase.from('messages').select('id,sender_id,body,created_at,reply_to_id,sender:family_members(name)').order('created_at',{ascending:true}).limit(100)
+  const all:any[]=data||[]
+  const byId=new Map(all.map(m=>[m.id,m]))
+  list.innerHTML=all.map(m=>{
+    const quoted=m.reply_to_id?byId.get(m.reply_to_id):null
+    return `<article class="bubble ${m.sender_id===memberId?'mine':''}" data-message-id="${m.id}"><div class="swipe-hint" aria-hidden="true">↩</div>${quoted?`<button class="quoted" data-jump="${quoted.id}"><b>${esc(quoted.sender?.name||'Familia')}</b><span>${esc(quoted.body)}</span></button>`:''}<b class="sender-name">${esc(m.sender?.name||'Familia')}</b><p>${esc(m.body)}</p><small>${time(m.created_at)}</small></article>`
+  }).join('')||'<div class="empty">Todavía no hay mensajes. Sé el primero ❤️</div>'
+  list.scrollTop=list.scrollHeight
+  const preview=document.querySelector('#replyPreview')!
+  const updatePreview=()=>{preview.innerHTML=replyTo?`<div class="reply-preview"><div><b>Respondiendo a ${esc(replyTo.name)}</b><span>${esc(replyTo.body)}</span></div><button id="cancelReply" aria-label="Cancelar respuesta">×</button></div>`:'';if(replyTo){document.querySelector('#cancelReply')!.addEventListener('click',()=>{replyTo=null;updatePreview();document.querySelector<HTMLInputElement>('#message')!.focus()})}}
+  const selectReply=(m:any)=>{replyTo={id:m.id,name:m.sender?.name||'Familia',body:m.body};updatePreview();document.querySelector<HTMLInputElement>('#message')!.focus()}
+  document.querySelectorAll<HTMLElement>('.bubble').forEach(b=>{
+    let startX=0,startY=0,moved=false
+    b.addEventListener('touchstart',e=>{const t=e.touches[0];startX=t.clientX;startY=t.clientY;moved=false},{passive:true})
+    b.addEventListener('touchmove',e=>{const t=e.touches[0];const dx=t.clientX-startX;const dy=Math.abs(t.clientY-startY);if(dx>8&&dx>dy){moved=true;b.style.transform=`translateX(${Math.min(dx,72)}px)`}}, {passive:true})
+    b.addEventListener('touchend',()=>{if(moved&&parseFloat(b.style.transform.replace(/[^0-9.-]/g,''))>=55){const m=all.find(x=>x.id===b.dataset.messageId);if(m)selectReply(m)}b.style.transform='';moved=false})
+    b.addEventListener('dblclick',()=>{const m=all.find(x=>x.id===b.dataset.messageId);if(m)selectReply(m)})
+  })
+  document.querySelectorAll<HTMLElement>('[data-jump]').forEach(q=>q.addEventListener('click',()=>{document.querySelector(`[data-message-id="${q.dataset.jump}"]`)?.scrollIntoView({behavior:'smooth',block:'center'})}))
+  document.querySelector('#composer')!.addEventListener('submit',async e=>{e.preventDefault();const input=document.querySelector<HTMLInputElement>('#message')!;const body=input.value.trim();if(!body||!memberId)return;input.disabled=true;const payload:any={sender_id:memberId,body};if(replyTo)payload.reply_to_id=replyTo.id;const {error}=await supabase.from('messages').insert(payload);input.disabled=false;if(error)return;input.value='';replyTo=null;updatePreview()})
+  document.querySelector('#chatTop')!.addEventListener('click',()=>list.scrollTo({top:0,behavior:'smooth'}))
+  channel?.unsubscribe();channel=supabase.channel('familia-noa-chat').on('postgres_changes',{event:'INSERT',schema:'public',table:'messages'},()=>renderChat()).subscribe()
+}
 async function setWellbeing(){if(!memberId)return;const {error}=await supabase.from('wellbeing_status').upsert({member_id:memberId,is_ok:true,updated_at:new Date().toISOString()});sheet(error?'No se pudo actualizar':'Estoy bien ❤️',error?'El estado no pudo guardarse todavía.':'La familia puede ver que estás bien.')}
 async function sendHelp(){if(!memberId)return;const {error}=await supabase.from('help_alerts').insert({member_id:memberId,message:`${memberName} necesita ayuda.`});sheet(error?'No se pudo enviar':'Ayuda enviada',error?'Inténtalo de nuevo en un momento.':'La familia recibirá tu alerta.')}
 async function renderLocation(){const current=members.find(m=>m.id===memberId);const mandatory=!!current?.must_share_location;app.innerHTML=`<main class="page"><header class="pagehead"><button id="back">‹</button><div><p class="eyebrow">FAMILIA NOA</p><h1>Ubicación</h1></div></header><section class="locationbox"><div class="pin">⌖</div><h2>Compartir ubicación</h2><p id="locationtext">${mandatory?'La ubicación es necesaria para este perfil.':'Comparte tu ubicación con la familia cuando quieras.'}</p><button class="primary" id="sharelocation">${mandatory?'Activar ubicación':'Actualizar ubicación'}</button></section><section class="family-locations" id="familylocations"><div class="loading">Cargando…</div></section></main>`;document.querySelector('#back')!.addEventListener('click',renderHome);document.querySelector('#sharelocation')!.addEventListener('click',shareLocation);await loadLocations()}
