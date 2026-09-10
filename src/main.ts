@@ -1,3 +1,6 @@
+import './styles.css'
+import './supabase'
+
 const members = ['Mamá', 'Papá', 'Romel', 'Osniel', 'Abner']
 const key = 'familia-noa-member'
 let member = localStorage.getItem(key) || ''
