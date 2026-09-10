@@ -1,1 +1,16 @@
-{"name":"FAMILIA NOA","short_name":"Familia NOA","start_url":"/FAMILIA-NOA-/","display":"standalone","background_color":"#f5f2eb","theme_color":"#171716","lang":"es","description":"Espacio privado para estar cerca de la familia."}
+{
+  "name": "FAMILIA NOA",
+  "short_name": "FAMILIA NOA",
+  "start_url": "/FAMILIA-NOA-/",
+  "scope": "/FAMILIA-NOA-/",
+  "display": "standalone",
+  "orientation": "portrait",
+  "background_color": "#f5f2eb",
+  "theme_color": "#171716",
+  "lang": "es-MX",
+  "description": "Espacio privado para estar cerca de la familia.",
+  "icons": [
+    {"src":"/FAMILIA-NOA-/icons/icon-192.svg","sizes":"192x192","type":"image/svg+xml","purpose":"any maskable"},
+    {"src":"/FAMILIA-NOA-/icons/icon-512.svg","sizes":"512x512","type":"image/svg+xml","purpose":"any maskable"}
+  ]
+}
