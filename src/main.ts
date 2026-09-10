@@ -12,7 +12,7 @@ let settingsChannel: ReturnType<typeof supabase.channel> | null = null
 const app = document.querySelector<HTMLDivElement>('#app')!
 document.title = 'FAMILIA NOA'
 
-const esc = (v: string) => v.replace(/[&<>"']/g, c => ({'&':'&amp;','<':'&lt;','>':'&gt;','"':'&quot;',"'":'&#039;'}[c]!))
+const esc = (v: string) => v.replace(/[&<>\"']/g, c => ({'&':'&amp;','<':'&lt;','>':'&gt;','\"':'&quot;',"'":'&#039;'}[c]!))
 const time = (v: string) => new Date(v).toLocaleTimeString('es-MX', {hour:'2-digit', minute:'2-digit'})
 
 async function ensureSession() {
@@ -45,7 +45,7 @@ function securityStep(name: string) {
     const error=document.querySelector('#securityError')!
     error.textContent='Verificando…'
     const sessionOk=await ensureSession()
-    if(!sessionOk){error.textContent='Activa el acceso anónimo en Supabase para continuar.';return}
+    if(!sessionOk){error.textContent='No pudimos conectar con el acceso seguro. Comprueba tu conexión e inténtalo de nuevo.';return}
     const {data,error:fnError}=await supabase.functions.invoke('verify-family-access',{body:{member_id:selected.id,house_number:house,nickname}})
     if(fnError||!data?.ok){error.textContent=data?.error||'No pudimos verificar tus datos.';return}
     await supabase.auth.refreshSession()
@@ -64,7 +64,7 @@ function applySettings(s:any){
   if(s?.accent) root.style.setProperty('--accent',s.accent)
   if(s?.font==='sans') root.style.setProperty('--display-font','Inter, system-ui, sans-serif')
   else if(s?.font==='mono') root.style.setProperty('--display-font','ui-monospace, SFMono-Regular, Menlo, monospace')
-  else root.style.setProperty('--display-font','Georgia, "Times New Roman", serif')
+  else root.style.setProperty('--display-font','Georgia, \"Times New Roman\", serif')
   const hero=document.querySelector('.hero h2'); if(hero&&s?.heroTitle) hero.textContent=s.heroTitle
   const heroText=document.querySelector('.hero p:not(.eyebrow)'); if(heroText&&s?.heroText) heroText.textContent=s.heroText
 }
@@ -119,8 +119,9 @@ function renderPhotos(){sheet('Fotos','El álbum privado se conectará a Supabas
 function sheet(title:string,text:string){const el=document.createElement('div');el.className='overlay';el.innerHTML=`<div class="sheet"><button class="close">×</button><p class="eyebrow">FAMILIA NOA</p><h2>${esc(title)}</h2><p>${esc(text)}</p><button class="primary close">Entendido</button></div>`;document.body.appendChild(el);el.querySelectorAll('.close').forEach(x=>x.addEventListener('click',()=>el.remove()))}
 
 async function start(){
-  const sessionOk=await ensureSession()
-  if(!sessionOk){login('Necesitamos activar el acceso anónimo de Supabase antes de usar el acceso familiar.');return}
+  // The identity screen must always be available. Authentication is only required
+  // when the user actually selects a family member, so a temporary auth/network
+  // issue can never replace the main entry screen with an error.
   await loadMembers()
   const session=(await supabase.auth.getSession()).data.session
   const verifiedId=session?.user?.app_metadata?.member_id as string|undefined
