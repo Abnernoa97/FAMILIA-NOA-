@@ -1,9 +1,9 @@
 import './admin.css'
 import { supabase } from './supabase'
 
-type Member={id:string,name:string,active:boolean}
+type Member={id:string,name:string,active:boolean,must_share_location:boolean}
 const root=document.querySelector<HTMLDivElement>('#admin-app')!
-const esc=(v:string)=>v.replace(/[&<>"']/g,c=>({'&':'&amp;','<':'&lt;','>':'&gt;','"':'&quot;',"'":'&#039;'}[c]!))
+const esc=(v:string)=>v.replace(/[&<>\"']/g,c=>({'&':'&amp;','<':'&lt;','>':'&gt;','\"':'&quot;',"'":'&#039;'}[c]!))
 let members:Member[]=[]
 let adminSyncChannel:ReturnType<typeof supabase.channel>|null=null
 
@@ -24,7 +24,7 @@ async function boot(){
 
 async function load(){
   const [m,s]=await Promise.all([
-    supabase.from('family_members').select('id,name,active').order('created_at'),
+    supabase.from('family_members').select('id,name,active,must_share_location').order('created_at'),
     supabase.from('app_settings').select('settings').eq('id','global').maybeSingle()
   ])
   members=(m.data||[]) as Member[]
@@ -34,9 +34,9 @@ async function load(){
 function startAdminRealtime(){
   adminSyncChannel?.unsubscribe()
   adminSyncChannel=supabase.channel('familia-noa-admin-sync')
-    .on('postgres_changes',{event:'*',schema:'public',table:'family_members'},()=>render())
+    .on('postgres_changes',{event:'*',schema:'public',table:'family_members'},async()=>{await load();renderMembers();renderAccess()})
     .on('postgres_changes',{event:'*',schema:'public',table:'family_access'},()=>renderAccess())
-    .on('postgres_changes',{event:'*',schema:'public',table:'app_settings',filter:'id=eq.global'},()=>render())
+    .on('postgres_changes',{event:'UPDATE',schema:'public',table:'app_settings',filter:'id=eq.global'},async()=>{const settings=await load();(['font','background','surface','ink','accent','heroTitle','heroText'] as const).forEach(k=>{const el=document.querySelector<HTMLInputElement|HTMLSelectElement>('#'+k);if(el&&settings[k]!=null)el.value=settings[k]})})
     .subscribe()
 }
 
@@ -54,18 +54,18 @@ async function render(){
 }
 
 function renderMembers(){
-  const el=document.querySelector('#members')!
+  const el=document.querySelector('#members');if(!el)return
   el.innerHTML=members.map(m=>`<div class="member-row"><div><b>${esc(m.name)}</b><small>${m.active?'Activo':'Desactivado'}</small></div><button data-toggle="${m.id}">${m.active?'Desactivar':'Activar'}</button></div>`).join('')
-  el.querySelectorAll<HTMLButtonElement>('[data-toggle]').forEach(b=>b.addEventListener('click',async()=>{const m=members.find(x=>x.id===b.dataset.toggle)!;await supabase.from('family_members').update({active:!m.active}).eq('id',m.id);await render()}))
+  el.querySelectorAll<HTMLButtonElement>('[data-toggle]').forEach(b=>b.addEventListener('click',async()=>{const m=members.find(x=>x.id===b.dataset.toggle)!;const {error}=await supabase.from('family_members').update({active:!m.active}).eq('id',m.id);if(!error)toast(m.active?'Miembro desactivado':'Miembro activado');else toast('No se pudo actualizar')}))
 }
 
 async function renderAccess(){
   const el=document.querySelector('#access');if(!el)return
   const {data}=await supabase.from('family_access').select('member_id,must_share_location').order('updated_at')
   const rows=data||[]
-  el.innerHTML=members.map(m=>{const a=rows.find(x=>x.member_id===m.id);return `<div class="access-row"><div><b>${esc(m.name)}</b><small>${a?.must_share_location?'Ubicación obligatoria':'Ubicación voluntaria'}</small></div><div class="access-actions"><button data-cred="${m.id}">Definir acceso</button><button data-gps="${m.id}">${a?.must_share_location?'GPS obligatorio':'GPS voluntario'}</button></div></div>`}).join('')
+  el.innerHTML=members.map(m=>{const a=rows.find(x=>x.member_id===m.id);const mandatory=!!m.must_share_location;return `<div class="access-row"><div><b>${esc(m.name)}</b><small>${mandatory?'Ubicación obligatoria':'Ubicación voluntaria'}</small></div><div class="access-actions"><button data-cred="${m.id}">Definir acceso</button><button data-gps="${m.id}">${mandatory?'GPS obligatorio':'GPS voluntario'}</button></div></div>`}).join('')
   el.querySelectorAll<HTMLButtonElement>('[data-cred]').forEach(b=>b.addEventListener('click',()=>credentialSheet(b.dataset.cred!)))
-  el.querySelectorAll<HTMLButtonElement>('[data-gps]').forEach(b=>b.addEventListener('click',async()=>{const a=rows.find(x=>x.member_id===b.dataset.gps);await supabase.from('family_access').update({must_share_location:!a?.must_share_location,updated_at:new Date().toISOString()}).eq('member_id',b.dataset.gps);await renderAccess()}))
+  el.querySelectorAll<HTMLButtonElement>('[data-gps]').forEach(b=>b.addEventListener('click',async()=>{const m=members.find(x=>x.id===b.dataset.gps)!;const next=!m.must_share_location;const [memberResult,accessResult]=await Promise.all([supabase.from('family_members').update({must_share_location:next}).eq('id',m.id),supabase.from('family_access').update({must_share_location:next,updated_at:new Date().toISOString()}).eq('member_id',m.id)]);if(memberResult.error||accessResult.error){toast('No se pudo actualizar GPS');return}toast(next?'GPS obligatorio':'GPS voluntario')}))
 }
 
 async function credentialSheet(memberId:string){
@@ -73,7 +73,7 @@ async function credentialSheet(memberId:string){
 }
 
 async function saveVisual(){const settings={font:(document.querySelector('#font') as HTMLSelectElement).value,background:(document.querySelector('#background') as HTMLInputElement).value,surface:(document.querySelector('#surface') as HTMLInputElement).value,ink:(document.querySelector('#ink') as HTMLInputElement).value,accent:(document.querySelector('#accent') as HTMLInputElement).value,heroTitle:(document.querySelector('#heroTitle') as HTMLInputElement).value,heroText:(document.querySelector('#heroText') as HTMLInputElement).value};const {error}=await supabase.from('app_settings').upsert({id:'global',settings,updated_at:new Date().toISOString()});toast(error?'No se pudo guardar':'Cambios publicados')}
-async function addMember(e:Event){e.preventDefault();const input=document.querySelector<HTMLInputElement>('#newName')!;const name=input.value.trim();if(!name)return;const {error}=await supabase.from('family_members').insert({name,active:true});if(!error){input.value='';await render();toast('Miembro agregado')}else toast('No se pudo agregar')}
+async function addMember(e:Event){e.preventDefault();const input=document.querySelector<HTMLInputElement>('#newName')!;const name=input.value.trim();if(!name)return;const {error}=await supabase.from('family_members').insert({name,active:true,must_share_location:false});if(!error){input.value='';toast('Miembro agregado')}else toast('No se pudo agregar')}
 function toast(text:string){const t=document.querySelector('#toast')!;t.textContent=text;t.classList.add('show');setTimeout(()=>t.classList.remove('show'),2200)}
 
 supabase.auth.onAuthStateChange((_event,session)=>{if(!session){adminSyncChannel?.unsubscribe();adminSyncChannel=null;login()}})
