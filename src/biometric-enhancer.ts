@@ -1,29 +1,136 @@
 import { startAuthentication, startRegistration } from '@simplewebauthn/browser'
 import { supabase } from './supabase'
 
-const KEY='familia-noa-member', PROFILE_KEY='familia-noa-profile'
-const PASSKEY_KEY='familia-noa-passkey'
-const PASSKEY_CRED_KEY='familia-noa-passkey-credential-id'
-const PASSKEY_MEMBER_KEY='familia-noa-passkey-member-id'
-const BYPASS_KEY='familia-noa-biometric-bypass'
-const AUTHENTICATED_KEY='familia-noa-biometric-authenticated'
-const supported=()=>typeof window!=='undefined'&&!!window.PublicKeyCredential&&window.isSecureContext
+const KEY = 'familia-noa-member'
+const PROFILE_KEY = 'familia-noa-profile'
+const PASSKEY_KEY = 'familia-noa-passkey'
+const PASSKEY_CRED_KEY = 'familia-noa-passkey-credential-id'
+const PASSKEY_MEMBER_KEY = 'familia-noa-passkey-member-id'
+const AUTHENTICATED_KEY = 'familia-noa-biometric-authenticated'
+const supported = () => typeof window !== 'undefined' && !!window.PublicKeyCredential && window.isSecureContext
 
-async function call(action:string,payload:Record<string,unknown>={}){const work=supabase.functions.invoke('family-passkeys-v2',{body:{action,...payload}});const timeout=new Promise<never>((_,reject)=>setTimeout(()=>reject(new Error('La verificación tardó demasiado. Puedes entrar con tu perfil.')),8000));const {data,error}=await Promise.race([work,timeout]);if(error)throw new Error(error.message||'No se pudo completar la operación.');if(data?.error)throw new Error(data.error);return data}
-function session(p:{id:string;name:string}){localStorage.setItem(KEY,p.name);sessionStorage.setItem(PROFILE_KEY,JSON.stringify(p));sessionStorage.setItem(AUTHENTICATED_KEY,'1');location.reload()}
+async function call(action: string, payload: Record<string, unknown> = {}) {
+  const { data, error } = await supabase.functions.invoke('family-passkeys-v2', { body: { action, ...payload } })
+  if (error) throw new Error(error.message || 'No se pudo completar la operación.')
+  if (data?.error) throw new Error(data.error)
+  return data
+}
 
-async function biometric(button:HTMLButtonElement,error:HTMLElement){if(button.disabled)return;button.disabled=true;error.textContent='Verificando…';try{const memberId=localStorage.getItem(PASSKEY_MEMBER_KEY)||undefined;const credentialId=localStorage.getItem(PASSKEY_CRED_KEY)||undefined;const payload:Record<string,unknown>={};if(memberId)payload.member_id=memberId;if(credentialId)payload.credential_ids=[credentialId];const {token,options}=await call('auth-options',payload);const response=await Promise.race([startAuthentication({optionsJSON:options}),new Promise<never>((_,reject)=>setTimeout(()=>reject(new Error('La verificación tardó demasiado. Puedes entrar con tu perfil.')),8000))]);const r=await call('auth-verify',{token,response});if(!r?.profile?.id)throw new Error('No se pudo identificar el perfil.');localStorage.setItem(PASSKEY_KEY,'enabled');localStorage.setItem(PASSKEY_MEMBER_KEY,r.profile.id);localStorage.setItem(PASSKEY_CRED_KEY,response.id);session(r.profile)}catch(e){if((e as Error).name!=='NotAllowedError'&&(e as Error).name!=='AbortError')error.textContent=e instanceof Error?e.message:'No se pudo entrar.';button.disabled=false}}
+function session(profile: { id: string; name: string }) {
+  localStorage.setItem(KEY, profile.name)
+  sessionStorage.setItem(PROFILE_KEY, JSON.stringify(profile))
+  sessionStorage.setItem(AUTHENTICATED_KEY, '1')
+  window.location.reload()
+}
 
-function addLogin(){if(!supported())return;const members=document.querySelector('.members');if(!members||document.querySelector('#biometricLogin'))return;const w=document.createElement('div');w.className='biometric-access';w.innerHTML='<button id="biometricLogin" class="primary biometric-button" type="button">🔐 Entrar con huella / Face ID</button><div id="biometricError" aria-live="polite"></div><div class="biometric-divider"><span>o entra con tu perfil</span></div>';members.before(w);const b=w.querySelector<HTMLButtonElement>('#biometricLogin')!,e=w.querySelector<HTMLElement>('#biometricError')!;b.onclick=()=>void biometric(b,e)}
+async function biometric(button: HTMLButtonElement, error: HTMLElement) {
+  if (button.disabled) return
+  button.disabled = true
+  error.textContent = 'Verificando…'
+  try {
+    const memberId = localStorage.getItem(PASSKEY_MEMBER_KEY) || undefined
+    const credentialId = localStorage.getItem(PASSKEY_CRED_KEY) || undefined
+    const payload: Record<string, unknown> = {}
+    if (memberId) payload.member_id = memberId
+    if (credentialId) payload.credential_ids = [credentialId]
+    const optionsResult = await call('auth-options', payload)
+    const response = await Promise.race([
+      startAuthentication({ optionsJSON: optionsResult.options }),
+      new Promise<never>((_, reject) => setTimeout(() => reject(new Error('La verificación tardó demasiado. Puedes entrar con tu perfil.')), 8000))
+    ])
+    const result = await call('auth-verify', { token: optionsResult.token, response })
+    if (!result?.profile?.id) throw new Error('No se pudo identificar el perfil.')
+    localStorage.setItem(PASSKEY_KEY, 'enabled')
+    localStorage.setItem(PASSKEY_MEMBER_KEY, result.profile.id)
+    localStorage.setItem(PASSKEY_CRED_KEY, response.id)
+    session(result.profile)
+  } catch (err) {
+    const name = err instanceof Error ? err.name : ''
+    if (name !== 'NotAllowedError' && name !== 'AbortError') error.textContent = err instanceof Error ? err.message : 'No se pudo entrar.'
+    button.disabled = false
+  }
+}
 
-async function hasPasskey(memberId:string){try{const r=await call('passkey-status',{member_id:memberId});return {has:!!r?.hasPasskey,ids:Array.isArray(r?.credential_ids)?r.credential_ids.filter((x:any)=>typeof x==='string'):[]}}catch{return {has:false,ids:[]}}
+function addLogin() {
+  if (!supported()) return
+  const members = document.querySelector('.members')
+  if (!members || document.querySelector('#biometricLogin')) return
+  const wrapper = document.createElement('div')
+  wrapper.className = 'biometric-access'
+  wrapper.innerHTML = '<button id="biometricLogin" class="primary biometric-button" type="button">🔐 Entrar con huella / Face ID</button><div id="biometricError" aria-live="polite"></div><div class="biometric-divider"><span>o entra con tu perfil</span></div>'
+  members.before(wrapper)
+  const button = wrapper.querySelector<HTMLButtonElement>('#biometricLogin')!
+  const error = wrapper.querySelector<HTMLElement>('#biometricError')!
+  button.onclick = () => void biometric(button, error)
+}
 
-async function register(memberId:string,house:string,nickname:string){try{const status=await hasPasskey(memberId);if(status.has){localStorage.setItem(PASSKEY_KEY,'enabled');localStorage.setItem(PASSKEY_MEMBER_KEY,memberId);if(status.ids[0])localStorage.setItem(PASSKEY_CRED_KEY,status.ids[0]);alert('Este perfil ya tiene una huella o Face ID registrado. No es necesario registrarlo de nuevo.');location.reload();return}const {token,options}=await call('register-options',{member_id:memberId,house_number:house,nickname});const response=await startRegistration({optionsJSON:options});const result=await call('register-verify',{token,response});localStorage.setItem(PASSKEY_KEY,'enabled');localStorage.setItem(PASSKEY_MEMBER_KEY,memberId);if(result?.credential_id)localStorage.setItem(PASSKEY_CRED_KEY,result.credential_id);alert('Listo. Este teléfono ya puede entrar con huella o reconocimiento facial.');sessionStorage.removeItem(AUTHENTICATED_KEY);location.reload()}catch(e){if((e as Error).name!=='NotAllowedError'&&(e as Error).name!=='AbortError')alert(e instanceof Error?e.message:'No se pudo activar la biometría.')}}
+async function hasPasskey(memberId: string) {
+  try {
+    const result = await call('passkey-status', { member_id: memberId })
+    const ids = Array.isArray(result?.credential_ids) ? result.credential_ids.filter((id: unknown): id is string => typeof id === 'string') : []
+    return { has: !!result?.hasPasskey, ids }
+  } catch {
+    return { has: false, ids: [] as string[] }
+  }
+}
 
-async function addSetup(){if(!supported())return;const home=document.querySelector('.shell'),change=document.querySelector('#change');if(!home||!change||document.querySelector('#enableBiometric'))return;const raw=sessionStorage.getItem(PROFILE_KEY);if(!raw)return;const p=JSON.parse(raw) as {id:string;name:string};const status=await hasPasskey(p.id);if(status.has){localStorage.setItem(PASSKEY_KEY,'enabled');localStorage.setItem(PASSKEY_MEMBER_KEY,p.id);if(status.ids[0])localStorage.setItem(PASSKEY_CRED_KEY,status.ids[0]);return}const b=document.createElement('button');b.id='enableBiometric';b.className='biometric-setup';b.textContent='🔐 Activar huella / Face ID';change.parentElement?.after(b);b.onclick=async()=>{const house=prompt('Confirma el número de la casa.');if(!house)return;const nickname=prompt(`Confirma tu apodo familiar, ${p.name}.`);if(nickname)await register(p.id,house,nickname)}}
+async function registerPasskey(memberId: string, house: string, nickname: string) {
+  try {
+    const status = await hasPasskey(memberId)
+    if (status.has) {
+      localStorage.setItem(PASSKEY_KEY, 'enabled')
+      localStorage.setItem(PASSKEY_MEMBER_KEY, memberId)
+      if (status.ids[0]) localStorage.setItem(PASSKEY_CRED_KEY, status.ids[0])
+      alert('Este perfil ya tiene una huella o Face ID registrado.')
+      return
+    }
+    const optionsResult = await call('register-options', { member_id: memberId, house_number: house, nickname })
+    const response = await startRegistration({ optionsJSON: optionsResult.options })
+    const result = await call('register-verify', { token: optionsResult.token, response })
+    localStorage.setItem(PASSKEY_KEY, 'enabled')
+    localStorage.setItem(PASSKEY_MEMBER_KEY, memberId)
+    if (result?.credential_id) localStorage.setItem(PASSKEY_CRED_KEY, result.credential_id)
+    alert('Listo. Este teléfono ya puede entrar con huella o reconocimiento facial.')
+  } catch (err) {
+    const name = err instanceof Error ? err.name : ''
+    if (name !== 'NotAllowedError' && name !== 'AbortError') alert(err instanceof Error ? err.message : 'No se pudo activar la biometría.')
+  }
+}
+
+async function addSetup() {
+  if (!supported()) return
+  const home = document.querySelector('.shell')
+  const change = document.querySelector<HTMLElement>('#change')
+  if (!home || !change || document.querySelector('#enableBiometric')) return
+  const raw = sessionStorage.getItem(PROFILE_KEY)
+  if (!raw) return
+  const profile = JSON.parse(raw) as { id: string; name: string }
+  const status = await hasPasskey(profile.id)
+  if (status.has) {
+    localStorage.setItem(PASSKEY_KEY, 'enabled')
+    localStorage.setItem(PASSKEY_MEMBER_KEY, profile.id)
+    if (status.ids[0]) localStorage.setItem(PASSKEY_CRED_KEY, status.ids[0])
+    return
+  }
+  const button = document.createElement('button')
+  button.id = 'enableBiometric'
+  button.className = 'biometric-setup'
+  button.textContent = '🔐 Activar huella / Face ID'
+  change.parentElement?.after(button)
+  button.onclick = async () => {
+    const house = prompt('Confirma el número de la casa.')
+    if (!house) return
+    const nickname = prompt(`Confirma tu apodo familiar, ${profile.name}.`)
+    if (nickname) await registerPasskey(profile.id, house, nickname)
+  }
+}
 
 // Never start biometric authentication automatically on page load.
-// The user must explicitly press the biometric button; this prevents the
-// entrance screen from getting stuck on "Verificando…" while the browser
-// is waiting for a biometric prompt or a slow network response.
-const observer=new MutationObserver(()=>{addLogin();void addSetup()});observer.observe(document.body,{childList:true,subtree:true});addLogin();void addSetup()
+// The user must explicitly press the biometric button.
+const observer = new MutationObserver(() => {
+  addLogin()
+  void addSetup()
+})
+observer.observe(document.body, { childList: true, subtree: true })
+addLogin()
+void addSetup()
