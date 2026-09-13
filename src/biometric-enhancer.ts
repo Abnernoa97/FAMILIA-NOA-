@@ -8,6 +8,7 @@ const PASSKEY_CRED_KEY = 'familia-noa-passkey-credential-id'
 const PASSKEY_MEMBER_KEY = 'familia-noa-passkey-member-id'
 const AUTHENTICATED_KEY = 'familia-noa-biometric-authenticated'
 const supported = () => typeof window !== 'undefined' && !!window.PublicKeyCredential && window.isSecureContext
+let setupInProgress = false
 
 async function call(action: string, payload: Record<string, unknown> = {}) {
   const { data, error } = await supabase.functions.invoke('family-passkeys-v2', { body: { action, ...payload } })
@@ -98,30 +99,36 @@ async function registerPasskey(memberId: string, house: string, nickname: string
 }
 
 async function addSetup() {
-  if (!supported()) return
+  if (!supported() || setupInProgress) return
   const home = document.querySelector('.shell')
   const change = document.querySelector<HTMLElement>('#change')
   if (!home || !change || document.querySelector('#enableBiometric')) return
   const raw = sessionStorage.getItem(PROFILE_KEY)
   if (!raw) return
-  const profile = JSON.parse(raw) as { id: string; name: string }
-  const status = await hasPasskey(profile.id)
-  if (status.has) {
-    localStorage.setItem(PASSKEY_KEY, 'enabled')
-    localStorage.setItem(PASSKEY_MEMBER_KEY, profile.id)
-    if (status.ids[0]) localStorage.setItem(PASSKEY_CRED_KEY, status.ids[0])
-    return
-  }
-  const button = document.createElement('button')
-  button.id = 'enableBiometric'
-  button.className = 'biometric-setup'
-  button.textContent = '🔐 Activar huella / Face ID'
-  change.parentElement?.after(button)
-  button.onclick = async () => {
-    const house = prompt('Confirma el número de la casa.')
-    if (!house) return
-    const nickname = prompt(`Confirma tu apodo familiar, ${profile.name}.`)
-    if (nickname) await registerPasskey(profile.id, house, nickname)
+  setupInProgress = true
+  try {
+    const profile = JSON.parse(raw) as { id: string; name: string }
+    const status = await hasPasskey(profile.id)
+    if (status.has) {
+      localStorage.setItem(PASSKEY_KEY, 'enabled')
+      localStorage.setItem(PASSKEY_MEMBER_KEY, profile.id)
+      if (status.ids[0]) localStorage.setItem(PASSKEY_CRED_KEY, status.ids[0])
+      return
+    }
+    if (document.querySelector('#enableBiometric')) return
+    const button = document.createElement('button')
+    button.id = 'enableBiometric'
+    button.className = 'biometric-setup'
+    button.textContent = '🔐 Activar huella / Face ID'
+    change.parentElement?.after(button)
+    button.onclick = async () => {
+      const house = prompt('Confirma el número de la casa.')
+      if (!house) return
+      const nickname = prompt(`Confirma tu apodo familiar, ${profile.name}.`)
+      if (nickname) await registerPasskey(profile.id, house, nickname)
+    }
+  } finally {
+    setupInProgress = false
   }
 }
 
