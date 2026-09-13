@@ -20,8 +20,8 @@ function syncProfileHistory() {
 window.addEventListener('popstate', () => {
   const level = history.state?.[PROFILE_STATE]
   if (level === 2) { document.querySelector('.profile-detail')?.remove(); return }
-  if (level === 1) { document.querySelector('.profile-detail')?.remove(); document.querySelector('.profile-menu')?.remove(); return }
-  if (document.querySelector('.profile-detail')) { document.querySelector('.profile-detail')?.remove(); return }
+  if (level === 1) { if (document.querySelector('.profile-detail')) document.querySelector('.profile-detail')?.remove(); return }
+  document.querySelector('.profile-detail')?.remove()
   document.querySelector('.profile-menu')?.remove()
 })
 
