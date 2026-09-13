@@ -2,6 +2,7 @@ import { supabase } from './supabase'
 
 const PROFILE_KEY='familia-noa-profile'
 const BUCKET='family-photos'
+let profileRealtime: ReturnType<typeof supabase.channel> | null = null
 const css=`
 .profile-menu{position:fixed;inset:0;z-index:1000;background:rgba(0,0,0,.48);display:flex;justify-content:flex-end}
 .profile-drawer{width:min(92vw,430px);height:100%;background:var(--surface,#fff);color:var(--ink,#171716);padding:28px 22px calc(28px + env(safe-area-inset-bottom));overflow:auto;box-shadow:-20px 0 60px rgba(0,0,0,.18)}
@@ -11,7 +12,7 @@ const css=`
 
 function inject(){if(document.querySelector('#profile-css'))return;const s=document.createElement('style');s.id='profile-css';s.textContent=css;document.head.appendChild(s)}
 function current(){try{const raw=sessionStorage.getItem(PROFILE_KEY);return raw?JSON.parse(raw):null}catch{return null}}
-function esc(v:string){return v.replace(/[&<>\"']/g,c=>({'&':'&amp;','<':'&lt;','>':'&gt;','\"':'&quot;',"'":'&#039;'}[c]!))}
+function esc(v:string){return v.replace(/[&<>\\\"']/g,c=>({'&':'&amp;','<':'&lt;','>':'&gt;','\\\"':'&quot;',"'":'&#039;'}[c]!))}
 function avatarUrl(path:string|null){return path?supabase.storage.from(BUCKET).getPublicUrl(path).data.publicUrl:''}
 async function getProfile(id:string){if(!id)return null;const {data}=await supabase.from('family_profiles').select('member_id,avatar_path,bio,theme,updated_at,cover_path').eq('member_id',id).maybeSingle();return data||{member_id:id,avatar_path:null,bio:'',theme:'light',cover_path:null}}
 function applyTheme(theme:string){const t=theme==='dark'?'dark':'light';document.documentElement.classList.toggle('dark-mode',t==='dark');document.documentElement.classList.toggle('light-mode',t==='light');localStorage.setItem('familia-noa-theme',t)}
@@ -38,7 +39,31 @@ async function renderProfileList(el:Element){const {data,error}=await supabase.f
 
 async function openProfile(id:string,name:string){if(document.querySelector('.profile-detail'))return;const prof=await getProfile(id);const {data:photos}=await supabase.from('photos').select('storage_path,created_at').eq('uploader_id',id).order('created_at',{ascending:false}).limit(60);const count=photos?.length||0;const detail=document.createElement('div');detail.className='profile-detail';const cover=avatarUrl(prof?.cover_path||null);const photo=avatarUrl(prof?.avatar_path||null);detail.innerHTML=`${cover?`<img class="profile-detail-cover" src="${cover}" alt="">`:''}<div class="profile-detail-head"><button class="profile-back" type="button" aria-label="Volver">‹</button><div><div class="eyebrow">PERFIL</div><b>${esc(name)}</b></div></div><div class="profile-head"><img class="profile-avatar" src="${photo}" alt="${esc(name)}" style="${photo?'':'display:none'}"><div class="profile-avatar-fallback" style="${photo?'display:none':''}">${esc(name.charAt(0))}</div><div class="profile-name">${esc(name)}</div><p class="profile-bio">${esc(prof?.bio||'Esta persona todavía no ha escrito su frase.')}</p></div><div class="profile-stats"><div class="profile-stat"><b>${count}</b><span>Fotos compartidas</span></div><div class="profile-stat"><b>${prof?.theme==='dark'?'🌙':'☀️'}</b><span>Experiencia elegida</span></div></div><div class="profile-gallery">${(photos||[]).map(x=>`<img src="${avatarUrl(x.storage_path)}" alt="Foto de ${esc(name)}" loading="lazy">`).join('')||'<p>Aún no ha compartido fotos.</p>'}</div>`;document.body.appendChild(detail);detail.querySelector('.profile-back')!.addEventListener('click',()=>detail.remove())}
 
-async function init(){inject();const p=current();if(!p)return;const button=document.querySelector<HTMLElement>('#change');if(!button)return;const profile=await getProfile(p.id);updateHomeAvatar(profile?.avatar_path||null);applyTheme(profile?.theme||localStorage.getItem('familia-noa-theme')||'light')}
+function startProfileRealtime(){
+  profileRealtime?.unsubscribe()
+  profileRealtime=supabase.channel('familia-noa-profile-sync').on('postgres_changes',{event:'*',schema:'public',table:'family_profiles'},async payload=>{
+    const changed=(payload.new as any)?.member_id || (payload.old as any)?.member_id
+    const me=current()
+    if(!changed||!me)return
+    if(changed===me.id){
+      const profile=payload.eventType==='DELETE'?null:await getProfile(me.id)
+      if(profile){
+        updateHomeAvatar(profile.avatar_path||null)
+        applyTheme(profile.theme||'light')
+        const menu=document.querySelector('.profile-menu')
+        if(menu){
+          const bio=menu.querySelector('#bioPreview');if(bio)bio.textContent=profile.bio||''
+          const img=menu.querySelector<HTMLImageElement>('#myAvatar');const fallback=menu.querySelector<HTMLElement>('#avatarFallback');const url=avatarUrl(profile.avatar_path||null)
+          if(img&&fallback){img.src=url;img.style.display=url?'block':'none';fallback.style.display=url?'none':'flex'}
+        }
+      }
+    }
+    const list=document.querySelector('#profileList')
+    if(list)await renderProfileList(list)
+  }).subscribe()
+}
+
+async function init(){inject();const p=current();if(!p)return;startProfileRealtime();const button=document.querySelector<HTMLElement>('#change');if(!button)return;const profile=await getProfile(p.id);updateHomeAvatar(profile?.avatar_path||null);applyTheme(profile?.theme||localStorage.getItem('familia-noa-theme')||'light')}
 
 // This is the only owner of the logged-in profile button. Capture phase prevents
 // the legacy #change listener in main.ts from clearing the session before we open the profile.
