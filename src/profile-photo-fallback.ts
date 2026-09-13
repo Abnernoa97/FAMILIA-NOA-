@@ -3,6 +3,8 @@ import { supabase } from './supabase'
 const PROFILE_KEY='familia-noa-profile'
 const BUCKET='family-photos'
 const seen=new Set<string>()
+const pending=new Set<string>()
+let scheduled=false
 
 function current(){
   const raw=sessionStorage.getItem(PROFILE_KEY)
@@ -18,30 +20,47 @@ async function latestPhoto(id:string){
 }
 
 async function decorateHome(){
-  const p=current(); const button=document.querySelector<HTMLElement>('#change')
+  const p=current()
+  const button=document.querySelector<HTMLElement>('#change')
   if(!p||!button||button.querySelector('img'))return
-  const key=`home:${p.id}`; if(seen.has(key))return
-  const path=await latestPhoto(p.id); if(!path)return
-  button.innerHTML=`<img src="${url(path)}" alt="Foto de perfil">`
-  seen.add(key)
+  const key=`home:${p.id}`
+  if(seen.has(key)||pending.has(key))return
+  pending.add(key)
+  try{
+    const path=await latestPhoto(p.id)
+    if(!path)return
+    const currentButton=document.querySelector<HTMLElement>('#change')
+    if(!currentButton||currentButton.querySelector('img'))return
+    currentButton.innerHTML=`<img src="${url(path)}" alt="Foto de perfil">`
+    seen.add(key)
+  }finally{
+    pending.delete(key)
+  }
 }
 
 async function decorateDetail(detail:Element){
   const gallery=detail.querySelector<HTMLElement>('.profile-gallery')
-  const avatar=detail.querySelector<HTMLImageElement>('.profile-head .profile-avatar')
-  if(!gallery||!avatar||avatar.src)return
+  const avatars=detail.querySelectorAll<HTMLImageElement>('.profile-head .profile-avatar')
+  const avatar=avatars[0]
+  if(!gallery||!avatar||avatar.getAttribute('src'))return
   const first=gallery.querySelector<HTMLImageElement>('img')
   if(!first?.src)return
   avatar.src=first.src
   avatar.style.display='block'
-  const fallback=avatar.parentElement?.querySelectorAll('.profile-avatar')[1] as HTMLElement|null
+  const fallback=avatars[1] as HTMLElement|null
   if(fallback)fallback.style.display='none'
 }
 
-function observe(){
-  const run=()=>{void decorateHome();document.querySelectorAll('.profile-detail').forEach(d=>void decorateDetail(d))}
-  new MutationObserver(run).observe(document.body,{childList:true,subtree:true})
-  run()
+function run(){
+  if(scheduled)return
+  scheduled=true
+  queueMicrotask(()=>{
+    scheduled=false
+    void decorateHome()
+    document.querySelectorAll('.profile-detail').forEach(d=>void decorateDetail(d))
+  })
 }
 
-observe()
+const observer=new MutationObserver(run)
+observer.observe(document.body,{childList:true,subtree:true})
+run()
