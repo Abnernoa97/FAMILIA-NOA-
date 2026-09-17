@@ -21,12 +21,18 @@ const loadAlbums = async () => {
   await import('./albums-enhancer')
 }
 
+let observer: MutationObserver | null = null
+
 function scan() {
   void loadBiometric()
   void loadProfile()
   void loadAlbums()
+  if (biometricLoaded && profileLoaded && albumsLoaded) {
+    observer?.disconnect()
+    observer = null
+  }
 }
 
-const observer = new MutationObserver(scan)
+observer = new MutationObserver(scan)
 observer.observe(document.body, { childList: true, subtree: true })
 scan()
