@@ -3,7 +3,6 @@ const PROFILE_STATE = 'familia-noa-profile-level'
 const CHAT_STATE = 'familia-noa-chat-level'
 let seenMenu: Element | null = null
 let seenDetail: Element | null = null
-let seenChat: Element | null = null
 
 function pushProfileState(level: number) {
   if (history.state?.[PROFILE_STATE] === level) return
@@ -59,12 +58,3 @@ document.addEventListener('click', event => {
 const observer = new MutationObserver(syncProfileHistory)
 observer.observe(document.body, { childList: true, subtree: true })
 syncProfileHistory()
-
-// Album back button: return to the real home screen without forcing a URL reload.
-document.addEventListener('click', event => {
-  const target = event.target as Element | null
-  if (!target?.closest('#albumsBack')) return
-  event.preventDefault()
-  event.stopImmediatePropagation()
-  window.dispatchEvent(new CustomEvent('familia-home'))
-}, true)
