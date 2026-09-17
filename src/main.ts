@@ -4,6 +4,15 @@ import { clearIdentity, getIdentity, setIdentity } from './core/identity'
 
 type Member = { id: string; name: string; active: boolean; must_share_location: boolean }
 
+type ChatMessage = {
+  id: string
+  sender_id: string
+  body: string
+  created_at: string
+  reply_to_id: string | null
+  sender?: { name?: string } | null
+}
+
 const FALLBACK = ['Mamá', 'Papá', 'Romel', 'Osniel', 'Abner']
 let members: Member[] = []
 const initialIdentity = getIdentity()
@@ -13,6 +22,7 @@ let channel: ReturnType<typeof supabase.channel> | null = null
 let settingsChannel: ReturnType<typeof supabase.channel> | null = null
 let familySyncChannel: ReturnType<typeof supabase.channel> | null = null
 let replyTo: { id:string; name:string; body:string } | null = null
+let chatViewToken = 0
 const app = document.querySelector<HTMLDivElement>('#app')!
 document.title = 'FAMILIA NOA'
 
@@ -65,33 +75,132 @@ function applySettings(s:any){
 }
 async function loadSettings(){const {data}=await supabase.from('app_settings').select('settings').eq('id','global').maybeSingle();if(data?.settings)applySettings(data.settings)}
 function startSettingsRealtime(){settingsChannel?.unsubscribe();settingsChannel=supabase.channel('familia-noa-settings').on('postgres_changes',{event:'UPDATE',schema:'public',table:'app_settings',filter:'id=eq.global'},payload=>applySettings((payload.new as any).settings)).subscribe()}
-function startFamilyRealtime(){familySyncChannel?.unsubscribe();familySyncChannel=supabase.channel('familia-noa-family-sync').on('postgres_changes',{event:'*',schema:'public',table:'family_members'},async()=>{await loadMembers();const current=members.find(m=>m.id===memberId);if(!current){clearIdentity();memberName='';memberId='';login('Este perfil ya no está activo.')}}).on('postgres_changes',{event:'*',schema:'public',table:'locations'},()=>{if(document.querySelector('.family-locations'))loadLocations()}).on('postgres_changes',{event:'*',schema:'public',table:'wellbeing_status'},()=>{}).on('postgres_changes',{event:'*',schema:'public',table:'help_alerts'},()=>{}).subscribe()}
+function startFamilyRealtime(){familySyncChannel?.unsubscribe();familySyncChannel=supabase.channel('familia-noa-family-sync').on('postgres_changes',{event:'*',schema:'public',table:'family_members'},async()=>{await loadMembers();const current=members.find(m=>m.id===memberId);if(!current){clearIdentity();memberName='';memberId='';login('Este perfil ya no está activo.')}}).on('postgres_changes',{event:'*',schema:'public',table:'locations'},()=>{if(document.querySelector('.family-locations'))loadLocations()}).subscribe()}
+
+function stopChatRealtime(){
+  chatViewToken++
+  channel?.unsubscribe()
+  channel=null
+}
 
 function renderHome(){
+  stopChatRealtime()
   app.innerHTML=`<main class="shell"><header class="top"><div><p class="eyebrow">FAMILIA NOA</p><h1>Hola, ${esc(memberName)} <span>♡</span></h1></div><button class="avatar" id="change">${esc(memberName.charAt(0))}</button></header><section class="hero"><p class="eyebrow">TODOS CERCA</p><h2>¿Cómo está la familia hoy?</h2><p>Habla, comparte y revisa que todos estén bien.</p></section><section class="grid"><button class="card dark" id="chat"><i>✦</i><b>Chat</b><small>Habla con todos</small></button><button class="card photo" id="photos"><i>◌</i><b>Fotos</b><small>Momentos de familia</small></button><button class="card" id="location"><i>⌖</i><b>Ubicación</b><small>Ver dónde estamos</small></button><button class="card ok" id="ok"><i>♥</i><b>Estoy bien</b><small>Avísale a la familia</small></button><button class="card help" id="help"><i>!</i><b>Ayuda</b><small>Necesito a mi familia</small></button></section><nav><button class="active">Inicio</button><button id="navchat">Chat</button><button id="navphotos">Fotos</button><button id="navlocation">Ubicación</button></nav></main>`
   applySettings({})
-  document.querySelector('#change')!.addEventListener('click',()=>{clearIdentity();memberName='';memberId='';familySyncChannel?.unsubscribe();settingsChannel?.unsubscribe();login()})
+  document.querySelector('#change')!.addEventListener('click',()=>{clearIdentity();memberName='';memberId='';familySyncChannel?.unsubscribe();settingsChannel?.unsubscribe();stopChatRealtime();login()})
   document.querySelector('#chat')!.addEventListener('click',renderChat);document.querySelector('#navchat')!.addEventListener('click',renderChat);document.querySelector('#photos')!.addEventListener('click',renderPhotos);document.querySelector('#navphotos')!.addEventListener('click',renderPhotos);document.querySelector('#location')!.addEventListener('click',renderLocation);document.querySelector('#navlocation')!.addEventListener('click',renderLocation);document.querySelector('#ok')!.addEventListener('click',setWellbeing);document.querySelector('#help')!.addEventListener('click',sendHelp);loadSettings()
 }
 
+function chatBubble(m: ChatMessage, quoted: ChatMessage | null = null): string {
+  return `<article class="bubble ${m.sender_id===memberId?'mine':''}" data-message-id="${esc(m.id)}"><div class="swipe-hint" aria-hidden="true">↩</div>${quoted?`<button class="quoted" data-jump="${esc(quoted.id)}"><b>${esc(quoted.sender?.name||'Familia')}</b><span>${esc(quoted.body)}</span></button>`:''}<b class="sender-name">${esc(m.sender?.name||'Familia')}</b><p>${esc(m.body)}</p><small>${time(m.created_at)}</small></article>`
+}
+
 async function renderChat(){
+  stopChatRealtime()
+  const viewToken=++chatViewToken
   replyTo=null
   app.innerHTML=`<main class="page chat-page"><header class="pagehead"><button id="back">‹</button><div><p class="eyebrow">FAMILIA NOA</p><h1>Chat</h1></div></header><section class="messages" id="messages"><div class="loading">Cargando mensajes…</div></section><div id="replyPreview"></div><form class="composer" id="composer"><input id="message" maxlength="2000" placeholder="Escribe algo…" autocomplete="off"><button>Enviar</button></form><button class="back-to-top" id="chatTop" aria-label="Volver arriba">↑</button></main>`
   document.querySelector('#back')!.addEventListener('click',renderHome)
-  const list=document.querySelector('#messages')!
-  const {data}=await supabase.from('messages').select('id,sender_id,body,created_at,reply_to_id,sender:family_members(name)').order('created_at',{ascending:true}).limit(100)
-  const all:any[]=data||[]
+  const list=document.querySelector<HTMLElement>('#messages')!
+  const {data,error}=await supabase.from('messages').select('id,sender_id,body,created_at,reply_to_id,sender:family_members(name)').order('created_at',{ascending:true}).limit(100)
+  if(viewToken!==chatViewToken||!document.querySelector('#messages'))return
+  const all: ChatMessage[]=(data||[]) as ChatMessage[]
   const byId=new Map(all.map(m=>[m.id,m]))
-  list.innerHTML=all.map(m=>{const quoted=m.reply_to_id?byId.get(m.reply_to_id):null;return `<article class="bubble ${m.sender_id===memberId?'mine':''}" data-message-id="${m.id}"><div class="swipe-hint" aria-hidden="true">↩</div>${quoted?`<button class="quoted" data-jump="${quoted.id}"><b>${esc(quoted.sender?.name||'Familia')}</b><span>${esc(quoted.body)}</span></button>`:''}<b class="sender-name">${esc(m.sender?.name||'Familia')}</b><p>${esc(m.body)}</p><small>${time(m.created_at)}</small></article>`}).join('')||'<div class="empty">Todavía no hay mensajes. Sé el primero ❤️</div>'
+  list.innerHTML=all.map(m=>chatBubble(m,m.reply_to_id?byId.get(m.reply_to_id)||null:null)).join('')||'<div class="empty">Todavía no hay mensajes. Sé el primero ❤️</div>'
   list.scrollTop=list.scrollHeight
+
   const preview=document.querySelector('#replyPreview')!
-  const updatePreview=()=>{preview.innerHTML=replyTo?`<div class="reply-preview"><div><b>Respondiendo a ${esc(replyTo.name)}</b><span>${esc(replyTo.body)}</span></div><button id="cancelReply" aria-label="Cancelar respuesta">×</button></div>`:'';if(replyTo){document.querySelector('#cancelReply')!.addEventListener('click',()=>{replyTo=null;updatePreview();document.querySelector<HTMLInputElement>('#message')!.focus()})}}
-  const selectReply=(m:any)=>{replyTo={id:m.id,name:m.sender?.name||'Familia',body:m.body};updatePreview();document.querySelector<HTMLInputElement>('#message')!.focus()}
-  document.querySelectorAll<HTMLElement>('.bubble').forEach(b=>{let startX=0,startY=0,moved=false;b.addEventListener('touchstart',e=>{const t=e.touches[0];startX=t.clientX;startY=t.clientY;moved=false},{passive:true});b.addEventListener('touchmove',e=>{const t=e.touches[0];const dx=t.clientX-startX;const dy=Math.abs(t.clientY-startY);if(dx>8&&dx>dy){moved=true;b.style.transform=`translateX(${Math.min(dx,72)}px)`}}, {passive:true});b.addEventListener('touchend',()=>{if(moved&&parseFloat(b.style.transform.replace(/[^0-9.-]/g,''))>=55){const m=all.find(x=>x.id===b.dataset.messageId);if(m)selectReply(m)}b.style.transform='';moved=false});b.addEventListener('dblclick',()=>{const m=all.find(x=>x.id===b.dataset.messageId);if(m)selectReply(m)})})
-  document.querySelectorAll<HTMLElement>('[data-jump]').forEach(q=>q.addEventListener('click',()=>{document.querySelector(`[data-message-id="${q.dataset.jump}"]`)?.scrollIntoView({behavior:'smooth',block:'center'})}))
-  document.querySelector('#composer')!.addEventListener('submit',async e=>{e.preventDefault();const input=document.querySelector<HTMLInputElement>('#message')!;const body=input.value.trim();if(!body||!memberId)return;input.disabled=true;const payload:any={sender_id:memberId,body};if(replyTo)payload.reply_to_id=replyTo.id;const {error}=await supabase.from('messages').insert(payload);input.disabled=false;if(error){sheet('No se pudo enviar','Inténtalo de nuevo en un momento.');return}input.value='';replyTo=null;updatePreview()})
+  const input=document.querySelector<HTMLInputElement>('#message')!
+  const updatePreview=()=>{
+    preview.innerHTML=replyTo?`<div class="reply-preview"><div><b>Respondiendo a ${esc(replyTo.name)}</b><span>${esc(replyTo.body)}</span></div><button id="cancelReply" aria-label="Cancelar respuesta">×</button></div>`:''
+    if(replyTo){
+      document.querySelector('#cancelReply')!.addEventListener('click',()=>{replyTo=null;updatePreview();input.focus()})
+    }
+  }
+  const selectReply=(m: ChatMessage)=>{replyTo={id:m.id,name:m.sender?.name||'Familia',body:m.body};updatePreview();input.focus()}
+  const getMessage=(id:string)=>byId.get(id)
+
+  let swipeId=''
+  let startX=0
+  let startY=0
+  let swiping=false
+  list.addEventListener('touchstart',e=>{
+    const target=(e.target as HTMLElement).closest<HTMLElement>('.bubble')
+    if(!target)return
+    const t=e.touches[0]
+    swipeId=target.dataset.messageId||''
+    startX=t.clientX
+    startY=t.clientY
+    swiping=false
+  },{passive:true})
+  list.addEventListener('touchmove',e=>{
+    if(!swipeId)return
+    const target=list.querySelector<HTMLElement>(`[data-message-id="${swipeId}"]`)
+    if(!target)return
+    const t=e.touches[0]
+    const dx=t.clientX-startX
+    const dy=Math.abs(t.clientY-startY)
+    if(dx>8&&dx>dy){swiping=true;target.style.transform=`translateX(${Math.min(dx,72)}px)`}
+  },{passive:true})
+  list.addEventListener('touchend',()=>{
+    if(!swipeId)return
+    const target=list.querySelector<HTMLElement>(`[data-message-id="${swipeId}"]`)
+    if(target&&swiping){
+      const m=getMessage(swipeId)
+      if(m&&parseFloat(target.style.transform.replace(/[^0-9.-]/g,''))>=55)selectReply(m)
+      target.style.transform=''
+    }
+    swipeId='';swiping=false
+  })
+  list.addEventListener('dblclick',e=>{
+    const target=(e.target as HTMLElement).closest<HTMLElement>('.bubble')
+    if(!target)return
+    const m=getMessage(target.dataset.messageId||'')
+    if(m)selectReply(m)
+  })
+  list.addEventListener('click',e=>{
+    const quoted=(e.target as HTMLElement).closest<HTMLElement>('[data-jump]')
+    if(!quoted)return
+    const id=quoted.dataset.jump
+    if(id)list.querySelector(`[data-message-id="${id}"]`)?.scrollIntoView({behavior:'smooth',block:'center'})
+  })
+
+  document.querySelector('#composer')!.addEventListener('submit',async e=>{
+    e.preventDefault()
+    const body=input.value.trim()
+    if(!body||!memberId)return
+    input.disabled=true
+    const payload:any={sender_id:memberId,body}
+    if(replyTo)payload.reply_to_id=replyTo.id
+    const {error:insertError}=await supabase.from('messages').insert(payload)
+    input.disabled=false
+    if(insertError){sheet('No se pudo enviar','Inténtalo de nuevo en un momento.');return}
+    input.value='';replyTo=null;updatePreview();input.focus()
+  })
   document.querySelector('#chatTop')!.addEventListener('click',()=>list.scrollTo({top:0,behavior:'smooth'}))
-  channel?.unsubscribe();channel=supabase.channel('familia-noa-chat').on('postgres_changes',{event:'INSERT',schema:'public',table:'messages'},()=>renderChat()).subscribe()
+
+  const seenIds=new Set(all.map(m=>m.id))
+  channel=supabase.channel('familia-noa-chat').on('postgres_changes',{event:'INSERT',schema:'public',table:'messages'},async payload=>{
+    if(viewToken!==chatViewToken)return
+    const row=payload.new as {id:string;sender_id:string;body:string;created_at:string;reply_to_id:string|null}
+    if(!row?.id||seenIds.has(row.id))return
+    seenIds.add(row.id)
+
+    let senderName=members.find(m=>m.id===row.sender_id)?.name||''
+    if(!senderName){
+      const {data:sender}=await supabase.from('family_members').select('name').eq('id',row.sender_id).maybeSingle()
+      senderName=sender?.name||'Familia'
+    }
+    if(viewToken!==chatViewToken)return
+
+    const wasNearBottom=list.scrollHeight-list.scrollTop-list.clientHeight<120
+    const message:ChatMessage={...row,sender:{name:senderName}}
+    byId.set(message.id,message)
+    const empty=list.querySelector('.empty')
+    if(empty)empty.remove()
+    list.insertAdjacentHTML('beforeend',chatBubble(message,message.reply_to_id?byId.get(message.reply_to_id)||null:null))
+    if(wasNearBottom)list.scrollTop=list.scrollHeight
+  }).subscribe()
 }
 
 async function setWellbeing(){if(!memberId)return;const {error}=await supabase.from('wellbeing_status').upsert({member_id:memberId,is_ok:true,updated_at:new Date().toISOString()});sheet(error?'No se pudo actualizar':'Estoy bien ❤️',error?'El estado no pudo guardarse todavía.':'La familia puede ver que estás bien.')}
