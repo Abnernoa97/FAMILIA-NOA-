@@ -1,4 +1,4 @@
-import { startAuthentication, startRegistration } from '@simplewebauthn/browser'
+import { startAuthentication, startRegistration, WebAuthnAbortService } from '@simplewebauthn/browser'
 import { supabase } from './supabase'
 
 const KEY = 'familia-noa-member'
@@ -28,17 +28,31 @@ async function biometric(button: HTMLButtonElement, error: HTMLElement) {
   if (button.disabled) return
   button.disabled = true
   error.textContent = 'Verificando…'
+  let timeout: ReturnType<typeof setTimeout> | null = null
   try {
     const memberId = localStorage.getItem(PASSKEY_MEMBER_KEY) || undefined
     const credentialId = localStorage.getItem(PASSKEY_CRED_KEY) || undefined
     const payload: Record<string, unknown> = {}
     if (memberId) payload.member_id = memberId
     if (credentialId) payload.credential_ids = [credentialId]
+
     const optionsResult = await call('auth-options', payload)
+
+    const timeoutPromise = new Promise<never>((_, reject) => {
+      timeout = setTimeout(() => {
+        WebAuthnAbortService.cancelCeremony()
+        reject(new Error('La verificación tardó demasiado. Puedes entrar con tu perfil.'))
+      }, 10000)
+    })
+
     const response = await Promise.race([
       startAuthentication({ optionsJSON: optionsResult.options }),
-      new Promise<never>((_, reject) => setTimeout(() => reject(new Error('La verificación tardó demasiado. Puedes entrar con tu perfil.')), 8000))
+      timeoutPromise,
     ])
+
+    if (timeout) clearTimeout(timeout)
+    timeout = null
+
     const result = await call('auth-verify', { token: optionsResult.token, response })
     if (!result?.profile?.id) throw new Error('No se pudo identificar el perfil.')
     localStorage.setItem(PASSKEY_KEY, 'enabled')
@@ -46,8 +60,14 @@ async function biometric(button: HTMLButtonElement, error: HTMLElement) {
     localStorage.setItem(PASSKEY_CRED_KEY, response.id)
     session(result.profile)
   } catch (err) {
+    if (timeout) clearTimeout(timeout)
+    timeout = null
     const name = err instanceof Error ? err.name : ''
-    if (name !== 'NotAllowedError' && name !== 'AbortError') error.textContent = err instanceof Error ? err.message : 'No se pudo entrar.'
+    if (name === 'NotAllowedError' || name === 'AbortError') {
+      error.textContent = 'La verificación biométrica fue cancelada o no estuvo disponible. Puedes entrar con tu perfil.'
+    } else {
+      error.textContent = err instanceof Error ? err.message : 'No se pudo entrar con huella / Face ID.'
+    }
     button.disabled = false
   }
 }
@@ -94,7 +114,8 @@ async function registerPasskey(memberId: string, house: string, nickname: string
     alert('Listo. Este teléfono ya puede entrar con huella o reconocimiento facial.')
   } catch (err) {
     const name = err instanceof Error ? err.name : ''
-    if (name !== 'NotAllowedError' && name !== 'AbortError') alert(err instanceof Error ? err.message : 'No se pudo activar la biometría.')
+    if (name === 'NotAllowedError' || name === 'AbortError') return
+    alert(err instanceof Error ? err.message : 'No se pudo activar la biometría.')
   }
 }
 
