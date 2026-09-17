@@ -1,4 +1,4 @@
-import { clearIdentity, getCurrentMember, getIdentity, onIdentityChange } from './identity'
+import { clearIdentity, getCurrentMember, getIdentity, onIdentityChange, setIdentity } from './identity'
 
 let validationInFlight = false
 
@@ -13,8 +13,7 @@ async function validateIdentity(): Promise<void> {
       clearIdentity()
       return
     }
-    localStorage.setItem('familia-noa-member', member.name)
-    sessionStorage.setItem('familia-noa-profile', JSON.stringify({ id: member.id, name: member.name }))
+    setIdentity({ memberId: member.id, name: member.name })
   } finally {
     validationInFlight = false
   }
