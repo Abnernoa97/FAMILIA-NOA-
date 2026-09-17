@@ -102,12 +102,33 @@ async function renderChat(){
   app.innerHTML=`<main class="page chat-page"><header class="pagehead"><button id="back">‹</button><div><p class="eyebrow">FAMILIA NOA</p><h1>Chat</h1></div></header><section class="messages" id="messages"><div class="loading">Cargando mensajes…</div></section><div id="replyPreview"></div><form class="composer" id="composer"><input id="message" maxlength="2000" placeholder="Escribe algo…" autocomplete="off"><button>Enviar</button></form><button class="back-to-top" id="chatTop" aria-label="Volver arriba">↑</button></main>`
   document.querySelector('#back')!.addEventListener('click',renderHome)
   const list=document.querySelector<HTMLElement>('#messages')!
-  const {data,error}=await supabase.from('messages').select('id,sender_id,body,created_at,reply_to_id,sender:family_members(name)').order('created_at',{ascending:true}).limit(100)
+  const {data,error}=await supabase.from('messages').select('id,sender_id,body,created_at,reply_to_id,sender:family_members(name)').order('created_at',{ascending:false}).limit(100)
   if(viewToken!==chatViewToken||!document.querySelector('#messages'))return
-  const all: ChatMessage[]=(data||[]) as ChatMessage[]
+  let all: ChatMessage[]=((data||[]) as ChatMessage[]).reverse()
   const byId=new Map(all.map(m=>[m.id,m]))
   list.innerHTML=all.map(m=>chatBubble(m,m.reply_to_id?byId.get(m.reply_to_id)||null:null)).join('')||'<div class="empty">Todavía no hay mensajes. Sé el primero ❤️</div>'
   list.scrollTop=list.scrollHeight
+
+  let oldestCreatedAt=all[0]?.created_at||''
+  let hasMore=all.length===100
+  let loadingOlder=false
+  const loadOlder=async()=>{
+    if(loadingOlder||!hasMore||!oldestCreatedAt||viewToken!==chatViewToken)return
+    loadingOlder=true
+    const previousHeight=list.scrollHeight
+    const previousTop=list.scrollTop
+    const {data:olderData,error:olderError}=await supabase.from('messages').select('id,sender_id,body,created_at,reply_to_id,sender:family_members(name)').lt('created_at',oldestCreatedAt).order('created_at',{ascending:false}).limit(100)
+    if(viewToken!==chatViewToken){loadingOlder=false;return}
+    const older=((olderData||[]) as ChatMessage[]).reverse()
+    if(olderError||!older.length){hasMore=false;loadingOlder=false;return}
+    older.forEach(m=>{all.unshift(m);byId.set(m.id,m)})
+    oldestCreatedAt=all[0]?.created_at||''
+    hasMore=older.length===100
+    list.innerHTML=all.map(m=>chatBubble(m,m.reply_to_id?byId.get(m.reply_to_id)||null:null)).join('')
+    list.scrollTop=list.scrollHeight-previousHeight+previousTop
+    loadingOlder=false
+  }
+  list.addEventListener('scroll',()=>{if(list.scrollTop<=80)void loadOlder()},{passive:true})
 
   const preview=document.querySelector('#replyPreview')!
   const input=document.querySelector<HTMLInputElement>('#message')!
@@ -196,6 +217,8 @@ async function renderChat(){
     const wasNearBottom=list.scrollHeight-list.scrollTop-list.clientHeight<120
     const message:ChatMessage={...row,sender:{name:senderName}}
     byId.set(message.id,message)
+    all.push(message)
+    if(all.length>100){all=all.slice(-100);oldestCreatedAt=all[0]?.created_at||oldestCreatedAt;hasMore=true}
     const empty=list.querySelector('.empty')
     if(empty)empty.remove()
     list.insertAdjacentHTML('beforeend',chatBubble(message,message.reply_to_id?byId.get(message.reply_to_id)||null:null))
