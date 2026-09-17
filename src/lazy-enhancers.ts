@@ -1,6 +1,7 @@
 let biometricLoaded = false
 let profileLoaded = false
 let albumsLoaded = false
+let chatLoaded = false
 
 const loadBiometric = async () => {
   if (biometricLoaded || !document.querySelector('.members')) return
@@ -21,13 +22,20 @@ const loadAlbums = async () => {
   await import('./albums-enhancer')
 }
 
+const loadChat = async () => {
+  if (chatLoaded || !document.querySelector('.shell, .chat-page')) return
+  chatLoaded = true
+  await import('./chat-enhancer')
+}
+
 let observer: MutationObserver | null = null
 
 function scan() {
   void loadBiometric()
   void loadProfile()
   void loadAlbums()
-  if (biometricLoaded && profileLoaded && albumsLoaded) {
+  void loadChat()
+  if (biometricLoaded && profileLoaded && albumsLoaded && chatLoaded) {
     observer?.disconnect()
     observer = null
   }
