@@ -15,6 +15,9 @@ type ChatMessage = {
 
 const FALLBACK = ['Mamá', 'Papá', 'Romel', 'Osniel', 'Abner']
 let members: Member[] = []
+let membersLoaded = false
+let settingsLoaded = false
+let settingsCache: any = null
 const initialIdentity = getIdentity()
 let memberName = initialIdentity?.name || ''
 let memberId = initialIdentity?.memberId || ''
@@ -29,15 +32,17 @@ document.title = 'FAMILIA NOA'
 const esc = (v: string) => v.replace(/[&<>\\"']/g, c => ({'&':'&amp;','<':'&lt;','>':'&gt;','\\"':'&quot;',"'":'&#039;'}[c]!))
 const time = (v: string) => new Date(v).toLocaleTimeString('es-MX', {hour:'2-digit', minute:'2-digit'})
 
-async function loadMembers() {
+async function loadMembers(force = false) {
+  if (membersLoaded && !force) return
   const { data } = await supabase.from('family_members').select('id,name,active,must_share_location').eq('active', true).order('created_at')
   members = (data || []) as Member[]
+  membersLoaded = true
   if (!members.length) members = FALLBACK.map((name, i) => ({id:String(i), name, active:true, must_share_location:name==='Mamá'||name==='Papá'}))
 }
 
 function login(errorText = '') {
   app.innerHTML = `<main class="login"><div class="brand"><span>FAMILIA</span><strong>NOA</strong></div><p class="eyebrow">PRIVATE FAMILY SPACE</p><h1>¿Quién eres?</h1><p class="intro">Un solo lugar para estar cerca, estés donde estés.</p>${errorText ? `<div class="errorbox">${esc(errorText)}</div>` : ''}<div class="members">${members.map(m=>`<button class="member" data-name="${esc(m.name)}">${esc(m.name)}<span>›</span></button>`).join('')}</div></main>`
-  document.querySelectorAll<HTMLButtonElement>('[data-name]').forEach(b=>b.onclick=()=>securityStep(b.dataset.name!))
+  document.querySelectorAll<HTMLButtonElement>('[data-name]').forEach(b => b.onclick=()=>securityStep(b.dataset.name!))
 }
 
 function securityStep(name: string) {
@@ -73,9 +78,35 @@ function applySettings(s:any){
   const hero=document.querySelector('.hero h2'); if(hero&&s?.heroTitle) hero.textContent=s.heroTitle
   const heroText=document.querySelector('.hero p:not(.eyebrow)'); if(heroText&&s?.heroText) heroText.textContent=s.heroText
 }
-async function loadSettings(){const {data}=await supabase.from('app_settings').select('settings').eq('id','global').maybeSingle();if(data?.settings)applySettings(data.settings)}
-function startSettingsRealtime(){settingsChannel?.unsubscribe();settingsChannel=supabase.channel('familia-noa-settings').on('postgres_changes',{event:'UPDATE',schema:'public',table:'app_settings',filter:'id=eq.global'},payload=>applySettings((payload.new as any).settings)).subscribe()}
-function startFamilyRealtime(){familySyncChannel?.unsubscribe();familySyncChannel=supabase.channel('familia-noa-family-sync').on('postgres_changes',{event:'*',schema:'public',table:'family_members'},async()=>{await loadMembers();const current=members.find(m=>m.id===memberId);if(!current){clearIdentity();memberName='';memberId='';login('Este perfil ya no está activo.')}}).on('postgres_changes',{event:'*',schema:'public',table:'locations'},()=>{if(document.querySelector('.family-locations'))loadLocations()}).subscribe()}
+async function loadSettings(force = false){
+  if(settingsLoaded && !force){if(settingsCache)applySettings(settingsCache);return}
+  const {data}=await supabase.from('app_settings').select('settings').eq('id','global').maybeSingle()
+  settingsCache=data?.settings||null
+  settingsLoaded=true
+  if(settingsCache)applySettings(settingsCache)
+}
+function startSettingsRealtime(){settingsChannel?.unsubscribe();settingsChannel=supabase.channel('familia-noa-settings').on('postgres_changes',{event:'UPDATE',schema:'public',table:'app_settings',filter:'id=eq.global'},payload=>{settingsCache=(payload.new as any).settings||null;settingsLoaded=true;applySettings(settingsCache)}).subscribe()}
+function startFamilyRealtime(){
+  familySyncChannel?.unsubscribe()
+  familySyncChannel=supabase.channel('familia-noa-family-sync')
+    .on('postgres_changes',{event:'*',schema:'public',table:'family_members'},payload=>{
+      const row=payload.new as Partial<Member> & {id?:string}
+      const old=payload.old as Partial<Member> & {id?:string}
+      if(payload.eventType==='DELETE'){
+        members=members.filter(m=>m.id!==old.id)
+      }else if(row.id){
+        const next={id:row.id,name:row.name||'',active:row.active!==false,must_share_location:!!row.must_share_location} as Member
+        const index=members.findIndex(m=>m.id===next.id)
+        if(next.active){if(index>=0)members[index]=next;else members.push(next)}
+        else if(index>=0)members.splice(index,1)
+      }
+      membersLoaded=true
+      const current=members.find(m=>m.id===memberId)
+      if(!current){clearIdentity();memberName='';memberId='';login('Este perfil ya no está activo.')}
+    })
+    .on('postgres_changes',{event:'*',schema:'public',table:'locations'},()=>{if(document.querySelector('.family-locations'))void loadLocations()})
+    .subscribe()
+}
 
 function stopChatRealtime(){
   chatViewToken++
@@ -86,9 +117,9 @@ function stopChatRealtime(){
 function renderHome(){
   stopChatRealtime()
   app.innerHTML=`<main class="shell"><header class="top"><div><p class="eyebrow">FAMILIA NOA</p><h1>Hola, ${esc(memberName)} <span>♡</span></h1></div><button class="avatar" id="change">${esc(memberName.charAt(0))}</button></header><section class="hero"><p class="eyebrow">TODOS CERCA</p><h2>¿Cómo está la familia hoy?</h2><p>Habla, comparte y revisa que todos estén bien.</p></section><section class="grid"><button class="card dark" id="chat"><i>✦</i><b>Chat</b><small>Habla con todos</small></button><button class="card photo" id="photos"><i>◌</i><b>Fotos</b><small>Momentos de familia</small></button><button class="card" id="location"><i>⌖</i><b>Ubicación</b><small>Ver dónde estamos</small></button><button class="card ok" id="ok"><i>♥</i><b>Estoy bien</b><small>Avísale a la familia</small></button><button class="card help" id="help"><i>!</i><b>Ayuda</b><small>Necesito a mi familia</small></button></section><nav><button class="active">Inicio</button><button id="navchat">Chat</button><button id="navphotos">Fotos</button><button id="navlocation">Ubicación</button></nav></main>`
-  applySettings({})
+  if(settingsCache)applySettings(settingsCache)
   document.querySelector('#change')!.addEventListener('click',()=>{clearIdentity();memberName='';memberId='';familySyncChannel?.unsubscribe();settingsChannel?.unsubscribe();stopChatRealtime();login()})
-  document.querySelector('#chat')!.addEventListener('click',renderChat);document.querySelector('#navchat')!.addEventListener('click',renderChat);document.querySelector('#photos')!.addEventListener('click',renderPhotos);document.querySelector('#navphotos')!.addEventListener('click',renderPhotos);document.querySelector('#location')!.addEventListener('click',renderLocation);document.querySelector('#navlocation')!.addEventListener('click',renderLocation);document.querySelector('#ok')!.addEventListener('click',setWellbeing);document.querySelector('#help')!.addEventListener('click',sendHelp);loadSettings()
+  document.querySelector('#chat')!.addEventListener('click',renderChat);document.querySelector('#navchat')!.addEventListener('click',renderChat);document.querySelector('#photos')!.addEventListener('click',renderPhotos);document.querySelector('#navphotos')!.addEventListener('click',renderPhotos);document.querySelector('#location')!.addEventListener('click',renderLocation);document.querySelector('#navlocation')!.addEventListener('click',renderLocation);document.querySelector('#ok')!.addEventListener('click',setWellbeing);document.querySelector('#help')!.addEventListener('click',sendHelp);void loadSettings()
 }
 
 function chatBubble(m: ChatMessage, quoted: ChatMessage | null = null): string {
@@ -134,70 +165,19 @@ async function renderChat(){
   const input=document.querySelector<HTMLInputElement>('#message')!
   const updatePreview=()=>{
     preview.innerHTML=replyTo?`<div class="reply-preview"><div><b>Respondiendo a ${esc(replyTo.name)}</b><span>${esc(replyTo.body)}</span></div><button id="cancelReply" aria-label="Cancelar respuesta">×</button></div>`:''
-    if(replyTo){
-      document.querySelector('#cancelReply')!.addEventListener('click',()=>{replyTo=null;updatePreview();input.focus()})
-    }
+    if(replyTo){document.querySelector('#cancelReply')!.addEventListener('click',()=>{replyTo=null;updatePreview();input.focus()})}
   }
   const selectReply=(m: ChatMessage)=>{replyTo={id:m.id,name:m.sender?.name||'Familia',body:m.body};updatePreview();input.focus()}
   const getMessage=(id:string)=>byId.get(id)
 
-  let swipeId=''
-  let startX=0
-  let startY=0
-  let swiping=false
-  list.addEventListener('touchstart',e=>{
-    const target=(e.target as HTMLElement).closest<HTMLElement>('.bubble')
-    if(!target)return
-    const t=e.touches[0]
-    swipeId=target.dataset.messageId||''
-    startX=t.clientX
-    startY=t.clientY
-    swiping=false
-  },{passive:true})
-  list.addEventListener('touchmove',e=>{
-    if(!swipeId)return
-    const target=list.querySelector<HTMLElement>(`[data-message-id="${swipeId}"]`)
-    if(!target)return
-    const t=e.touches[0]
-    const dx=t.clientX-startX
-    const dy=Math.abs(t.clientY-startY)
-    if(dx>8&&dx>dy){swiping=true;target.style.transform=`translateX(${Math.min(dx,72)}px)`}
-  },{passive:true})
-  list.addEventListener('touchend',()=>{
-    if(!swipeId)return
-    const target=list.querySelector<HTMLElement>(`[data-message-id="${swipeId}"]`)
-    if(target&&swiping){
-      const m=getMessage(swipeId)
-      if(m&&parseFloat(target.style.transform.replace(/[^0-9.-]/g,''))>=55)selectReply(m)
-      target.style.transform=''
-    }
-    swipeId='';swiping=false
-  })
-  list.addEventListener('dblclick',e=>{
-    const target=(e.target as HTMLElement).closest<HTMLElement>('.bubble')
-    if(!target)return
-    const m=getMessage(target.dataset.messageId||'')
-    if(m)selectReply(m)
-  })
-  list.addEventListener('click',e=>{
-    const quoted=(e.target as HTMLElement).closest<HTMLElement>('[data-jump]')
-    if(!quoted)return
-    const id=quoted.dataset.jump
-    if(id)list.querySelector(`[data-message-id="${id}"]`)?.scrollIntoView({behavior:'smooth',block:'center'})
-  })
+  let swipeId='';let startX=0;let startY=0;let swiping=false
+  list.addEventListener('touchstart',e=>{const target=(e.target as HTMLElement).closest<HTMLElement>('.bubble');if(!target)return;const t=e.touches[0];swipeId=target.dataset.messageId||'';startX=t.clientX;startY=t.clientY;swiping=false},{passive:true})
+  list.addEventListener('touchmove',e=>{if(!swipeId)return;const target=list.querySelector<HTMLElement>(`[data-message-id="${swipeId}"]`);if(!target)return;const t=e.touches[0];const dx=t.clientX-startX;const dy=Math.abs(t.clientY-startY);if(dx>8&&dx>dy){swiping=true;target.style.transform=`translateX(${Math.min(dx,72)}px)`}},{passive:true})
+  list.addEventListener('touchend',()=>{if(!swipeId)return;const target=list.querySelector<HTMLElement>(`[data-message-id="${swipeId}"]`);if(target&&swiping){const m=getMessage(swipeId);if(m&&parseFloat(target.style.transform.replace(/[^0-9.-]/g,''))>=55)selectReply(m);target.style.transform=''}swipeId='';swiping=false})
+  list.addEventListener('dblclick',e=>{const target=(e.target as HTMLElement).closest<HTMLElement>('.bubble');if(!target)return;const m=getMessage(target.dataset.messageId||'');if(m)selectReply(m)})
+  list.addEventListener('click',e=>{const quoted=(e.target as HTMLElement).closest<HTMLElement>('[data-jump]');if(!quoted)return;const id=quoted.dataset.jump;if(id)list.querySelector(`[data-message-id="${id}"]`)?.scrollIntoView({behavior:'smooth',block:'center'})})
 
-  document.querySelector('#composer')!.addEventListener('submit',async e=>{
-    e.preventDefault()
-    const body=input.value.trim()
-    if(!body||!memberId)return
-    input.disabled=true
-    const payload:any={sender_id:memberId,body}
-    if(replyTo)payload.reply_to_id=replyTo.id
-    const {error:insertError}=await supabase.from('messages').insert(payload)
-    input.disabled=false
-    if(insertError){sheet('No se pudo enviar','Inténtalo de nuevo en un momento.');return}
-    input.value='';replyTo=null;updatePreview();input.focus()
-  })
+  document.querySelector('#composer')!.addEventListener('submit',async e=>{e.preventDefault();const body=input.value.trim();if(!body||!memberId)return;input.disabled=true;const payload:any={sender_id:memberId,body};if(replyTo)payload.reply_to_id=replyTo.id;const {error:insertError}=await supabase.from('messages').insert(payload);input.disabled=false;if(insertError){sheet('No se pudo enviar','Inténtalo de nuevo en un momento.');return}input.value='';replyTo=null;updatePreview();input.focus()})
   document.querySelector('#chatTop')!.addEventListener('click',()=>list.scrollTo({top:0,behavior:'smooth'}))
 
   const seenIds=new Set(all.map(m=>m.id))
@@ -206,32 +186,22 @@ async function renderChat(){
     const row=payload.new as {id:string;sender_id:string;body:string;created_at:string;reply_to_id:string|null}
     if(!row?.id||seenIds.has(row.id))return
     seenIds.add(row.id)
-
     let senderName=members.find(m=>m.id===row.sender_id)?.name||''
-    if(!senderName){
-      const {data:sender}=await supabase.from('family_members').select('name').eq('id',row.sender_id).maybeSingle()
-      senderName=sender?.name||'Familia'
-    }
+    if(!senderName){const {data:sender}=await supabase.from('family_members').select('name').eq('id',row.sender_id).maybeSingle();senderName=sender?.name||'Familia'}
     if(viewToken!==chatViewToken)return
-
     const wasNearBottom=list.scrollHeight-list.scrollTop-list.clientHeight<120
     const message:ChatMessage={...row,sender:{name:senderName}}
-    byId.set(message.id,message)
-    all.push(message)
+    byId.set(message.id,message);all.push(message)
     if(all.length>100){all=all.slice(-100);oldestCreatedAt=all[0]?.created_at||oldestCreatedAt;hasMore=true}
-    const empty=list.querySelector('.empty')
-    if(empty)empty.remove()
-    list.insertAdjacentHTML('beforeend',chatBubble(message,message.reply_to_id?byId.get(message.reply_to_id)||null:null))
-    if(wasNearBottom)list.scrollTop=list.scrollHeight
+    const empty=list.querySelector('.empty');if(empty)empty.remove()
+    list.insertAdjacentHTML('beforeend',chatBubble(message,message.reply_to_id?byId.get(message.reply_to_id)||null:null));if(wasNearBottom)list.scrollTop=list.scrollHeight
   }).subscribe()
 }
 
 async function setWellbeing(){if(!memberId)return;const {error}=await supabase.from('wellbeing_status').upsert({member_id:memberId,is_ok:true,updated_at:new Date().toISOString()});sheet(error?'No se pudo actualizar':'Estoy bien ❤️',error?'El estado no pudo guardarse todavía.':'La familia puede ver que estás bien.')}
 async function sendHelp(){if(!memberId)return;const {error}=await supabase.from('help_alerts').insert({member_id:memberId,message:`${memberName} necesita ayuda.`});sheet(error?'No se pudo enviar':'Ayuda enviada',error?'Inténtalo de nuevo en un momento.':'La familia recibirá tu alerta.')}
 
-async function renderPhotos(){
-  app.innerHTML='<main class="page photo-page" data-photo-page><div class="loading">Cargando álbumes…</div></main>'
-}
+async function renderPhotos(){app.innerHTML='<main class="page photo-page" data-photo-page><div class="loading">Cargando álbumes…</div></main>'}
 
 async function renderLocation(){const current=members.find(m=>m.id===memberId);const mandatory=!!current?.must_share_location;app.innerHTML=`<main class="page"><header class="pagehead"><button id="back">‹</button><div><p class="eyebrow">FAMILIA NOA</p><h1>Ubicación</h1></div></header><section class="locationbox"><div class="pin">⌖</div><h2>Compartir ubicación</h2><p id="locationtext">${mandatory?'La ubicación es necesaria para este perfil.':'Comparte tu ubicación con la familia cuando quieras.'}</p><button class="primary" id="sharelocation">${mandatory?'Activar ubicación':'Actualizar ubicación'}</button></section><section class="family-locations" id="familylocations"><div class="loading">Cargando…</div></section></main>`;document.querySelector('#back')!.addEventListener('click',renderHome);document.querySelector('#sharelocation')!.addEventListener('click',shareLocation);await loadLocations()}
 async function shareLocation(){const text=document.querySelector('#locationtext')!;if(!navigator.geolocation){text.textContent='Este dispositivo no permite ubicación.';return}text.textContent='Obteniendo ubicación…';navigator.geolocation.getCurrentPosition(async p=>{if(memberId)await supabase.from('locations').upsert({member_id:memberId,latitude:p.coords.latitude,longitude:p.coords.longitude,accuracy:p.coords.accuracy,updated_at:new Date().toISOString()});text.textContent=`Ubicación actualizada · precisión aproximada ${Math.round(p.coords.accuracy)} m.`;await loadLocations()},()=>{text.textContent='Necesitamos permiso para acceder a tu ubicación.'},{enableHighAccuracy:true,timeout:15000})}
