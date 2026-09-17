@@ -1,19 +1,19 @@
 import './styles.css'
 import { supabase } from './supabase'
+import { clearIdentity, getIdentity, setIdentity } from './core/identity'
 
 type Member = { id: string; name: string; active: boolean; must_share_location: boolean }
 type Photo = { id: string; uploader_id: string; storage_path: string; caption: string | null; created_at: string; mime_type?: string | null; file_size?: number | null; width?: number | null; height?: number | null; uploader?: { name: string } | null }
 
 const FALLBACK = ['Mamá', 'Papá', 'Romel', 'Osniel', 'Abner']
-const KEY = 'familia-noa-member'
-const PROFILE_KEY = 'familia-noa-profile'
 const PHOTO_BUCKET = 'family-photos'
 const MAX_PHOTOS_PER_MEMBER = 10
 const MAX_IMAGE_BYTES = 15 * 1024 * 1024
 const MAX_IMAGE_DIMENSION = 1600
 let members: Member[] = []
-let memberName = localStorage.getItem(KEY) || ''
-let memberId = ''
+const initialIdentity = getIdentity()
+let memberName = initialIdentity?.name || ''
+let memberId = initialIdentity?.memberId || ''
 let channel: ReturnType<typeof supabase.channel> | null = null
 let settingsChannel: ReturnType<typeof supabase.channel> | null = null
 let familySyncChannel: ReturnType<typeof supabase.channel> | null = null
@@ -21,7 +21,7 @@ let replyTo: { id:string; name:string; body:string } | null = null
 const app = document.querySelector<HTMLDivElement>('#app')!
 document.title = 'FAMILIA NOA'
 
-const esc = (v: string) => v.replace(/[&<>\"']/g, c => ({'&':'&amp;','<':'&lt;','>':'&gt;','\"':'&quot;',"'":'&#039;'}[c]!))
+const esc = (v: string) => v.replace(/[&<>\\"']/g, c => ({'&':'&amp;','<':'&lt;','>':'&gt;','\\"':'&quot;',"'":'&#039;'}[c]!))
 const time = (v: string) => new Date(v).toLocaleTimeString('es-MX', {hour:'2-digit', minute:'2-digit'})
 const mb = (bytes:number) => `${(bytes / 1048576).toFixed(bytes >= 1048576 ? 1 : 2)} MB`
 
@@ -50,10 +50,9 @@ function securityStep(name: string) {
     const {data,error:rpcError}=await supabase.rpc('login_by_family_credentials',{p_member_id:selected.id,p_house_number:house,p_nickname:nickname})
     if(rpcError||!data?.length){error.textContent='Datos incorrectos. Comprueba el número de la casa y tu apodo.';return}
     const profile=data[0] as {id:string;name:string}
+    setIdentity({memberId:profile.id,name:profile.name})
     memberName=profile.name
     memberId=profile.id
-    localStorage.setItem(KEY,memberName)
-    sessionStorage.setItem(PROFILE_KEY,JSON.stringify(profile))
     renderHome(); startSettingsRealtime(); startFamilyRealtime()
   })
 }
@@ -72,12 +71,12 @@ function applySettings(s:any){
 }
 async function loadSettings(){const {data}=await supabase.from('app_settings').select('settings').eq('id','global').maybeSingle();if(data?.settings)applySettings(data.settings)}
 function startSettingsRealtime(){settingsChannel?.unsubscribe();settingsChannel=supabase.channel('familia-noa-settings').on('postgres_changes',{event:'UPDATE',schema:'public',table:'app_settings',filter:'id=eq.global'},payload=>applySettings((payload.new as any).settings)).subscribe()}
-function startFamilyRealtime(){familySyncChannel?.unsubscribe();familySyncChannel=supabase.channel('familia-noa-family-sync').on('postgres_changes',{event:'*',schema:'public',table:'family_members'},async()=>{await loadMembers();const current=members.find(m=>m.id===memberId);if(!current){localStorage.removeItem(KEY);sessionStorage.removeItem(PROFILE_KEY);memberName='';memberId='';login('Este perfil ya no está activo.')}}).on('postgres_changes',{event:'*',schema:'public',table:'photos'},()=>{if(document.querySelector('[data-photo-page]'))renderPhotos()}).on('postgres_changes',{event:'*',schema:'public',table:'locations'},()=>{if(document.querySelector('.family-locations'))loadLocations()}).on('postgres_changes',{event:'*',schema:'public',table:'wellbeing_status'},()=>{}).on('postgres_changes',{event:'*',schema:'public',table:'help_alerts'},()=>{}).subscribe()}
+function startFamilyRealtime(){familySyncChannel?.unsubscribe();familySyncChannel=supabase.channel('familia-noa-family-sync').on('postgres_changes',{event:'*',schema:'public',table:'family_members'},async()=>{await loadMembers();const current=members.find(m=>m.id===memberId);if(!current){clearIdentity();memberName='';memberId='';login('Este perfil ya no está activo.')}}).on('postgres_changes',{event:'*',schema:'public',table:'photos'},()=>{if(document.querySelector('[data-photo-page]'))renderPhotos()}).on('postgres_changes',{event:'*',schema:'public',table:'locations'},()=>{if(document.querySelector('.family-locations'))loadLocations()}).on('postgres_changes',{event:'*',schema:'public',table:'wellbeing_status'},()=>{}).on('postgres_changes',{event:'*',schema:'public',table:'help_alerts'},()=>{}).subscribe()}
 
 function renderHome(){
   app.innerHTML=`<main class="shell"><header class="top"><div><p class="eyebrow">FAMILIA NOA</p><h1>Hola, ${esc(memberName)} <span>♡</span></h1></div><button class="avatar" id="change">${esc(memberName.charAt(0))}</button></header><section class="hero"><p class="eyebrow">TODOS CERCA</p><h2>¿Cómo está la familia hoy?</h2><p>Habla, comparte y revisa que todos estén bien.</p></section><section class="grid"><button class="card dark" id="chat"><i>✦</i><b>Chat</b><small>Habla con todos</small></button><button class="card photo" id="photos"><i>◌</i><b>Fotos</b><small>Momentos de familia</small></button><button class="card" id="location"><i>⌖</i><b>Ubicación</b><small>Ver dónde estamos</small></button><button class="card ok" id="ok"><i>♥</i><b>Estoy bien</b><small>Avísale a la familia</small></button><button class="card help" id="help"><i>!</i><b>Ayuda</b><small>Necesito a mi familia</small></button></section><nav><button class="active">Inicio</button><button id="navchat">Chat</button><button id="navphotos">Fotos</button><button id="navlocation">Ubicación</button></nav></main>`
   applySettings({})
-  document.querySelector('#change')!.addEventListener('click',()=>{localStorage.removeItem(KEY);sessionStorage.removeItem(PROFILE_KEY);memberName='';memberId='';familySyncChannel?.unsubscribe();settingsChannel?.unsubscribe();login()})
+  document.querySelector('#change')!.addEventListener('click',()=>{clearIdentity();memberName='';memberId='';familySyncChannel?.unsubscribe();settingsChannel?.unsubscribe();login()})
   document.querySelector('#chat')!.addEventListener('click',renderChat);document.querySelector('#navchat')!.addEventListener('click',renderChat);document.querySelector('#photos')!.addEventListener('click',renderPhotos);document.querySelector('#navphotos')!.addEventListener('click',renderPhotos);document.querySelector('#location')!.addEventListener('click',renderLocation);document.querySelector('#navlocation')!.addEventListener('click',renderLocation);document.querySelector('#ok')!.addEventListener('click',setWellbeing);document.querySelector('#help')!.addEventListener('click',sendHelp);loadSettings()
 }
 
@@ -172,8 +171,11 @@ function sheet(title:string,text:string){const el=document.createElement('div');
 
 async function boot(){
   await loadMembers()
-  const stored=sessionStorage.getItem(PROFILE_KEY)
-  if(stored){try{const profile=JSON.parse(stored) as {id:string;name:string};if(members.some(m=>m.id===profile.id)){memberId=profile.id;memberName=profile.name;renderHome();startSettingsRealtime();startFamilyRealtime();return}}catch{sessionStorage.removeItem(PROFILE_KEY)}}
+  const identity=getIdentity()
+  if(identity&&members.some(m=>m.id===identity.memberId)){
+    memberId=identity.memberId;memberName=identity.name;renderHome();startSettingsRealtime();startFamilyRealtime();return
+  }
+  if(identity)clearIdentity()
   memberName='';memberId='';login()
 }
 boot()
