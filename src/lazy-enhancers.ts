@@ -5,7 +5,8 @@ let albumsLoaded = false
 const loadBiometric = async () => {
   if (biometricLoaded || !document.querySelector('.members')) return
   biometricLoaded = true
-  await import('./biometric-enhancer')
+  const module = await import('./biometric-enhancer')
+  module.initBiometricEnhancer()
 }
 
 const loadProfile = async () => {
