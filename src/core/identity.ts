@@ -13,7 +13,7 @@ function readProfile(): FamilyIdentity | null {
   try {
     const raw = sessionStorage.getItem(PROFILE_KEY)
     if (!raw) return null
-    const value = JSON.parse(raw) as Partial<FamilyIdentity>
+    const value = JSON.parse(raw) as Partial<FamilyIdentity> & { id?: string }
     if (!value?.id && !value?.memberId) return null
     if (!value.name) return null
     return {
@@ -43,7 +43,7 @@ export function isAuthenticated(): boolean {
 
 export function setIdentity(identity: FamilyIdentity): void {
   localStorage.setItem(MEMBER_KEY, identity.name)
-  sessionStorage.setItem(PROFILE_KEY, JSON.stringify({ id: identity.memberId, name: identity.name }))
+  sessionStorage.setItem(PROFILE_KEY, JSON.stringify({ id: identity.memberId, memberId: identity.memberId, name: identity.name }))
   window.dispatchEvent(new CustomEvent<FamilyIdentity>(IDENTITY_EVENT, { detail: identity }))
 }
 
