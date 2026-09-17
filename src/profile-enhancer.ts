@@ -1,6 +1,6 @@
 import { supabase } from './supabase'
+import { getIdentity } from './core/identity'
 
-const PROFILE_KEY='familia-noa-profile'
 const BUCKET='family-photos'
 let profileRealtime: ReturnType<typeof supabase.channel> | null = null
 const css=`
@@ -11,7 +11,7 @@ const css=`
 `
 
 function inject(){if(document.querySelector('#profile-css'))return;const s=document.createElement('style');s.id='profile-css';s.textContent=css;document.head.appendChild(s)}
-function current(){try{const raw=sessionStorage.getItem(PROFILE_KEY);return raw?JSON.parse(raw):null}catch{return null}}
+function current(){return getIdentity()}
 function esc(v:string){return v.replace(/[&<>\\\"']/g,c=>({'&':'&amp;','<':'&lt;','>':'&gt;','\\\"':'&quot;',"'":'&#039;'}[c]!))}
 function avatarUrl(path:string|null){return path?supabase.storage.from(BUCKET).getPublicUrl(path).data.publicUrl:''}
 async function getProfile(id:string){if(!id)return null;const {data}=await supabase.from('family_profiles').select('member_id,avatar_path,bio,theme,updated_at,cover_path').eq('member_id',id).maybeSingle();return data||{member_id:id,avatar_path:null,bio:'',theme:'light',cover_path:null}}
@@ -24,7 +24,7 @@ async function uploadCover(p:any,file:File){if(!file.type.startsWith('image/'))t
 
 function updateHomeAvatar(path:string|null){const button=document.querySelector<HTMLButtonElement>('#change');if(!button)return;const url=avatarUrl(path);button.innerHTML=url?`<img src="${url}" alt="Foto de perfil">`:esc(current()?.name?.charAt(0)||'F')}
 
-async function openSettings(){const p=current();if(!p||document.querySelector('.profile-menu'))return;const prof=await getProfile(p.id);if(document.querySelector('.profile-menu'))return;const photo=avatarUrl(prof?.avatar_path||null);const overlay=document.createElement('div');overlay.className='profile-menu';overlay.innerHTML=`<aside class="profile-drawer"><button class="profile-close" type="button" aria-label="Cerrar">×</button><div class="profile-head"><img class="profile-avatar" id="myAvatar" src="${photo}" alt="${esc(p.name)}" style="${photo?'':'display:none'}"><div class="profile-avatar-fallback" id="avatarFallback" style="${photo?'display:none':''}">${esc(p.name.charAt(0))}</div><div class="profile-name">${esc(p.name)}</div><p class="profile-bio" id="bioPreview">${esc(prof?.bio||'')}</p></div><div class="profile-field"><label>Foto de perfil</label><input id="avatarFile" type="file" accept="image/*"></div><div class="profile-field"><label>Tu frase / biografía</label><textarea id="bio" maxlength="280" placeholder="Escribe algo que quieras compartir con la familia…">${esc(prof?.bio||'')}</textarea></div><div class="profile-field"><label>Experiencia</label><div class="theme-row"><button type="button" class="profile-button secondary ${prof?.theme==='light'?'active':''}" id="lightTheme">☀️ Claro</button><button type="button" class="profile-button secondary ${prof?.theme==='dark'?'active':''}" id="darkTheme">🌙 Oscuro</button></div></div><div class="profile-actions"><button type="button" class="profile-button" id="saveProfile">Guardar perfil</button></div><div class="profiles-section"><h3>Perfiles</h3><div class="profile-list" id="profileList"></div></div></aside>`;document.body.appendChild(overlay)
+async function openSettings(){const p=current();if(!p||document.querySelector('.profile-menu'))return;const prof=await getProfile(p.memberId);if(document.querySelector('.profile-menu'))return;const photo=avatarUrl(prof?.avatar_path||null);const overlay=document.createElement('div');overlay.className='profile-menu';overlay.innerHTML=`<aside class="profile-drawer"><button class="profile-close" type="button" aria-label="Cerrar">×</button><div class="profile-head"><img class="profile-avatar" id="myAvatar" src="${photo}" alt="${esc(p.name)}" style="${photo?'':'display:none'}"><div class="profile-avatar-fallback" id="avatarFallback" style="${photo?'display:none':''}">${esc(p.name.charAt(0))}</div><div class="profile-name">${esc(p.name)}</div><p class="profile-bio" id="bioPreview">${esc(prof?.bio||'')}</p></div><div class="profile-field"><label>Foto de perfil</label><input id="avatarFile" type="file" accept="image/*"></div><div class="profile-field"><label>Tu frase / biografía</label><textarea id="bio" maxlength="280" placeholder="Escribe algo que quieras compartir con la familia…">${esc(prof?.bio||'')}</textarea></div><div class="profile-field"><label>Experiencia</label><div class="theme-row"><button type="button" class="profile-button secondary ${prof?.theme==='light'?'active':''}" id="lightTheme">☀️ Claro</button><button type="button" class="profile-button secondary ${prof?.theme==='dark'?'active':''}" id="darkTheme">🌙 Oscuro</button></div></div><div class="profile-actions"><button type="button" class="profile-button" id="saveProfile">Guardar perfil</button></div><div class="profiles-section"><h3>Perfiles</h3><div class="profile-list" id="profileList"></div></div></aside>`;document.body.appendChild(overlay)
   overlay.querySelector('.profile-close')!.addEventListener('click',()=>overlay.remove())
   overlay.addEventListener('click',e=>{if(e.target===overlay)overlay.remove()})
   let theme=prof?.theme==='dark'?'dark':'light'
@@ -39,34 +39,11 @@ async function renderProfileList(el:Element){const {data,error}=await supabase.f
 
 async function openProfile(id:string,name:string){if(document.querySelector('.profile-detail'))return;const prof=await getProfile(id);const {data:photos}=await supabase.from('photos').select('storage_path,created_at').eq('uploader_id',id).order('created_at',{ascending:false}).limit(60);const count=photos?.length||0;const detail=document.createElement('div');detail.className='profile-detail';const cover=avatarUrl(prof?.cover_path||null);const photo=avatarUrl(prof?.avatar_path||null);detail.innerHTML=`${cover?`<img class="profile-detail-cover" src="${cover}" alt="">`:''}<div class="profile-detail-head"><button class="profile-back" type="button" aria-label="Volver">‹</button><div><div class="eyebrow">PERFIL</div><b>${esc(name)}</b></div></div><div class="profile-head"><img class="profile-avatar" src="${photo}" alt="${esc(name)}" style="${photo?'':'display:none'}"><div class="profile-avatar-fallback" style="${photo?'display:none':''}">${esc(name.charAt(0))}</div><div class="profile-name">${esc(name)}</div><p class="profile-bio">${esc(prof?.bio||'Esta persona todavía no ha escrito su frase.')}</p></div><div class="profile-stats"><div class="profile-stat"><b>${count}</b><span>Fotos compartidas</span></div><div class="profile-stat"><b>${prof?.theme==='dark'?'🌙':'☀️'}</b><span>Experiencia elegida</span></div></div><div class="profile-gallery">${(photos||[]).map(x=>`<img src="${avatarUrl(x.storage_path)}" alt="Foto de ${esc(name)}" loading="lazy">`).join('')||'<p>Aún no ha compartido fotos.</p>'}</div>`;document.body.appendChild(detail);detail.querySelector('.profile-back')!.addEventListener('click',()=>detail.remove())}
 
-function startProfileRealtime(){
-  profileRealtime?.unsubscribe()
-  profileRealtime=supabase.channel('familia-noa-profile-sync').on('postgres_changes',{event:'*',schema:'public',table:'family_profiles'},async payload=>{
-    const changed=(payload.new as any)?.member_id || (payload.old as any)?.member_id
-    const me=current()
-    if(!changed||!me)return
-    if(changed===me.id){
-      const profile=payload.eventType==='DELETE'?null:await getProfile(me.id)
-      if(profile){
-        updateHomeAvatar(profile.avatar_path||null)
-        applyTheme(profile.theme||'light')
-        const menu=document.querySelector('.profile-menu')
-        if(menu){
-          const bio=menu.querySelector('#bioPreview');if(bio)bio.textContent=profile.bio||''
-          const img=menu.querySelector<HTMLImageElement>('#myAvatar');const fallback=menu.querySelector<HTMLElement>('#avatarFallback');const url=avatarUrl(profile.avatar_path||null)
-          if(img&&fallback){img.src=url;img.style.display=url?'block':'none';fallback.style.display=url?'none':'flex'}
-        }
-      }
-    }
-    const list=document.querySelector('#profileList')
-    if(list)await renderProfileList(list)
-  }).subscribe()
-}
-
-async function init(){inject();const p=current();if(!p)return;startProfileRealtime();const button=document.querySelector<HTMLElement>('#change');if(!button)return;const profile=await getProfile(p.id);updateHomeAvatar(profile?.avatar_path||null);applyTheme(profile?.theme||localStorage.getItem('familia-noa-theme')||'light')}
-
-// This is the only owner of the logged-in profile button. Capture phase prevents
-// the legacy #change listener in main.ts from clearing the session before we open the profile.
-document.addEventListener('click',event=>{const target=event.target as Element|null;if(!target?.closest('#change'))return;const loggedIn=!!localStorage.getItem('familia-noa-member')&&!!sessionStorage.getItem(PROFILE_KEY);if(!loggedIn)return;event.preventDefault();event.stopImmediatePropagation();void openSettings()},true)
-
-init()
+inject()
+document.addEventListener('click',event=>{
+  const target=event.target as Element|null
+  if(!target?.closest('#change'))return
+  event.preventDefault()
+  event.stopImmediatePropagation()
+  void openSettings()
+},true)
