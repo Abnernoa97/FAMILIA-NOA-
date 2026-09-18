@@ -3,18 +3,6 @@ import { getIdentity } from './core/identity'
 
 type PresenceState = Record<string, Array<{ memberId?: string; name?: string; onlineAt?: string }>>
 
-type MessageRow = {
-  id: string
-  sender_id: string
-  body: string
-  created_at: string
-  edited_at?: string | null
-  deleted_at?: string | null
-  attachment_path?: string | null
-  attachment_type?: string | null
-  attachment_name?: string | null
-}
-
 let homeObserver: MutationObserver | null = null
 let chatInitialized = false
 let chatChannel: ReturnType<typeof supabase.channel> | null = null
@@ -150,36 +138,6 @@ async function renderReactions(messageId: string) {
   if (!existing) bubble.appendChild(row)
 }
 
-function setEditedState(bubble: HTMLElement, edited: boolean) {
-  const small = bubble.querySelector('small')
-  if (!small) return
-  small.querySelector('.chat-edited-state')?.remove()
-  if (edited) small.insertAdjacentHTML('beforeend', '<span class="chat-edited-state">editado</span>')
-}
-
-function applyMessageUpdate(row: MessageRow) {
-  const bubble = document.querySelector<HTMLElement>(`[data-message-id="${row.id}"]`)
-  if (!bubble) return
-  const p = bubble.querySelector<HTMLParagraphElement>('p')
-  if (p) p.textContent = row.deleted_at ? 'Mensaje eliminado' : row.body
-  setEditedState(bubble, !!row.edited_at && !row.deleted_at)
-  const tools = bubble.querySelector<HTMLElement>('.chat-tools')
-  if (row.deleted_at) {
-    bubble.querySelector('.chat-attachment')?.remove()
-    bubble.querySelector('.chat-reaction-row')?.remove()
-    tools?.remove()
-  }
-}
-
-async function refreshMessage(messageId: string) {
-  const { data, error } = await supabase.from('messages').select('id,sender_id,body,created_at,edited_at,deleted_at,attachment_path,attachment_type,attachment_name').eq('id', messageId).maybeSingle()
-  if (error || !data) return
-  applyMessageUpdate(data as MessageRow)
-  if (data.deleted_at) return
-  await loadAttachments([messageId])
-  await renderReadReceipts()
-}
-
 async function enhanceBubble(bubble: HTMLElement) {
   if (bubble.dataset.chatEnhanced === '1') return
   bubble.dataset.chatEnhanced = '1'
@@ -290,48 +248,6 @@ function installComposer() {
   })
 }
 
-async function loadAttachments(messageIds?: string[]) {
-  const list = document.querySelector<HTMLElement>('#messages')
-  if (!list) return
-  const ids = messageIds?.length
-    ? messageIds
-    : Array.from(list.querySelectorAll<HTMLElement>('.bubble[data-message-id]')).map(x => x.dataset.messageId).filter(Boolean) as string[]
-  if (!ids.length) return
-  const { data } = await supabase.from('messages').select('id,attachment_path,attachment_type,attachment_name,deleted_at').in('id', ids)
-  for (const m of data || []) {
-    const bubble = list.querySelector<HTMLElement>(`[data-message-id="${m.id}"]`)
-    if (!bubble || !m.attachment_path || m.deleted_at) continue
-    if (bubble.querySelector('.chat-attachment')) continue
-
-    const { data: publicData } = supabase.storage.from('family-photos').getPublicUrl(m.attachment_path)
-    const publicUrl = publicData?.publicUrl
-    if (!publicUrl) continue
-
-    const link = document.createElement('a')
-    link.className = 'chat-attachment'
-    link.href = publicUrl
-    link.target = '_blank'
-    link.rel = 'noreferrer'
-
-    if ((m.attachment_type || '').startsWith('image/')) {
-      const image = document.createElement('img')
-      image.src = publicUrl
-      image.alt = m.attachment_name || 'Foto'
-      image.loading = 'lazy'
-      link.appendChild(image)
-      const label = document.createElement('span')
-      label.textContent = m.attachment_name || 'Foto'
-      link.appendChild(label)
-    } else {
-      const label = document.createElement('span')
-      label.textContent = `📎 ${m.attachment_name || 'Archivo'}`
-      link.appendChild(label)
-    }
-
-    bubble.querySelector('p')?.after(link)
-  }
-}
-
 function updatePresence() {
   const state = presenceChannel?.presenceState() as PresenceState
   const people = Object.values(state || {}).flat().filter(x => x.memberId !== currentMemberId())
@@ -372,11 +288,21 @@ function initChat() {
   installComposer()
   const enhanceAll = () => list.querySelectorAll<HTMLElement>('.bubble').forEach(b => void enhanceBubble(b))
   enhanceAll()
-  void loadAttachments()
-  void markRead()
+    void markRead()
   void renderReadReceipts()
 
   let lastAtBottom = true
+  const chatMessageHandler = (event: Event) => {
+    const detail = (event as CustomEvent).detail as { type?: string; id?: string; sender_id?: string } | undefined
+    if (!detail) return
+    if (detail.type === 'insert' && detail.sender_id !== currentMemberId() && !lastAtBottom) {
+      indicator.hidden = false
+      indicator.textContent = 'Nuevos mensajes ↓'
+    }
+    scheduleUnreadRefresh()
+    void renderReadReceipts()
+  }
+  window.addEventListener('familia-noa:chat-message', chatMessageHandler)
   list.addEventListener('scroll', () => {
     lastAtBottom = list.scrollHeight - list.scrollTop - list.clientHeight < 100
     if (lastAtBottom) {
@@ -392,25 +318,7 @@ function initChat() {
   })
 
   chatChannel = supabase.channel('familia-noa-chat-features')
-    .on('postgres_changes', { event: 'INSERT', schema: 'public', table: 'messages' }, payload => {
-      const row = payload.new as any
-      if (row?.sender_id !== currentMemberId() && !lastAtBottom) {
-        indicator.hidden = false
-        indicator.textContent = 'Nuevos mensajes ↓'
-      }
-      scheduleUnreadRefresh()
-      window.setTimeout(() => {
-        enhanceAll()
-        void loadAttachments(row?.id ? [row.id] : undefined)
-        void renderReadReceipts()
-      }, 150)
-    })
-    .on('postgres_changes', { event: 'UPDATE', schema: 'public', table: 'messages' }, payload => {
-      const id = (payload.new as any)?.id || (payload.old as any)?.id
-      if (id) void refreshMessage(id)
-      scheduleUnreadRefresh()
-    })
-    .on('postgres_changes', { event: '*', schema: 'public', table: 'chat_reactions' }, payload => {
+        .on('postgres_changes', { event: '*', schema: 'public', table: 'chat_reactions' }, payload => {
       const id = (payload.new as any)?.message_id || (payload.old as any)?.message_id
       if (id) void renderReactions(id)
     })
