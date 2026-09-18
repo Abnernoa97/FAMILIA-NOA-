@@ -242,7 +242,7 @@ async function renderChat(){
     const empty=list.querySelector('.empty');if(empty)empty.remove()
     list.insertAdjacentHTML('beforeend',chatBubble(message,message.reply_to_id?byId.get(message.reply_to_id)||null:null))
     if(wasNearBottom)list.scrollTop=list.scrollHeight
-    window.dispatchEvent(new CustomEvent('familia-noa:chat-message',{detail:{type:'insert',id:message.id}}))
+    window.dispatchEvent(new CustomEvent('familia-noa:chat-message',{detail:{type:'insert',id:message.id,sender_id:message.sender_id}}))
   }).on('postgres_changes',{event:'UPDATE',schema:'public',table:'messages'},payload=>{
     if(viewToken!==chatViewToken)return
     const row=payload.new as RawChatRow
