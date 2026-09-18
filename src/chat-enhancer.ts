@@ -10,6 +10,7 @@ let presenceChannel: ReturnType<typeof supabase.channel> | null = null
 let chatListObserver: MutationObserver | null = null
 let typingStopTimer: number | null = null
 let unreadRefreshTimer: number | null = null
+let chatMessageHandler: ((event: Event) => void) | null = null
 
 const identity = () => getIdentity()
 const esc = (v: string) => v.replace(/[&<>\\"']/g, c => ({ '&':'&amp;', '<':'&lt;', '>':'&gt;', '\\"':'&quot;', "'":'&#039;' }[c]!))
@@ -292,7 +293,7 @@ function initChat() {
   void renderReadReceipts()
 
   let lastAtBottom = true
-  const chatMessageHandler = (event: Event) => {
+  chatMessageHandler = (event: Event) => {
     const detail = (event as CustomEvent).detail as { type?: string; id?: string; sender_id?: string } | undefined
     if (!detail) return
     if (detail.type === 'insert' && detail.sender_id !== currentMemberId() && !lastAtBottom) {
@@ -347,6 +348,10 @@ function initChat() {
 }
 
 function teardownChat() {
+  if (chatMessageHandler) {
+    window.removeEventListener('familia-noa:chat-message', chatMessageHandler)
+    chatMessageHandler = null
+  }
   chatInitialized = false
   chatListObserver?.disconnect()
   chatListObserver = null
