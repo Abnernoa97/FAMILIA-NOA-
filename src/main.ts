@@ -242,6 +242,7 @@ async function renderChat(){
     const empty=list.querySelector('.empty');if(empty)empty.remove()
     list.insertAdjacentHTML('beforeend',chatBubble(message,message.reply_to_id?byId.get(message.reply_to_id)||null:null))
     if(wasNearBottom)list.scrollTop=list.scrollHeight
+    window.dispatchEvent(new CustomEvent('familia-noa:chat-message',{detail:{type:'insert',id:message.id}}))
   }).on('postgres_changes',{event:'UPDATE',schema:'public',table:'messages'},payload=>{
     if(viewToken!==chatViewToken)return
     const row=payload.new as RawChatRow
@@ -253,6 +254,7 @@ async function renderChat(){
     all[index]=message
     byId.set(message.id,message)
     renderAll()
+    window.dispatchEvent(new CustomEvent('familia-noa:chat-message',{detail:{type:'update',id:message.id}}))
   }).subscribe()
 }
 async function setWellbeing(){if(!memberId)return;const {error}=await supabase.from('wellbeing_status').upsert({member_id:memberId,is_ok:true,updated_at:new Date().toISOString()});sheet(error?'No se pudo actualizar':'Estoy bien ❤️',error?'El estado no pudo guardarse todavía.':'La familia puede ver que estás bien.')}
