@@ -10,6 +10,12 @@ type ChatMessage = {
   body: string
   created_at: string
   reply_to_id: string | null
+  edited_at: string | null
+  deleted_at: string | null
+  attachment_path: string | null
+  attachment_type: string | null
+  attachment_name: string | null
+  attachment_size: number | null
   sender?: { name?: string } | null
 }
 
@@ -119,11 +125,17 @@ function renderHome(){
   app.innerHTML=`<main class="shell"><header class="top"><div><p class="eyebrow">FAMILIA NOA</p><h1>Hola, ${esc(memberName)} <span>♡</span></h1></div><button class="avatar" id="change">${esc(memberName.charAt(0))}</button></header><section class="hero"><p class="eyebrow">TODOS CERCA</p><h2>¿Cómo está la familia hoy?</h2><p>Habla, comparte y revisa que todos estén bien.</p></section><section class="grid"><button class="card dark" id="chat"><i>✦</i><b>Chat</b><small>Habla con todos</small></button><button class="card photo" id="photos"><i>◌</i><b>Fotos</b><small>Momentos de familia</small></button><button class="card" id="location"><i>⌖</i><b>Ubicación</b><small>Ver dónde estamos</small></button><button class="card ok" id="ok"><i>♥</i><b>Estoy bien</b><small>Avísale a la familia</small></button><button class="card help" id="help"><i>!</i><b>Ayuda</b><small>Necesito a mi familia</small></button></section><nav><button class="active">Inicio</button><button id="navchat">Chat</button><button id="navphotos">Fotos</button><button id="navlocation">Ubicación</button></nav></main>`
   if(settingsCache)applySettings(settingsCache)
   document.querySelector('#change')!.addEventListener('click',()=>{clearIdentity();memberName='';memberId='';familySyncChannel?.unsubscribe();settingsChannel?.unsubscribe();stopChatRealtime();login()})
-  document.querySelector('#chat')!.addEventListener('click',renderChat);document.querySelector('#navchat')!.addEventListener('click',renderChat);document.querySelector('#photos')!.addEventListener('click',renderPhotos);document.querySelector('#navphotos')!.addEventListener('click',renderPhotos);document.querySelector('#location')!.addEventListener('click',renderLocation);document.querySelector('#navlocation')!.addEventListener('click',renderLocation);document.querySelector('#ok')!.addEventListener('click',setWellbeing);document.querySelector('#help')!.addEventListener('click',sendHelp);void loadSettings()
-}
-
-function chatBubble(m: ChatMessage, quoted: ChatMessage | null = null): string {
-  return `<article class="bubble ${m.sender_id===memberId?'mine':''}" data-message-id="${esc(m.id)}"><div class="swipe-hint" aria-hidden="true">↩</div>${quoted?`<button class="quoted" data-jump="${esc(quoted.id)}"><b>${esc(quoted.sender?.name||'Familia')}</b><span>${esc(quoted.body)}</span></button>`:''}<b class="sender-name">${esc(m.sender?.name||'Familia')}</b><p>${esc(m.body)}</p><small>${time(m.created_at)}</small></article>`
+  document.querySelector('#chat')!.addEventListener('click',renderChat);document.querySelector('#navchat')!.addEventListener('click',renderChat);document.querySelector('#photos')!.addEventListener('click',renderPhotos);document.querySelector('#navphotos')!.addEventListener('click',renderPhotos);document.querySelector('#location')!.addEventListener('click',renderLocation);document.querySelector('#navlocation')!.addEventListenefunction chatBubble(m: ChatMessage, quoted: ChatMessage | null = null): string {
+  const deleted = !!m.deleted_at
+  const body = deleted ? 'Mensaje eliminado' : m.body
+  const attachmentUrl = m.attachment_path
+    ? supabase.storage.from('family-photos').getPublicUrl(m.attachment_path).data.publicUrl
+    : ''
+  const attachment = !deleted && m.attachment_path && attachmentUrl
+    ? `<a class="chat-attachment" href="${esc(attachmentUrl)}" target="_blank" rel="noreferrer">${(m.attachment_type || '').startsWith('image/') ? `<img src="${esc(attachmentUrl)}" alt="${esc(m.attachment_name || 'Foto')}" loading="lazy">` : ''}<span>📎 ${esc(m.attachment_name || 'Foto')}</span></a>`
+    : ''
+  return `<article class="bubble ${m.sender_id===memberId?'mine':''}" data-message-id="${esc(m.id)}"><div class="swipe-hint" aria-hidden="true">↩</div>${quoted?`<button class="quoted" data-jump="${esc(quoted.id)}"><b>${esc(quoted.sender?.name||'Familia')}</b><span>${esc(quoted.deleted_at ? 'Mensaje eliminado' : quoted.body)}</span></button>`:''}<b class="sender-name">${esc(m.sender?.name||'Familia')}</b><p>${esc(body)}</p>${attachment}<small>${time(m.created_at)}${m.edited_at ? ' · editado' : ''}</small></article>`
+}ilia')}</b><span>${esc(quoted.body)}</span></button>`:''}<b class="sender-name">${esc(m.sender?.name||'Familia')}</b><p>${esc(m.body)}</p><small>${time(m.created_at)}</small></article>`
 }
 
 async function renderChat(){
@@ -133,12 +145,42 @@ async function renderChat(){
   app.innerHTML=`<main class="page chat-page"><header class="pagehead"><button id="back">‹</button><div><p class="eyebrow">FAMILIA NOA</p><h1>Chat</h1></div></header><section class="messages" id="messages"><div class="loading">Cargando mensajes…</div></section><div id="replyPreview"></div><form class="composer" id="composer"><input id="message" maxlength="2000" placeholder="Escribe algo…" autocomplete="off"><button>Enviar</button></form><button class="back-to-top" id="chatTop" aria-label="Volver arriba">↑</button></main>`
   document.querySelector('#back')!.addEventListener('click',renderHome)
   const list=document.querySelector<HTMLElement>('#messages')!
-  const {data,error}=await supabase.from('messages').select('id,sender_id,body,created_at,reply_to_id,sender:family_members(name)').order('created_at',{ascending:false}).limit(100)
-  if(viewToken!==chatViewToken||!document.querySelector('#messages'))return
-  let all: ChatMessage[]=((data||[]) as ChatMessage[]).reverse()
-  const byId=new Map(all.map(m=>[m.id,m]))
-  list.innerHTML=all.map(m=>chatBubble(m,m.reply_to_id?byId.get(m.reply_to_id)||null:null)).join('')||'<div class="empty">Todavía no hay mensajes. Sé el primero ❤️</div>'
-  list.scrollTop=list.scrollHeight
+
+  type RawChatRow = Omit<ChatMessage,'sender'> & { sender?: { name?: string } | null }
+  const fetchMessages = async (before?: string) => {
+    let query = supabase
+      .from('messages')
+      .select('id,sender_id,body,created_at,reply_to_id,edited_at,deleted_at,attachment_path,attachment_type,attachment_name,attachment_size')
+      .order('created_at',{ascending:false})
+      .limit(100)
+    if(before) query = query.lt('created_at',before)
+    const {data,error} = await query
+    if(error) throw error
+    const rows = (data || []) as RawChatRow[]
+    const senderIds = [...new Set(rows.map(row=>row.sender_id).filter(Boolean))]
+    if(senderIds.length){
+      const {data:senderRows,error:senderError}=await supabase.from('family_members').select('id,name').in('id',senderIds)
+      if(senderError) throw senderError
+      const names=new Map((senderRows || []).map((row:any)=>[row.id,row.name]))
+      return rows.reverse().map(row=>({...row,sender:{name:names.get(row.sender_id)||'Familia'}})) as ChatMessage[]
+    }
+    return rows.reverse() as ChatMessage[]
+  }
+
+  let all: ChatMessage[]=[]
+  const byId=new Map<string,ChatMessage>()
+  const renderAll=()=>{ list.innerHTML=all.map(m=>chatBubble(m,m.reply_to_id?byId.get(m.reply_to_id)||null:null)).join('')||'<div class="empty">Todavía no hay mensajes. Sé el primero ❤️</div>' }
+
+  try{
+    all=await fetchMessages()
+    all.forEach(m=>byId.set(m.id,m))
+    if(viewToken!==chatViewToken)return
+    renderAll()
+    list.scrollTop=list.scrollHeight
+  }catch(error){
+    console.error('Chat history load failed',error)
+    list.innerHTML='<div class="empty">No se pudieron cargar los mensajes. Inténtalo de nuevo.</div>'
+  }
 
   let oldestCreatedAt=all[0]?.created_at||''
   let hasMore=all.length===100
@@ -148,15 +190,18 @@ async function renderChat(){
     loadingOlder=true
     const previousHeight=list.scrollHeight
     const previousTop=list.scrollTop
-    const {data:olderData,error:olderError}=await supabase.from('messages').select('id,sender_id,body,created_at,reply_to_id,sender:family_members(name)').lt('created_at',oldestCreatedAt).order('created_at',{ascending:false}).limit(100)
-    if(viewToken!==chatViewToken){loadingOlder=false;return}
-    const older=((olderData||[]) as ChatMessage[]).reverse()
-    if(olderError||!older.length){hasMore=false;loadingOlder=false;return}
-    older.forEach(m=>{all.unshift(m);byId.set(m.id,m)})
-    oldestCreatedAt=all[0]?.created_at||''
-    hasMore=older.length===100
-    list.innerHTML=all.map(m=>chatBubble(m,m.reply_to_id?byId.get(m.reply_to_id)||null:null)).join('')
-    list.scrollTop=list.scrollHeight-previousHeight+previousTop
+    try{
+      const older=await fetchMessages(oldestCreatedAt)
+      if(viewToken!==chatViewToken){loadingOlder=false;return}
+      if(!older.length){hasMore=false;loadingOlder=false;return}
+      older.forEach(m=>{all.unshift(m);byId.set(m.id,m)})
+      oldestCreatedAt=all[0]?.created_at||oldestCreatedAt
+      hasMore=older.length===100
+      renderAll()
+      list.scrollTop=list.scrollHeight-previousHeight+previousTop
+    }catch(error){
+      console.error('Older chat history load failed',error)
+    }
     loadingOlder=false
   }
   list.addEventListener('scroll',()=>{if(list.scrollTop<=80)void loadOlder()},{passive:true})
@@ -165,9 +210,9 @@ async function renderChat(){
   const input=document.querySelector<HTMLInputElement>('#message')!
   const updatePreview=()=>{
     preview.innerHTML=replyTo?`<div class="reply-preview"><div><b>Respondiendo a ${esc(replyTo.name)}</b><span>${esc(replyTo.body)}</span></div><button id="cancelReply" aria-label="Cancelar respuesta">×</button></div>`:''
-    if(replyTo){document.querySelector('#cancelReply')!.addEventListener('click',()=>{replyTo=null;updatePreview();input.focus()})}
+    if(replyTo)document.querySelector('#cancelReply')!.addEventListener('click',()=>{replyTo=null;updatePreview();input.focus()})
   }
-  const selectReply=(m: ChatMessage)=>{replyTo={id:m.id,name:m.sender?.name||'Familia',body:m.body};updatePreview();input.focus()}
+  const selectReply=(m: ChatMessage)=>{if(m.deleted_at)return;replyTo={id:m.id,name:m.sender?.name||'Familia',body:m.body};updatePreview();input.focus()}
   const getMessage=(id:string)=>byId.get(id)
 
   let swipeId='';let startX=0;let startY=0;let swiping=false
@@ -183,7 +228,7 @@ async function renderChat(){
   const seenIds=new Set(all.map(m=>m.id))
   channel=supabase.channel('familia-noa-chat').on('postgres_changes',{event:'INSERT',schema:'public',table:'messages'},async payload=>{
     if(viewToken!==chatViewToken)return
-    const row=payload.new as {id:string;sender_id:string;body:string;created_at:string;reply_to_id:string|null}
+    const row=payload.new as RawChatRow
     if(!row?.id||seenIds.has(row.id))return
     seenIds.add(row.id)
     let senderName=members.find(m=>m.id===row.sender_id)?.name||''
@@ -192,12 +237,24 @@ async function renderChat(){
     const wasNearBottom=list.scrollHeight-list.scrollTop-list.clientHeight<120
     const message:ChatMessage={...row,sender:{name:senderName}}
     byId.set(message.id,message);all.push(message)
-    if(all.length>100){all=all.slice(-100);oldestCreatedAt=all[0]?.created_at||oldestCreatedAt;hasMore=true}
+    if(all.length>100){all=all.slice(-100);byId.clear();all.forEach(m=>byId.set(m.id,m))}
+    oldestCreatedAt=all[0]?.created_at||oldestCreatedAt
     const empty=list.querySelector('.empty');if(empty)empty.remove()
-    list.insertAdjacentHTML('beforeend',chatBubble(message,message.reply_to_id?byId.get(message.reply_to_id)||null:null));if(wasNearBottom)list.scrollTop=list.scrollHeight
+    list.insertAdjacentHTML('beforeend',chatBubble(message,message.reply_to_id?byId.get(message.reply_to_id)||null:null))
+    if(wasNearBottom)list.scrollTop=list.scrollHeight
+  }).on('postgres_changes',{event:'UPDATE',schema:'public',table:'messages'},payload=>{
+    if(viewToken!==chatViewToken)return
+    const row=payload.new as RawChatRow
+    if(!row?.id)return
+    const index=all.findIndex(m=>m.id===row.id)
+    if(index<0)return
+    const current=all[index]
+    const message:ChatMessage={...current,...row,sender:current.sender}
+    all[index]=message
+    byId.set(message.id,message)
+    renderAll()
   }).subscribe()
 }
-
 async function setWellbeing(){if(!memberId)return;const {error}=await supabase.from('wellbeing_status').upsert({member_id:memberId,is_ok:true,updated_at:new Date().toISOString()});sheet(error?'No se pudo actualizar':'Estoy bien ❤️',error?'El estado no pudo guardarse todavía.':'La familia puede ver que estás bien.')}
 async function sendHelp(){if(!memberId)return;const {error}=await supabase.from('help_alerts').insert({member_id:memberId,message:`${memberName} necesita ayuda.`});sheet(error?'No se pudo enviar':'Ayuda enviada',error?'Inténtalo de nuevo en un momento.':'La familia recibirá tu alerta.')}
 
