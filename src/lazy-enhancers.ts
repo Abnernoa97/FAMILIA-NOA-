@@ -26,6 +26,7 @@ const loadChat = async () => {
   if (chatLoaded || !document.querySelector('.shell, .chat-page')) return
   chatLoaded = true
   await import('./chat-runtime')
+  await import('./chat-reply-thumbnail')
 }
 
 let observer: MutationObserver | null = null
