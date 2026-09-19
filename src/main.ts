@@ -149,7 +149,7 @@ function chatBubble(m: ChatMessage, quoted: ChatMessage | null = null): string {
 
 async function renderChat(){
   stopChatRealtime()
-  const viewToken=++chatViewToken
+  ++chatViewToken
   replyTo=null
   app.innerHTML=`<main class="page chat-page"><header class="pagehead"><button id="back">‹</button><div><p class="eyebrow">FAMILIA NOA</p><h1>Chat</h1></div></header><section class="messages" id="messages"><div class="loading">Cargando mensajes…</div></section><div id="replyPreview"></div><form class="composer" id="composer"><input id="message" maxlength="2000" placeholder="Escribe algo…" autocomplete="off"><button>Enviar</button></form><button class="back-to-top" id="chatTop" aria-label="Volver arriba">↑</button></main>`
   document.querySelector('#back')!.addEventListener('click',renderHome)
@@ -157,15 +157,11 @@ async function renderChat(){
 
   type RawChatRow = Omit<ChatMessage,'sender'> & { sender?: { name?: string } | null }
   const fetchMessages = async (before?: string) => {
-    let query = supabase
-      .from('messages')
-      .select('id,sender_id,body,created_at,reply_to_id,edited_at,deleted_at,attachment_path,attachment_type,attachment_name,attachment_size')
-      .order('created_at',{ascending:false})
-      .limit(100)
-    if(before) query = query.lt('created_at',before)
-    const {data,error} = await query
-    if(error) throw error
-    const rows = (data || []) as RawChatRow[]
+    const request=supabase.rpc('get_chat_messages',{p_before:before||null,p_limit:100})
+    const timeout=new Promise<never>((_,reject)=>window.setTimeout(()=>reject(new Error('Chat history timeout')),8000))
+    const {data,error}=await Promise.race([request,timeout]) as any
+    if(error)throw error
+    const rows=(data||[]) as RawChatRow[]
     const names=new Map(members.map(member=>[member.id,member.name]))
     return rows.reverse().map(row=>({...row,sender:{name:names.get(row.sender_id)||'Familia'}})) as ChatMessage[]
   }
@@ -177,7 +173,7 @@ async function renderChat(){
   try{
     all=await fetchMessages()
     all.forEach(m=>byId.set(m.id,m))
-    if(viewToken!==chatViewToken)return
+    if(!list.isConnected||!document.querySelector('.chat-page'))return
     renderAll()
     requestAnimationFrame(() => {
       list.scrollTop = list.scrollHeight
@@ -185,20 +181,22 @@ async function renderChat(){
     })
   }catch(error){
     console.error('Chat history load failed',error)
-    list.innerHTML='<div class="empty">No se pudieron cargar los mensajes. Inténtalo de nuevo.</div>'
+    if(!list.isConnected)return
+    list.innerHTML='<div class="empty">No se pudieron cargar los mensajes.<br><button id="retryChat" type="button">Reintentar</button></div>'
+    document.querySelector('#retryChat')?.addEventListener('click',()=>void renderChat())
   }
 
   let oldestCreatedAt=all[0]?.created_at||''
   let hasMore=all.length===100
   let loadingOlder=false
   const loadOlder=async()=>{
-    if(loadingOlder||!hasMore||!oldestCreatedAt||viewToken!==chatViewToken)return
+    if(loadingOlder||!hasMore||!oldestCreatedAt||!list.isConnected)return
     loadingOlder=true
     const previousHeight=list.scrollHeight
     const previousTop=list.scrollTop
     try{
       const older=await fetchMessages(oldestCreatedAt)
-      if(viewToken!==chatViewToken){loadingOlder=false;return}
+      if(!list.isConnected){loadingOlder=false;return}
       if(!older.length){hasMore=false;loadingOlder=false;return}
       older.forEach(m=>{all.unshift(m);byId.set(m.id,m)})
       oldestCreatedAt=all[0]?.created_at||oldestCreatedAt
@@ -233,13 +231,13 @@ async function renderChat(){
 
   const seenIds=new Set(all.map(m=>m.id))
   channel=supabase.channel('familia-noa-chat').on('postgres_changes',{event:'INSERT',schema:'public',table:'messages'},async payload=>{
-    if(viewToken!==chatViewToken)return
+    if(!list.isConnected)return
     const row=payload.new as RawChatRow
     if(!row?.id||seenIds.has(row.id))return
     seenIds.add(row.id)
     let senderName=members.find(m=>m.id===row.sender_id)?.name||''
     if(!senderName){const {data:sender}=await supabase.from('family_members').select('name').eq('id',row.sender_id).maybeSingle();senderName=sender?.name||'Familia'}
-    if(viewToken!==chatViewToken)return
+    if(!list.isConnected)return
     const wasNearBottom=list.scrollHeight-list.scrollTop-list.clientHeight<120
     const message:ChatMessage={...row,sender:{name:senderName}}
     byId.set(message.id,message);all.push(message)
@@ -250,7 +248,7 @@ async function renderChat(){
     if(wasNearBottom)list.scrollTop=list.scrollHeight
     window.dispatchEvent(new CustomEvent('familia-noa:chat-message',{detail:{type:'insert',id:message.id,sender_id:message.sender_id}}))
   }).on('postgres_changes',{event:'UPDATE',schema:'public',table:'messages'},payload=>{
-    if(viewToken!==chatViewToken)return
+    if(!list.isConnected)return
     const row=payload.new as RawChatRow
     if(!row?.id)return
     const index=all.findIndex(m=>m.id===row.id)
