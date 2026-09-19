@@ -1,0 +1,36 @@
+/* Chat viewport: keep the conversation itself as the scroll container. */
+.chat-page{
+  height:100svh;
+  min-height:100svh;
+  max-height:100svh;
+  padding-bottom:0;
+  overflow:hidden;
+}
+.chat-page .pagehead{
+  flex:0 0 auto;
+}
+.chat-page .messages{
+  flex:1 1 auto;
+  min-height:0;
+  overflow-y:auto;
+  overscroll-behavior:contain;
+  -webkit-overflow-scrolling:touch;
+}
+.chat-page #replyPreview{
+  flex:0 0 auto;
+}
+.chat-page .composer{
+  position:relative;
+  left:auto;
+  bottom:auto;
+  transform:none;
+  width:100%;
+  flex:0 0 auto;
+}
+.chat-page .chat-attachment img{
+  width:100%;
+  aspect-ratio:4/3;
+  max-height:320px;
+  object-fit:cover;
+  background:#e8e3da;
+}
