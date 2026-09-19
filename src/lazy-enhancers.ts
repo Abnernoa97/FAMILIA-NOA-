@@ -25,9 +25,7 @@ const loadAlbums = async () => {
 const loadChat = async () => {
   if (chatLoaded || !document.querySelector('.shell, .chat-page')) return
   chatLoaded = true
-  await import('./chat-enhancer')
-  await import('./chat-message-actions')
-  await import('./chat-live-polish')
+  await import('./chat-runtime')
 }
 
 let observer: MutationObserver | null = null
