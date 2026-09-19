@@ -17,8 +17,12 @@ window.addEventListener('popstate', () => {
   if (level === 2) { document.querySelector('.profile-detail')?.remove(); return }
   if (level === 1) { document.querySelector('.profile-detail')?.remove(); document.querySelector('.profile-menu')?.remove(); return }
 
-  if (history.state?.[CHAT_STATE]) {
-    document.querySelector<HTMLButtonElement>('.chat-page #back')?.click()
+  // After a native Back action the browser has already moved to the previous
+  // history entry, so CHAT_STATE may no longer be present. The DOM is the
+  // reliable source for deciding whether Chat itself still needs to close.
+  const chatBack = document.querySelector<HTMLButtonElement>('.chat-page #back')
+  if (chatBack) {
+    chatBack.click()
     return
   }
 
