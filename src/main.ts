@@ -185,7 +185,10 @@ async function renderChat(){
     all.forEach(m=>byId.set(m.id,m))
     if(viewToken!==chatViewToken)return
     renderAll()
-    list.scrollTop=list.scrollHeight
+    requestAnimationFrame(() => {
+      list.scrollTop = list.scrollHeight
+      requestAnimationFrame(() => { list.scrollTop = list.scrollHeight })
+    })
   }catch(error){
     console.error('Chat history load failed',error)
     list.innerHTML='<div class="empty">No se pudieron cargar los mensajes. Inténtalo de nuevo.</div>'
