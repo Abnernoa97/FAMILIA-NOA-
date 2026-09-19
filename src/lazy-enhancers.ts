@@ -27,7 +27,6 @@ const loadChat = async () => {
   chatLoaded = true
   await import('./chat-runtime')
   await import('./chat-reply-thumbnail')
-  await import('./chat-photo-viewer')
 }
 
 let observer: MutationObserver | null = null
