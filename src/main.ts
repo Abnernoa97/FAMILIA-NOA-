@@ -166,14 +166,8 @@ async function renderChat(){
     const {data,error} = await query
     if(error) throw error
     const rows = (data || []) as RawChatRow[]
-    const senderIds = [...new Set(rows.map(row=>row.sender_id).filter(Boolean))]
-    if(senderIds.length){
-      const {data:senderRows,error:senderError}=await supabase.from('family_members').select('id,name').in('id',senderIds)
-      if(senderError) throw senderError
-      const names=new Map((senderRows || []).map((row:any)=>[row.id,row.name]))
-      return rows.reverse().map(row=>({...row,sender:{name:names.get(row.sender_id)||'Familia'}})) as ChatMessage[]
-    }
-    return rows.reverse() as ChatMessage[]
+    const names=new Map(members.map(member=>[member.id,member.name]))
+    return rows.reverse().map(row=>({...row,sender:{name:names.get(row.sender_id)||'Familia'}})) as ChatMessage[]
   }
 
   let all: ChatMessage[]=[]
