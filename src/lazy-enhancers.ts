@@ -27,6 +27,7 @@ const loadChat = async () => {
   chatLoaded = true
   await import('./chat-enhancer')
   await import('./chat-message-actions')
+  await import('./chat-live-polish')
 }
 
 let observer: MutationObserver | null = null
