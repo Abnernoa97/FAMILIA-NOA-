@@ -2,6 +2,7 @@ import { supabase } from './supabase'
 import { getIdentity } from './core/identity'
 
 type PresenceState = Record<string, Array<{ memberId?: string; name?: string; onlineAt?: string }>>
+type PendingPhoto = { bubble: HTMLElement; objectUrl: string }
 
 let homeObserver: MutationObserver | null = null
 let chatInitialized = false
@@ -11,9 +12,10 @@ let chatListObserver: MutationObserver | null = null
 let typingStopTimer: number | null = null
 let unreadRefreshTimer: number | null = null
 let chatMessageHandler: ((event: Event) => void) | null = null
+const pendingPhotos = new Map<string, PendingPhoto>()
 
 const identity = () => getIdentity()
-const esc = (v: string) => v.replace(/[&<>\\"']/g, c => ({ '&':'&amp;', '<':'&lt;', '>':'&gt;', '\\"':'&quot;', "'":'&#039;' }[c]!))
+const esc = (v: string) => v.replace(/[&<>\"']/g, c => ({ '&':'&amp;', '<':'&lt;', '>':'&gt;', '\"':'&quot;', "'":'&#039;' }[c]!))
 const currentMemberId = () => identity()?.memberId || ''
 
 function badgeStyle() {
@@ -33,16 +35,23 @@ function badgeStyle() {
     .chat-reaction-row{display:flex;flex-wrap:wrap;gap:4px;margin-top:5px}
     .chat-reaction{background:#f0ece4;border-radius:999px;padding:3px 7px;font-size:11px}
     .chat-attachment{display:block;margin-top:8px;border-radius:12px;overflow:hidden;background:#e8e3da;text-decoration:none;color:#171716}
-    .chat-attachment img{display:block;width:100%;max-height:260px;object-fit:cover}
+    .chat-attachment img{display:block;width:100%;aspect-ratio:4/5;max-height:320px;object-fit:cover;background:#e8e3da}
     .chat-attachment span{display:block;padding:8px 10px;font-size:12px}
     .chat-read-state{font-size:10px;color:#8a867e;margin-left:4px}
     .chat-edited-state{font-size:10px;color:#8a867e;margin-left:4px}
-    .chat-attach-button{width:42px;height:42px;border-radius:50%;background:#fff;border:1px solid #d9d4ca;font-size:19px}
+    .chat-attach-button{width:42px;height:42px;border-radius:50%;background:#fff;border:1px solid #d9d4ca;font-size:19px;flex:0 0 42px;padding:0!important}
+    .chat-pending{opacity:.94;min-width:180px}
+    .chat-pending-media{margin:-2px -6px 7px;border-radius:12px;overflow:hidden;background:#ded9d0}
+    .chat-pending-media img{display:block;width:100%;aspect-ratio:4/5;max-height:320px;object-fit:cover}
+    .chat-pending small{display:flex;justify-content:flex-end;align-items:center;gap:6px}
+    .chat-upload-spinner{width:11px;height:11px;border:1.5px solid #9a968e;border-top-color:#171716;border-radius:50%;animation:chatSpin .75s linear infinite}
+    .chat-upload-error{color:#9a3f32!important}
     .chat-dialog{position:fixed;inset:0;background:#17171655;backdrop-filter:blur(5px);display:flex;align-items:flex-end;z-index:100}
     .chat-dialog-card{background:#f8f5ee;width:100%;max-width:760px;margin:auto;padding:24px;border-radius:28px 28px 0 0}
     .chat-dialog-card h3{font:500 28px 'Playfair Display',serif;margin:0 0 8px}
     .chat-dialog-card textarea{width:100%;min-height:110px;border:1px solid #d9d4ca;border-radius:16px;padding:14px;resize:vertical;background:#fff}
     .chat-dialog-actions{display:flex;gap:8px;margin-top:12px}.chat-dialog-actions button{flex:1;padding:13px;border-radius:14px}.chat-dialog-actions .confirm{background:#171716;color:#fff}
+    @keyframes chatSpin{to{transform:rotate(360deg)}}
   `
   document.head.appendChild(s)
 }
@@ -85,6 +94,13 @@ function showDialog(title: string, initial: string, onConfirm: (value: string) =
     await onConfirm(value)
     overlay.remove()
   })
+}
+
+function setEditedState(bubble: HTMLElement, edited: boolean) {
+  const small = bubble.querySelector('small')
+  if (!small) return
+  small.querySelector('.chat-edited-state')?.remove()
+  if (edited) small.insertAdjacentHTML('beforeend', '<span class="chat-edited-state"> · editado</span>')
 }
 
 async function markRead() {
@@ -144,13 +160,24 @@ async function enhanceBubble(bubble: HTMLElement) {
   bubble.dataset.chatEnhanced = '1'
   const id = bubble.dataset.messageId || ''
   if (!id) return
+
+  const attachment = bubble.querySelector('.chat-attachment')
+  const body = bubble.querySelector<HTMLParagraphElement>('p')
+  const bodyText = body?.textContent?.trim() || ''
+  if (attachment && body && (!bodyText || bodyText === '📷 Foto' || bodyText === 'Foto')) body.hidden = true
+
   const own = bubble.classList.contains('mine')
+  const deleted = bodyText === 'Mensaje eliminado'
+  if (deleted) return
+
   const tools = document.createElement('div')
   tools.className = 'chat-tools'
   const reactions = ['❤️', '😂', '👍', '😮', '😢', '🙏']
   tools.innerHTML = `<button type="button" data-reaction-toggle aria-expanded="false" aria-label="Mostrar reacciones">☺︎</button><span class="chat-reaction-picker">${reactions.map(r => `<button type="button" data-react="${r}" aria-label="Reaccionar ${r}">${r}</button>`).join('')}</span>`
-  if (own) tools.insertAdjacentHTML('beforeend', '<button type="button" data-edit>Editar</button><button type="button" class="danger" data-delete>Eliminar</button>')
+  if (own && bodyText && !body?.hidden) tools.insertAdjacentHTML('beforeend', '<button type="button" data-edit>Editar</button>')
+  if (own) tools.insertAdjacentHTML('beforeend', '<button type="button" class="danger" data-delete>Eliminar</button>')
   bubble.appendChild(tools)
+
   tools.addEventListener('click', async e => {
     const target = (e.target as HTMLElement).closest<HTMLButtonElement>('button')
     if (!target) return
@@ -167,12 +194,11 @@ async function enhanceBubble(bubble: HTMLElement) {
       return
     }
     if (target.hasAttribute('data-edit')) {
-      const body = bubble.querySelector('p')?.textContent || ''
-      showDialog('Editar mensaje', body, async value => {
+      const text = body?.textContent || ''
+      showDialog('Editar mensaje', text, async value => {
         const { data, error } = await supabase.rpc('edit_chat_message', { p_member_id: currentMemberId(), p_message_id: id, p_body: value })
-        if (!error && data) {
-          const p = bubble.querySelector('p')
-          if (p) p.textContent = value
+        if (!error && data && body) {
+          body.textContent = value
           setEditedState(bubble, true)
         }
       })
@@ -181,8 +207,7 @@ async function enhanceBubble(bubble: HTMLElement) {
       if (!confirm('¿Eliminar este mensaje?')) return
       const { data, error } = await supabase.rpc('delete_chat_message', { p_member_id: currentMemberId(), p_message_id: id })
       if (!error && data) {
-        const p = bubble.querySelector('p')
-        if (p) p.textContent = 'Mensaje eliminado'
+        if (body) { body.hidden = false; body.textContent = 'Mensaje eliminado' }
         bubble.querySelector('.chat-attachment')?.remove()
         bubble.querySelector('.chat-reaction-row')?.remove()
         tools.remove()
@@ -192,17 +217,96 @@ async function enhanceBubble(bubble: HTMLElement) {
   await renderReactions(id)
 }
 
+function scrollChatToBottom() {
+  const list = document.querySelector<HTMLElement>('#messages')
+  if (!list) return
+  requestAnimationFrame(() => { list.scrollTop = list.scrollHeight })
+}
+
+function appendPendingPhoto(objectUrl: string) {
+  const list = document.querySelector<HTMLElement>('#messages')
+  if (!list) return null
+  list.querySelector('.empty')?.remove()
+  const bubble = document.createElement('article')
+  bubble.className = 'bubble mine chat-pending'
+  bubble.innerHTML = `<div class="chat-pending-media"><img src="${esc(objectUrl)}" alt="Foto"></div><small><span class="chat-upload-spinner" aria-hidden="true"></span><span data-upload-state>Enviando…</span></small>`
+  list.appendChild(bubble)
+  scrollChatToBottom()
+  return bubble
+}
+
+function setPendingState(bubble: HTMLElement, text: string, error = false) {
+  const state = bubble.querySelector<HTMLElement>('[data-upload-state]')
+  if (state) {
+    state.textContent = text
+    state.classList.toggle('chat-upload-error', error)
+  }
+  if (error || text === 'Enviado') bubble.querySelector('.chat-upload-spinner')?.remove()
+}
+
+function reconcilePendingPhoto(messageId: string, tries = 0) {
+  const pending = pendingPhotos.get(messageId)
+  if (!pending) return
+  const real = document.querySelector<HTMLElement>(`.bubble[data-message-id="${messageId}"]`)
+  if (real) {
+    pending.bubble.remove()
+    URL.revokeObjectURL(pending.objectUrl)
+    pendingPhotos.delete(messageId)
+    scrollChatToBottom()
+    return
+  }
+  if (tries < 8) window.setTimeout(() => reconcilePendingPhoto(messageId, tries + 1), 250)
+}
+
+async function decodeImage(file: File): Promise<{ source: CanvasImageSource; width: number; height: number; dispose: () => void }> {
+  if ('createImageBitmap' in window) {
+    const bitmap = await createImageBitmap(file)
+    return { source: bitmap, width: bitmap.width, height: bitmap.height, dispose: () => bitmap.close() }
+  }
+  const url = URL.createObjectURL(file)
+  const img = new Image()
+  img.decoding = 'async'
+  img.src = url
+  await img.decode()
+  return { source: img, width: img.naturalWidth, height: img.naturalHeight, dispose: () => URL.revokeObjectURL(url) }
+}
+
+async function compressChatPhoto(file: File): Promise<{ blob: Blob; name: string; type: string }> {
+  if (file.type === 'image/gif') return { blob: file, name: file.name, type: file.type || 'image/gif' }
+  try {
+    const decoded = await decodeImage(file)
+    const maxSide = 1600
+    const scale = Math.min(1, maxSide / Math.max(decoded.width, decoded.height))
+    const width = Math.max(1, Math.round(decoded.width * scale))
+    const height = Math.max(1, Math.round(decoded.height * scale))
+    const canvas = document.createElement('canvas')
+    canvas.width = width
+    canvas.height = height
+    const ctx = canvas.getContext('2d', { alpha: false })
+    if (!ctx) throw new Error('Canvas unavailable')
+    ctx.drawImage(decoded.source, 0, 0, width, height)
+    decoded.dispose()
+    const blob = await new Promise<Blob>((resolve, reject) => canvas.toBlob(value => value ? resolve(value) : reject(new Error('Image compression failed')), 'image/jpeg', 0.82))
+    const base = file.name.replace(/\.[^.]+$/, '') || 'foto'
+    return { blob, name: `${base}.jpg`, type: 'image/jpeg' }
+  } catch {
+    return { blob: file, name: file.name || 'foto.jpg', type: file.type || 'image/jpeg' }
+  }
+}
+
 function installComposer() {
   const composer = document.querySelector<HTMLElement>('#composer')
   if (!composer || composer.dataset.chatFeatures === '1') return
   composer.dataset.chatFeatures = '1'
   const input = composer.querySelector<HTMLInputElement>('#message')
   if (!input) return
+
   const file = document.createElement('input')
   file.type = 'file'
   file.accept = 'image/*'
   file.hidden = true
   file.id = 'chatAttachmentInput'
+
   const attach = document.createElement('button')
   attach.type = 'button'
   attach.className = 'chat-attach-button'
@@ -211,34 +315,78 @@ function installComposer() {
   composer.insertBefore(attach, input)
   composer.appendChild(file)
   attach.addEventListener('click', () => file.click())
+
   file.addEventListener('change', async () => {
     const selected = file.files?.[0]
+    file.value = ''
     if (!selected) return
-    if (selected.size > 10 * 1024 * 1024) {
-      alert('La foto debe pesar menos de 10 MB.')
-      file.value = ''
+    if (!selected.type.startsWith('image/')) {
+      alert('Selecciona una imagen.')
+      return
+    }
+    if (selected.size > 15 * 1024 * 1024) {
+      alert('La foto debe pesar menos de 15 MB.')
       return
     }
     const id = currentMemberId()
     if (!id) return
-    attach.disabled = true
-    const ext = (selected.name.split('.').pop() || 'jpg').toLowerCase().replace(/[^a-z0-9]/g, '') || 'jpg'
-    const path = `chat/${id}/${crypto.randomUUID()}.${ext}`
-    const { error: uploadError } = await supabase.storage.from('family-photos').upload(path, selected, { contentType: selected.type || 'image/jpeg', cacheControl: '3600', upsert: false })
-    if (uploadError) {
-      alert('No se pudo subir la foto.')
-      attach.disabled = false
-      file.value = ''
+
+    const objectUrl = URL.createObjectURL(selected)
+    const pendingBubble = appendPendingPhoto(objectUrl)
+    if (!pendingBubble) {
+      URL.revokeObjectURL(objectUrl)
       return
     }
-    const { error: insertError } = await supabase.from('messages').insert({ sender_id: id, body: '📷 Foto', attachment_path: path, attachment_type: selected.type || 'image/jpeg', attachment_name: selected.name, attachment_size: selected.size })
-    if (insertError) {
-      await supabase.storage.from('family-photos').remove([path])
-      alert('No se pudo enviar la foto.')
+
+    attach.disabled = true
+    try {
+      const optimized = await compressChatPhoto(selected)
+      const ext = optimized.type === 'image/gif' ? 'gif' : 'jpg'
+      const path = `chat/${id}/${crypto.randomUUID()}.${ext}`
+      const { error: uploadError } = await supabase.storage.from('family-photos').upload(path, optimized.blob, {
+        contentType: optimized.type,
+        cacheControl: '31536000',
+        upsert: false
+      })
+      if (uploadError) throw uploadError
+
+      const { data: inserted, error: insertError } = await supabase
+        .from('messages')
+        .insert({
+          sender_id: id,
+          body: '',
+          attachment_path: path,
+          attachment_type: optimized.type,
+          attachment_name: optimized.name,
+          attachment_size: optimized.blob.size
+        })
+        .select('id')
+        .single()
+
+      if (insertError || !inserted?.id) {
+        await supabase.storage.from('family-photos').remove([path])
+        throw insertError || new Error('Message insert failed')
+      }
+
+      setPendingState(pendingBubble, 'Enviado')
+      pendingPhotos.set(inserted.id, { bubble: pendingBubble, objectUrl })
+      reconcilePendingPhoto(inserted.id)
+      window.setTimeout(() => {
+        const pending = pendingPhotos.get(inserted.id)
+        if (pending) setPendingState(pending.bubble, 'Enviado')
+      }, 2200)
+    } catch (error) {
+      console.error('Chat photo send failed', error)
+      setPendingState(pendingBubble, 'No se pudo enviar', true)
+      window.setTimeout(() => {
+        pendingBubble.remove()
+        URL.revokeObjectURL(objectUrl)
+      }, 2600)
+    } finally {
+      attach.disabled = false
     }
-    attach.disabled = false
-    file.value = ''
   })
+
   input.addEventListener('input', () => {
     if (!chatChannel) return
     void chatChannel.send({ type: 'broadcast', event: 'typing', payload: { memberId: currentMemberId(), name: identity()?.name || 'Familia', typing: true } })
@@ -287,15 +435,16 @@ function initChat() {
   list.before(indicator)
 
   installComposer()
-  const enhanceAll = () => list.querySelectorAll<HTMLElement>('.bubble').forEach(b => void enhanceBubble(b))
+  const enhanceAll = () => list.querySelectorAll<HTMLElement>('.bubble[data-message-id]').forEach(b => void enhanceBubble(b))
   enhanceAll()
-    void markRead()
+  void markRead()
   void renderReadReceipts()
 
   let lastAtBottom = true
   chatMessageHandler = (event: Event) => {
     const detail = (event as CustomEvent).detail as { type?: string; id?: string; sender_id?: string } | undefined
     if (!detail) return
+    if (detail.id) reconcilePendingPhoto(detail.id)
     if (detail.type === 'insert' && detail.sender_id !== currentMemberId() && !lastAtBottom) {
       indicator.hidden = false
       indicator.textContent = 'Nuevos mensajes ↓'
@@ -304,6 +453,7 @@ function initChat() {
     void renderReadReceipts()
   }
   window.addEventListener('familia-noa:chat-message', chatMessageHandler)
+
   list.addEventListener('scroll', () => {
     lastAtBottom = list.scrollHeight - list.scrollTop - list.clientHeight < 100
     if (lastAtBottom) {
@@ -319,7 +469,7 @@ function initChat() {
   })
 
   chatChannel = supabase.channel('familia-noa-chat-features')
-        .on('postgres_changes', { event: '*', schema: 'public', table: 'chat_reactions' }, payload => {
+    .on('postgres_changes', { event: '*', schema: 'public', table: 'chat_reactions' }, payload => {
       const id = (payload.new as any)?.message_id || (payload.old as any)?.message_id
       if (id) void renderReactions(id)
     })
