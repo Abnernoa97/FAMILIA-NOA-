@@ -1,47 +1,73 @@
-/* Chat viewport: use the real visible area, including virtual-keyboard resize. */
-.chat-page{
-  height:100dvh;
+/* CHAT VIEWPORT — fill the real app window with no dead space below the composer. */
+html:has(.chat-page),
+body:has(.chat-page),
+body:has(.chat-page) #app{
+  width:100%;
+  height:100%;
   min-height:0;
-  max-height:100dvh;
-  padding-bottom:0;
   overflow:hidden;
-  position:relative;
 }
-@supports not (height:100dvh){
-  .chat-page{
-    height:100vh;
-    max-height:100vh;
-  }
+
+.chat-page{
+  position:fixed !important;
+  inset:0 !important;
+  width:100% !important;
+  max-width:760px !important;
+  height:auto !important;
+  min-height:0 !important;
+  max-height:none !important;
+  margin:0 auto !important;
+  padding:0 !important;
+  overflow:hidden !important;
+  display:flex !important;
+  flex-direction:column !important;
+  background:#f5f2eb;
 }
+
 .chat-page .pagehead{
   flex:0 0 auto;
 }
+
 .chat-page .messages{
-  flex:1 1 auto;
-  min-height:0;
-  overflow-y:auto;
+  flex:1 1 0 !important;
+  min-height:0 !important;
+  overflow-y:auto !important;
   overscroll-behavior:contain;
   -webkit-overflow-scrolling:touch;
+  padding-bottom:10px;
 }
+
 .chat-page #replyPreview{
   flex:0 0 auto;
+  margin:0;
+  padding:0;
 }
+
+.chat-page .reply-preview{
+  padding-top:8px;
+}
+
 .chat-page .composer{
-  position:relative;
-  left:auto;
-  bottom:auto;
-  transform:none;
-  width:100%;
-  flex:0 0 auto;
-  padding-bottom:max(8px,env(safe-area-inset-bottom));
+  position:relative !important;
+  inset:auto !important;
+  left:auto !important;
+  right:auto !important;
+  bottom:auto !important;
+  transform:none !important;
+  width:100% !important;
+  margin:0 !important;
+  flex:0 0 auto !important;
+  padding:8px 10px max(8px,env(safe-area-inset-bottom)) !important;
 }
+
 .chat-page .back-to-top{
-  position:absolute;
-  right:14px;
-  bottom:calc(70px + env(safe-area-inset-bottom));
-  width:38px;
-  height:38px;
+  position:absolute !important;
+  right:14px !important;
+  bottom:calc(68px + env(safe-area-inset-bottom)) !important;
+  width:38px !important;
+  height:38px !important;
 }
+
 .chat-page .chat-attachment img{
   width:100%;
   aspect-ratio:4/3;
