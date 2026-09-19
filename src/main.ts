@@ -125,7 +125,17 @@ function renderHome(){
   app.innerHTML=`<main class="shell"><header class="top"><div><p class="eyebrow">FAMILIA NOA</p><h1>Hola, ${esc(memberName)} <span>♡</span></h1></div><button class="avatar" id="change">${esc(memberName.charAt(0))}</button></header><section class="hero"><p class="eyebrow">TODOS CERCA</p><h2>¿Cómo está la familia hoy?</h2><p>Habla, comparte y revisa que todos estén bien.</p></section><section class="grid"><button class="card dark" id="chat"><i>✦</i><b>Chat</b><small>Habla con todos</small></button><button class="card photo" id="photos"><i>◌</i><b>Fotos</b><small>Momentos de familia</small></button><button class="card" id="location"><i>⌖</i><b>Ubicación</b><small>Ver dónde estamos</small></button><button class="card ok" id="ok"><i>♥</i><b>Estoy bien</b><small>Avísale a la familia</small></button><button class="card help" id="help"><i>!</i><b>Ayuda</b><small>Necesito a mi familia</small></button></section><nav><button class="active">Inicio</button><button id="navchat">Chat</button><button id="navphotos">Fotos</button><button id="navlocation">Ubicación</button></nav></main>`
   if(settingsCache)applySettings(settingsCache)
   document.querySelector('#change')!.addEventListener('click',()=>{clearIdentity();memberName='';memberId='';familySyncChannel?.unsubscribe();settingsChannel?.unsubscribe();stopChatRealtime();login()})
-  document.querySelector('#chat')!.addEventListener('click',renderChat);document.querySelector('#navchat')!.addEventListener('click',renderChat);document.querySelector('#photos')!.addEventListener('click',renderPhotos);document.querySelector('#navphotos')!.addEventListener('click',renderPhotos);document.querySelector('#location')!.addEventListener('click',renderLocation);document.querySelector('#navlocation')!.addEventListenefunction chatBubble(m: ChatMessage, quoted: ChatMessage | null = null): string {
+  document.querySelector('#chat')!.addEventListener('click',renderChat)
+  document.querySelector('#navchat')!.addEventListener('click',renderChat)
+  document.querySelector('#photos')!.addEventListener('click',renderPhotos)
+  document.querySelector('#navphotos')!.addEventListener('click',renderPhotos)
+  document.querySelector('#location')!.addEventListener('click',renderLocation)
+  document.querySelector('#navlocation')!.addEventListener('click',renderLocation)
+  document.querySelector('#ok')!.addEventListener('click',setWellbeing)
+  document.querySelector('#help')!.addEventListener('click',sendHelp)
+}
+
+function chatBubble(m: ChatMessage, quoted: ChatMessage | null = null): string {
   const deleted = !!m.deleted_at
   const body = deleted ? 'Mensaje eliminado' : m.body
   const attachmentUrl = m.attachment_path
@@ -135,7 +145,6 @@ function renderHome(){
     ? `<a class="chat-attachment" href="${esc(attachmentUrl)}" target="_blank" rel="noreferrer">${(m.attachment_type || '').startsWith('image/') ? `<img src="${esc(attachmentUrl)}" alt="${esc(m.attachment_name || 'Foto')}" loading="lazy">` : ''}<span>📎 ${esc(m.attachment_name || 'Foto')}</span></a>`
     : ''
   return `<article class="bubble ${m.sender_id===memberId?'mine':''}" data-message-id="${esc(m.id)}"><div class="swipe-hint" aria-hidden="true">↩</div>${quoted?`<button class="quoted" data-jump="${esc(quoted.id)}"><b>${esc(quoted.sender?.name||'Familia')}</b><span>${esc(quoted.deleted_at ? 'Mensaje eliminado' : quoted.body)}</span></button>`:''}<b class="sender-name">${esc(m.sender?.name||'Familia')}</b><p>${esc(body)}</p>${attachment}<small>${time(m.created_at)}${m.edited_at ? ' · editado' : ''}</small></article>`
-}ilia')}</b><span>${esc(quoted.body)}</span></button>`:''}<b class="sender-name">${esc(m.sender?.name||'Familia')}</b><p>${esc(m.body)}</p><small>${time(m.created_at)}</small></article>`
 }
 
 async function renderChat(){
