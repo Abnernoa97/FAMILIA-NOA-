@@ -3,6 +3,8 @@ import { startChatFeatures } from './chat-features'
 import { openMediaViewer, closeMediaViewer } from './core/media-viewer'
 import { enterView, backView } from './core/navigation'
 import { Outbox } from './core/outbox'
+import { optimizePhoto } from './core/media-pipeline'
+import { bindChatViewport } from './core/chat-viewport'
 
 type ChatMessage = {
   id: string
@@ -61,50 +63,6 @@ function bubbleHtml(message: ChatMessage, quoted: ChatMessage | null, mine: bool
   return `<article class="chat-bubble${mine ? ' mine' : ''}${deleted ? ' deleted' : ''}" data-message-id="${esc(message.id)}">${quotedHtml(quoted)}<b class="chat-sender">${esc(message.sender?.name || 'Familia')}</b>${bodyHtml}${attachment}<small class="chat-meta">${time(message.created_at)}${message.edited_at ? ' · editado' : ''}</small></article>`
 }
 
-async function decodeImage(file: File): Promise<{ source: CanvasImageSource; width: number; height: number; dispose: () => void }> {
-  if ('createImageBitmap' in window) {
-    const bitmap = await createImageBitmap(file)
-    return { source: bitmap, width: bitmap.width, height: bitmap.height, dispose: () => bitmap.close() }
-  }
-  const url = URL.createObjectURL(file)
-  const image = new Image()
-  image.decoding = 'async'
-  image.src = url
-  await image.decode()
-  return { source: image, width: image.naturalWidth, height: image.naturalHeight, dispose: () => URL.revokeObjectURL(url) }
-}
-
-async function optimizePhoto(file: File): Promise<{ blob: Blob; type: string; name: string; ext: string }> {
-  if (file.type === 'image/gif') throw new Error('GIF_NOT_SUPPORTED')
-  try {
-    const decoded = await decodeImage(file)
-    const maxSide = 1200
-    const scale = Math.min(1, maxSide / Math.max(decoded.width, decoded.height))
-    const width = Math.max(1, Math.round(decoded.width * scale))
-    const height = Math.max(1, Math.round(decoded.height * scale))
-    const canvas = document.createElement('canvas')
-    canvas.width = width
-    canvas.height = height
-    const context = canvas.getContext('2d', { alpha: false })
-    if (!context) throw new Error('Canvas unavailable')
-    context.drawImage(decoded.source, 0, 0, width, height)
-    decoded.dispose()
-    const blob = await new Promise<Blob>((resolve, reject) => canvas.toBlob(value => value ? resolve(value) : reject(new Error('Compression failed')), 'image/jpeg', 0.8))
-    const base = file.name.replace(/\.[^.]+$/, '') || 'foto'
-    return { blob, type:'image/jpeg', name:`${base}.jpg`, ext:'jpg' }
-  } catch (error) {
-    const allowed: Record<string, string> = {
-      'image/jpeg':'jpg',
-      'image/png':'png',
-      'image/webp':'webp',
-      'image/heic':'heic'
-    }
-    const ext = allowed[file.type]
-    if (!ext) throw error
-    return { blob:file, type:file.type, name:file.name || `foto.${ext}`, ext }
-  }
-}
-
 export function closeChat() {
   activeCleanup?.()
   activeCleanup = null
@@ -154,15 +112,7 @@ export async function openChat(options: OpenChatOptions) {
     openMediaViewer([{ src, alt:'Foto del chat' }])
   }
 
-  const updateViewport = () => {
-    if (!page.isConnected) return
-    const viewport = window.visualViewport
-    const height = Math.max(1, Math.round(viewport?.height || window.innerHeight))
-    const top = Math.max(0, Math.round(viewport?.offsetTop || 0))
-    page.style.setProperty('--chat-vh', `${height}px`)
-    page.style.setProperty('--chat-vtop', `${top}px`)
-    if (stickToLatest || document.activeElement === input) requestAnimationFrame(scrollLatest)
-  }
+  const unbindViewport = bindChatViewport(page, list, input, () => stickToLatest, scrollLatest)
 
   const nameRow = (row: RawChatRow): ChatMessage => ({ ...row, sender:{ name:memberNames.get(row.sender_id) || (row.sender_id === memberId ? memberName : 'Familia') } })
 
@@ -452,20 +402,6 @@ export async function openChat(options: OpenChatOptions) {
   }
 
 
-  const viewport = window.visualViewport
-  back.addEventListener('click', backView)
-  list.addEventListener('scroll', onScroll, { passive:true })
-  input.addEventListener('focus', onFocus)
-  composer.addEventListener('submit', onSubmit)
-  attach.addEventListener('click', () => fileInput.click())
-  fileInput.addEventListener('change', onPhoto)
-  list.addEventListener('click', onPendingClick)
-  list.addEventListener('click', onImageClick)
-  viewport?.addEventListener('resize', updateViewport)
-  viewport?.addEventListener('scroll', updateViewport)
-  window.addEventListener('resize', updateViewport)
-  window.addEventListener('orientationchange', updateViewport)
-  updateViewport()
 
   coreChannel = supabase.channel(`familia-noa-chat-core-${memberId}`)
     .on('postgres_changes', { event:'INSERT', schema:'public', table:'messages' }, payload => {
@@ -500,10 +436,7 @@ export async function openChat(options: OpenChatOptions) {
     list.removeEventListener('click', onImageClick)
     closeMediaViewer()
     outbox.clear(job => { if (job.kind === 'photo') URL.revokeObjectURL(job.objectUrl) })
-    viewport?.removeEventListener('resize', updateViewport)
-    viewport?.removeEventListener('scroll', updateViewport)
-    window.removeEventListener('resize', updateViewport)
-    window.removeEventListener('orientationchange', updateViewport)
+    unbindViewport()
   }
 
   await renderInitial()
