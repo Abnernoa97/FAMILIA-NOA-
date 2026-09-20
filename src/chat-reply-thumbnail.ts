@@ -13,6 +13,14 @@ function installStyle() {
     .quoted .chat-reply-thumb{position:absolute;right:7px;top:50%;transform:translateY(-50%);width:46px;height:46px;border-radius:8px;object-fit:cover;background:#ddd8cf;box-shadow:0 1px 5px #0001}
     .reply-preview>div.has-reply-thumb{position:relative;min-height:58px;padding-right:66px}
     .reply-preview .chat-reply-thumb{position:absolute;right:7px;top:50%;transform:translateY(-50%);width:46px;height:46px;border-radius:8px;object-fit:cover;background:#ddd8cf;box-shadow:0 1px 5px #0001}
+
+    .quoted.image-only-reply{display:inline-flex;align-items:center;min-height:0!important;padding:0!important;border-left:0!important;background:transparent!important}
+    .quoted.image-only-reply>b,.quoted.image-only-reply>span{display:none!important}
+    .quoted.image-only-reply .chat-reply-thumb{position:static;transform:none;width:54px;height:54px;border-radius:9px;box-shadow:none}
+
+    .reply-preview>div.image-only-reply{display:flex;align-items:center;min-height:0!important;padding:0!important;border-left:0!important;background:transparent!important}
+    .reply-preview>div.image-only-reply>b,.reply-preview>div.image-only-reply>span{display:none!important}
+    .reply-preview>div.image-only-reply .chat-reply-thumb{position:static;transform:none;width:58px;height:58px;border-radius:10px;box-shadow:none}
   `
   document.head.appendChild(style)
 }
@@ -37,7 +45,8 @@ function applyThumb(container: HTMLElement, src: string) {
     container.appendChild(image)
   }
   if (image.src !== src) image.src = src
-  container.classList.add('has-reply-thumb')
+  container.classList.add('has-reply-thumb', 'image-only-reply')
+  container.querySelectorAll<HTMLElement>(':scope > b, :scope > span').forEach(el => { el.hidden = true })
 }
 
 async function resolveMessageThumb(messageId: string, target: HTMLElement) {
