@@ -1,14 +1,41 @@
 import { startAuthentication, startRegistration, WebAuthnAbortService } from '@simplewebauthn/browser'
 import { supabase } from './supabase'
+import { getIdentity, setIdentity } from './core/identity'
 
-const KEY = 'familia-noa-member'
-const PROFILE_KEY = 'familia-noa-profile'
-const PASSKEY_KEY = 'familia-noa-passkey'
-const PASSKEY_CRED_KEY = 'familia-noa-passkey-credential-id'
-const PASSKEY_MEMBER_KEY = 'familia-noa-passkey-member-id'
-const AUTHENTICATED_KEY = 'familia-noa-biometric-authenticated'
+const PASSKEY_DEVICE_KEY = 'familia-noa-passkey-device'
+const LEGACY_KEYS = [
+  'familia-noa-passkey',
+  'familia-noa-passkey-credential-id',
+  'familia-noa-passkey-member-id',
+  'familia-noa-biometric-authenticated',
+]
 const supported = () => typeof window !== 'undefined' && !!window.PublicKeyCredential && window.isSecureContext
 let setupInProgress = false
+
+type PasskeyDevice = { memberId: string; credentialId?: string }
+
+function readDevice(): PasskeyDevice | null {
+  try {
+    const raw = localStorage.getItem(PASSKEY_DEVICE_KEY)
+    if (raw) {
+      const value = JSON.parse(raw) as Partial<PasskeyDevice>
+      if (value.memberId) return { memberId:String(value.memberId), credentialId:value.credentialId ? String(value.credentialId) : undefined }
+    }
+    const memberId = localStorage.getItem('familia-noa-passkey-member-id')
+    const credentialId = localStorage.getItem('familia-noa-passkey-credential-id') || undefined
+    if (memberId) {
+      const device = { memberId, credentialId }
+      writeDevice(device)
+      return device
+    }
+  } catch {}
+  return null
+}
+
+function writeDevice(device: PasskeyDevice) {
+  localStorage.setItem(PASSKEY_DEVICE_KEY, JSON.stringify(device))
+  for (const key of LEGACY_KEYS) localStorage.removeItem(key)
+}
 
 async function call(action: string, payload: Record<string, unknown> = {}) {
   const { data, error } = await supabase.functions.invoke('family-passkeys-v2', { body: { action, ...payload } })
@@ -18,9 +45,7 @@ async function call(action: string, payload: Record<string, unknown> = {}) {
 }
 
 function session(profile: { id: string; name: string }) {
-  localStorage.setItem(KEY, profile.name)
-  sessionStorage.setItem(PROFILE_KEY, JSON.stringify(profile))
-  sessionStorage.setItem(AUTHENTICATED_KEY, '1')
+  setIdentity({ memberId:profile.id, name:profile.name })
   window.location.reload()
 }
 
@@ -30,44 +55,33 @@ async function biometric(button: HTMLButtonElement, error: HTMLElement) {
   error.textContent = 'Verificando…'
   let timeout: ReturnType<typeof setTimeout> | null = null
   try {
-    const memberId = localStorage.getItem(PASSKEY_MEMBER_KEY) || undefined
-    const credentialId = localStorage.getItem(PASSKEY_CRED_KEY) || undefined
+    const device = readDevice()
     const payload: Record<string, unknown> = {}
-    if (memberId) payload.member_id = memberId
-    if (credentialId) payload.credential_ids = [credentialId]
-
+    if (device?.memberId) payload.member_id = device.memberId
+    if (device?.credentialId) payload.credential_ids = [device.credentialId]
     const optionsResult = await call('auth-options', payload)
-
     const timeoutPromise = new Promise<never>((_, reject) => {
       timeout = setTimeout(() => {
         WebAuthnAbortService.cancelCeremony()
         reject(new Error('La verificación tardó demasiado. Puedes entrar con tu perfil.'))
       }, 10000)
     })
-
     const response = await Promise.race([
       startAuthentication({ optionsJSON: optionsResult.options }),
       timeoutPromise,
     ])
-
     if (timeout) clearTimeout(timeout)
     timeout = null
-
     const result = await call('auth-verify', { token: optionsResult.token, response })
     if (!result?.profile?.id) throw new Error('No se pudo identificar el perfil.')
-    localStorage.setItem(PASSKEY_KEY, 'enabled')
-    localStorage.setItem(PASSKEY_MEMBER_KEY, result.profile.id)
-    localStorage.setItem(PASSKEY_CRED_KEY, response.id)
+    writeDevice({ memberId:result.profile.id, credentialId:response.id })
     session(result.profile)
   } catch (err) {
     if (timeout) clearTimeout(timeout)
-    timeout = null
     const name = err instanceof Error ? err.name : ''
-    if (name === 'NotAllowedError' || name === 'AbortError') {
-      error.textContent = 'La verificación biométrica fue cancelada o no estuvo disponible. Puedes entrar con tu perfil.'
-    } else {
-      error.textContent = err instanceof Error ? err.message : 'No se pudo entrar con huella / Face ID.'
-    }
+    error.textContent = name === 'NotAllowedError' || name === 'AbortError'
+      ? 'La verificación biométrica fue cancelada o no estuvo disponible. Puedes entrar con tu perfil.'
+      : err instanceof Error ? err.message : 'No se pudo entrar con huella / Face ID.'
     button.disabled = false
   }
 }
@@ -89,9 +103,9 @@ async function hasPasskey(memberId: string) {
   try {
     const result = await call('passkey-status', { member_id: memberId })
     const ids = Array.isArray(result?.credential_ids) ? result.credential_ids.filter((id: unknown): id is string => typeof id === 'string') : []
-    return { has: !!result?.hasPasskey, ids }
+    return { has:!!result?.hasPasskey, ids }
   } catch {
-    return { has: false, ids: [] as string[] }
+    return { has:false, ids:[] as string[] }
   }
 }
 
@@ -99,18 +113,14 @@ async function registerPasskey(memberId: string, house: string, nickname: string
   try {
     const status = await hasPasskey(memberId)
     if (status.has) {
-      localStorage.setItem(PASSKEY_KEY, 'enabled')
-      localStorage.setItem(PASSKEY_MEMBER_KEY, memberId)
-      if (status.ids[0]) localStorage.setItem(PASSKEY_CRED_KEY, status.ids[0])
+      writeDevice({ memberId, credentialId:status.ids[0] })
       alert('Este perfil ya tiene una huella o Face ID registrado.')
       return
     }
-    const optionsResult = await call('register-options', { member_id: memberId, house_number: house, nickname })
-    const response = await startRegistration({ optionsJSON: optionsResult.options })
-    const result = await call('register-verify', { token: optionsResult.token, response })
-    localStorage.setItem(PASSKEY_KEY, 'enabled')
-    localStorage.setItem(PASSKEY_MEMBER_KEY, memberId)
-    if (result?.credential_id) localStorage.setItem(PASSKEY_CRED_KEY, result.credential_id)
+    const optionsResult = await call('register-options', { member_id:memberId, house_number:house, nickname })
+    const response = await startRegistration({ optionsJSON:optionsResult.options })
+    const result = await call('register-verify', { token:optionsResult.token, response })
+    writeDevice({ memberId, credentialId:result?.credential_id || response.id })
     alert('Listo. Este teléfono ya puede entrar con huella o reconocimiento facial.')
   } catch (err) {
     const name = err instanceof Error ? err.name : ''
@@ -123,20 +133,15 @@ async function addSetup() {
   if (!supported() || setupInProgress) return
   const home = document.querySelector('.shell')
   const change = document.querySelector<HTMLElement>('#change')
-  if (!home || !change || document.querySelector('#enableBiometric')) return
-  const raw = sessionStorage.getItem(PROFILE_KEY)
-  if (!raw) return
+  const identity = getIdentity()
+  if (!home || !change || !identity || document.querySelector('#enableBiometric')) return
   setupInProgress = true
   try {
-    const profile = JSON.parse(raw) as { id: string; name: string }
-    const status = await hasPasskey(profile.id)
+    const status = await hasPasskey(identity.memberId)
     if (status.has) {
-      localStorage.setItem(PASSKEY_KEY, 'enabled')
-      localStorage.setItem(PASSKEY_MEMBER_KEY, profile.id)
-      if (status.ids[0]) localStorage.setItem(PASSKEY_CRED_KEY, status.ids[0])
+      writeDevice({ memberId:identity.memberId, credentialId:status.ids[0] })
       return
     }
-    if (document.querySelector('#enableBiometric')) return
     const button = document.createElement('button')
     button.id = 'enableBiometric'
     button.className = 'biometric-setup'
@@ -145,20 +150,18 @@ async function addSetup() {
     button.onclick = async () => {
       const house = prompt('Confirma el número de la casa.')
       if (!house) return
-      const nickname = prompt(`Confirma tu apodo familiar, ${profile.name}.`)
-      if (nickname) await registerPasskey(profile.id, house, nickname)
+      const nickname = prompt(`Confirma tu apodo familiar, ${identity.name}.`)
+      if (nickname) await registerPasskey(identity.memberId, house, nickname)
     }
   } finally {
     setupInProgress = false
   }
 }
 
-// Never start biometric authentication automatically on page load.
-// The user must explicitly press the biometric button.
 const observer = new MutationObserver(() => {
   addLogin()
   void addSetup()
 })
-observer.observe(document.body, { childList: true, subtree: true })
+observer.observe(document.body, { childList:true, subtree:true })
 addLogin()
 void addSetup()
