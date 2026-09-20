@@ -33,22 +33,6 @@ function styles(){
  `;document.head.appendChild(s)
 }
 
-function ensureViewer(){
- if(document.getElementById('familyPhotoViewer'))return
- const v=document.createElement('div');v.id='familyPhotoViewer';v.className='family-photo-viewer';v.hidden=true
- v.innerHTML=`<div class="family-photo-stage"><button type="button" class="family-photo-close" aria-label="Cerrar">×</button><button type="button" class="family-photo-prev" aria-label="Foto anterior">‹</button><img class="family-photo-main" alt="Foto familiar"><button type="button" class="family-photo-next" aria-label="Foto siguiente">›</button><div class="family-photo-hint">Desliza para pasar las fotos</div><div class="family-photo-meta"></div></div>`
- document.body.appendChild(v)
- v.querySelector('.family-photo-close')?.addEventListener('click',closeViewer)
- v.querySelector('.family-photo-prev')?.addEventListener('click',()=>showViewerPhoto(viewerIndex-1))
- v.querySelector('.family-photo-next')?.addEventListener('click',()=>showViewerPhoto(viewerIndex+1))
- v.addEventListener('click',e=>{if(e.target===v)closeViewer()})
- let sx=0,sy=0
- v.addEventListener('touchstart',e=>{const t=e.changedTouches[0];sx=t.clientX;sy=t.clientY},{passive:true})
- v.addEventListener('touchend',e=>{const t=e.changedTouches[0],dx=t.clientX-sx,dy=t.clientY-sy;if(Math.abs(dx)>55&&Math.abs(dx)>Math.abs(dy)*1.2)showViewerPhoto(viewerIndex+(dx<0?1:-1))},{passive:true})
- document.addEventListener('keydown',e=>{if(v.hidden)return;if(e.key==='Escape')closeViewer();if(e.key==='ArrowLeft')showViewerPhoto(viewerIndex-1);if(e.key==='ArrowRight')showViewerPhoto(viewerIndex+1)})
-}
-
-
 async function loadMembers(force=false){
  if(membersLoaded&&!force)return {members:membersCache,error:null}
  const {data,error}=await supabase.from('family_members').select('id,name,active').eq('active',true).order('created_at')
