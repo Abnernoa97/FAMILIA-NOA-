@@ -1,5 +1,7 @@
 import { supabase } from './supabase'
 import { getIdentity, getMemberId } from './core/identity'
+import { openMediaViewer } from './core/media-viewer'
+import { enterView, backView, currentView } from './core/navigation'
 
 const BUCKET='family-photos'
 const MAX_BYTES=15*1024*1024
@@ -48,9 +50,6 @@ function ensureViewer(){
  document.addEventListener('keydown',e=>{if(v.hidden)return;if(e.key==='Escape')closeViewer();if(e.key==='ArrowLeft')showViewerPhoto(viewerIndex-1);if(e.key==='ArrowRight')showViewerPhoto(viewerIndex+1)})
 }
 
-function openViewer(index:number){if(!viewerPhotos.length)return;ensureViewer();viewerIndex=Math.max(0,Math.min(index,viewerPhotos.length-1));showViewerPhoto(viewerIndex);const v=document.getElementById('familyPhotoViewer')!;v.hidden=false;document.body.style.overflow='hidden'}
-function showViewerPhoto(index:number){if(index<0||index>=viewerPhotos.length)return;viewerIndex=index;const p=viewerPhotos[index],v=document.getElementById('familyPhotoViewer');if(!v)return;const img=v.querySelector('.family-photo-main') as HTMLImageElement;img.src=photoUrl(p.storage_path);img.alt='Foto familiar';(v.querySelector('.family-photo-meta') as HTMLElement).textContent=`${index+1} / ${viewerPhotos.length}`;(v.querySelector('.family-photo-prev') as HTMLElement).hidden=index===0;(v.querySelector('.family-photo-next') as HTMLElement).hidden=index===viewerPhotos.length-1}
-function closeViewer(){const v=document.getElementById('familyPhotoViewer');if(!v)return;v.hidden=true;document.body.style.overflow=''}
 
 async function loadMembers(force=false){
  if(membersLoaded&&!force)return {members:membersCache,error:null}
@@ -127,9 +126,9 @@ async function renderList(){
  if(membersResult.error||photosResult.error){root.className='albums-page';root.innerHTML='<div class="album-empty-state"><b>No se pudieron cargar los álbumes</b><span>Inténtalo de nuevo.</span></div>';return}
  root.className='albums-page'
  root.innerHTML=`<header class="albums-head"><button type="button" id="albumsBack" aria-label="Volver">‹</button><div><p class="eyebrow">FAMILIA NOA</p><h1>Álbumes</h1></div></header><p class="albums-intro">Cada foto que compartes en la app se guarda automáticamente en tu álbum personal.</p><div class="album-actions"><label class="album-upload-label" for="familyAlbumUpload">＋ Subir fotos</label><input class="album-file" id="familyAlbumUpload" type="file" accept="image/*" multiple></div><div class="album-status" id="albumStatus"></div><section class="album-grid">${members.map(m=>card(m,photos)).join('')}</section>`
- root.querySelector('#albumsBack')?.addEventListener('click',()=>window.dispatchEvent(new CustomEvent('familia-home')))
+ root.querySelector('#albumsBack')?.addEventListener('click',()=>backView())
  root.querySelector('#familyAlbumUpload')?.addEventListener('change',e=>{const input=e.target as HTMLInputElement;if(input.files)void upload(input.files,root.querySelector('#albumStatus')!);input.value=''})
- root.querySelectorAll<HTMLElement>('[data-album-id]').forEach(el=>el.addEventListener('click',e=>{e.preventDefault();e.stopPropagation();const id=el.dataset.albumId;if(id)void renderAlbum(id)}))
+ root.querySelectorAll<HTMLElement>('[data-album-id]').forEach(el=>el.addEventListener('click',e=>{e.preventDefault();e.stopPropagation();const id=el.dataset.albumId;if(id){enterView('album');void renderAlbum(id)}}))
 }
 
 async function renderAlbum(id:string){
@@ -142,9 +141,9 @@ async function renderAlbum(id:string){
  const meId=getMemberId()
  root.className='albums-page'
  root.innerHTML=`<header class="albums-head"><button type="button" id="albumBack" aria-label="Volver a álbumes">‹</button><div><p class="eyebrow">FAMILIA NOA</p><h1>Fotos</h1></div></header><div class="album-title-row"><h1>Álbum de ${esc(member.name)}</h1><p class="album-count">${mine.length} foto${mine.length===1?'':'s'}</p></div>${member.id===meId?`<div class="album-actions"><label class="album-upload-label" for="memberAlbumUpload">＋ Agregar fotos</label><input class="album-file" id="memberAlbumUpload" type="file" accept="image/*" multiple></div><div class="album-status" id="memberAlbumStatus"></div>`:''}<section class="album-photo-grid">${mine.map((p,i)=>`<div class="album-photo" data-photo-index="${i}"><img src="${esc(photoUrl(p.storage_path))}" alt="Foto de ${esc(member.name)}" loading="lazy"></div>`).join('')}</section>${mine.length?'':'<div class="album-empty-state"><b>Aún no hay fotos</b><span>Cuando esta persona comparta una foto en la app, aparecerá aquí automáticamente.</span></div>'}`
- root.querySelector('#albumBack')?.addEventListener('click',()=>{activeAlbumId=null;void renderList()})
+ root.querySelector('#albumBack')?.addEventListener('click',()=>backView())
  root.querySelector('#memberAlbumUpload')?.addEventListener('change',e=>{const input=e.target as HTMLInputElement;if(input.files)void upload(input.files,root.querySelector('#memberAlbumStatus')!);input.value=''})
- root.querySelectorAll<HTMLElement>('[data-photo-index]').forEach(el=>el.addEventListener('click',()=>openViewer(Number(el.dataset.photoIndex))))
+ root.querySelectorAll<HTMLElement>('[data-photo-index]').forEach(el=>el.addEventListener('click',()=>{const i=Number(el.dataset.photoIndex);enterView('media');openMediaViewer(viewerPhotos.map(p=>({src:photoUrl(p.storage_path),alt:`Foto de ${member.name}`})),i)}))
 }
 
 async function renderCurrent(){
@@ -165,7 +164,6 @@ function startPhotosRealtime(){
   .subscribe()
 }
 
-styles();ensureViewer();startPhotosRealtime()
+styles();startPhotosRealtime()
 const observer=new MutationObserver(()=>{const root=document.querySelector<HTMLElement>('[data-photo-page]');if(root&&!root.classList.contains('albums-page'))void renderCurrent()})
 observer.observe(document.body,{subtree:true,childList:true})
-window.addEventListener('familia-home',()=>{const home=document.querySelector('#app .top');if(home)home.scrollIntoView({behavior:'smooth'})})
