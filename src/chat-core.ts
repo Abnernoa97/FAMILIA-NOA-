@@ -28,7 +28,6 @@ type OpenChatOptions = {
   memberId: string
   memberName: string
   members: Array<{ id: string; name: string }>
-  onBack: () => void
   notify: (title: string, text: string) => void
 }
 
@@ -70,7 +69,7 @@ export function closeChat() {
 
 export async function openChat(options: OpenChatOptions) {
   closeChat()
-  const { app, memberId, memberName, members, onBack, notify } = options
+  const { app, memberId, memberName, members, notify } = options
   const memberNames = new Map(members.map(member => [member.id, member.name]))
   let coreChannel: ReturnType<typeof supabase.channel> | null = null
   let features: ReturnType<typeof startChatFeatures> | null = null
@@ -252,11 +251,6 @@ export async function openChat(options: OpenChatOptions) {
     if (list.scrollTop <= 60) void loadOlder()
   }
 
-  const onFocus = () => {
-    stickToLatest = true
-    requestAnimationFrame(scrollLatest)
-  }
-
   const pendingTextElement = (id:string) => list.querySelector<HTMLElement>(`[data-pending-text-id="${CSS.escape(id)}"]`)
 
   const renderPendingText = (job:PendingText) => {
@@ -427,7 +421,6 @@ export async function openChat(options: OpenChatOptions) {
     coreChannel = null
     back.removeEventListener('click', backView)
     list.removeEventListener('scroll', onScroll)
-    input.removeEventListener('focus', onFocus)
     composer.removeEventListener('submit', onSubmit)
     fileInput.removeEventListener('change', onPhoto)
     list.removeEventListener('click', onPendingClick)
