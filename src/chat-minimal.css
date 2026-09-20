@@ -35,7 +35,7 @@
 
 .chat-page .chat-attachment{margin-top:5px;border-radius:10px}
 .chat-page .chat-attachment img{max-height:270px;border-radius:10px}
-.chat-page .chat-attachment span{padding:5px 8px;font-size:10px;color:#77736b}
+.chat-page .chat-attachment span{display:none}
 .chat-page .composer{gap:6px!important;padding:6px 10px max(6px,env(safe-area-inset-bottom))!important}
 .chat-page .composer input{height:44px;font-size:14px}
 .chat-page .composer>button[type="submit"]{height:44px;padding:0 16px}
