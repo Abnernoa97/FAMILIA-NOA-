@@ -111,6 +111,7 @@ body:has(.chat-page) #app{
 .chat-attach:disabled,.chat-send:disabled,.chat-composer input:disabled{opacity:.55}
 
 .chat-pending{opacity:.94;min-width:180px}
+.chat-retry{border:0;background:transparent;color:#171716;font:700 10px 'DM Sans',sans-serif;padding:2px 4px;text-decoration:underline;cursor:pointer}
 .chat-spinner{display:inline-block;width:10px;height:10px;border:1.5px solid #9a968e;border-top-color:#171716;border-radius:50%;animation:chatSpin .75s linear infinite;vertical-align:-1px}
 
 .chat-dialog{position:fixed;inset:0;background:#17171655;backdrop-filter:blur(5px);display:flex;align-items:flex-end;z-index:100}
