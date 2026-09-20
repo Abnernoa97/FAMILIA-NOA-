@@ -1,5 +1,7 @@
 import { supabase } from './supabase'
 import { startChatFeatures } from './chat-features'
+import { openMediaViewer, closeMediaViewer } from './core/media-viewer'
+import { enterView, backView } from './core/navigation'
 
 type ChatMessage = {
   id: string
@@ -143,22 +145,12 @@ export async function openChat(options: OpenChatOptions) {
     list.scrollTop = Math.max(0, list.scrollHeight - list.clientHeight)
   }
 
-  const closeImageViewer = () => document.querySelector('.chat-image-viewer')?.remove()
-
   const onImageClick = (event:Event) => {
     const button = (event.target as HTMLElement).closest<HTMLElement>('[data-chat-image]')
-    if (!button) return
-    const src = button.dataset.chatImage
+    const src = button?.dataset.chatImage
     if (!src) return
-    closeImageViewer()
-    const viewer = document.createElement('div')
-    viewer.className = 'chat-image-viewer'
-    viewer.innerHTML = `<button type="button" class="chat-image-close" aria-label="Cerrar">×</button><img src="${esc(src)}" alt="Foto del chat">`
-    viewer.addEventListener('click', event => {
-      const target = event.target as HTMLElement
-      if (target === viewer || target.closest('.chat-image-close')) closeImageViewer()
-    })
-    document.body.appendChild(viewer)
+    enterView('media')
+    openMediaViewer([{ src, alt:'Foto del chat' }])
   }
 
   const updateViewport = () => {
@@ -466,7 +458,7 @@ export async function openChat(options: OpenChatOptions) {
   }
 
   const viewport = window.visualViewport
-  back.addEventListener('click', onBack)
+  back.addEventListener('click', backView)
   list.addEventListener('scroll', onScroll, { passive:true })
   input.addEventListener('focus', onFocus)
   composer.addEventListener('submit', onSubmit)
@@ -505,14 +497,14 @@ export async function openChat(options: OpenChatOptions) {
     features = null
     void coreChannel?.unsubscribe()
     coreChannel = null
-    back.removeEventListener('click', onBack)
+    back.removeEventListener('click', backView)
     list.removeEventListener('scroll', onScroll)
     input.removeEventListener('focus', onFocus)
     composer.removeEventListener('submit', onSubmit)
     fileInput.removeEventListener('change', onPhoto)
     list.removeEventListener('click', onPendingClick)
     list.removeEventListener('click', onImageClick)
-    closeImageViewer()
+    closeMediaViewer()
     window.removeEventListener('online', onOnline)
     photoQueue.forEach(job => URL.revokeObjectURL(job.objectUrl))
     photoQueue.clear()
