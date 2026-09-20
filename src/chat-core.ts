@@ -389,19 +389,17 @@ export async function openChat(options: OpenChatOptions) {
     const photoButton = target.closest<HTMLElement>('[data-retry-photo]')
     if (photoButton) {
       const pending = photoButton.closest<HTMLElement>('[data-pending-id]')
-      const job = pending?.dataset.pendingId ? photoQueue.get(pending.dataset.pendingId) : null
-      if (job) void sendPhotoJob(job)
+      const id = pending?.dataset.pendingId
+      if (id) outbox.retry(id)
       return
     }
     const textButton = target.closest<HTMLElement>('[data-retry-text]')
     if (textButton) {
       const pending = textButton.closest<HTMLElement>('[data-pending-text-id]')
-      const job = pending?.dataset.pendingTextId ? textQueue.get(pending.dataset.pendingTextId) : null
-      if (job) void sendTextJob(job)
+      const id = pending?.dataset.pendingTextId
+      if (id) outbox.retry(id)
     }
   }
-
-
 
   coreChannel = supabase.channel(`familia-noa-chat-core-${memberId}`)
     .on('postgres_changes', { event:'INSERT', schema:'public', table:'messages' }, payload => {
