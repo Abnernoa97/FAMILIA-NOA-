@@ -17,6 +17,13 @@ function clearListState() {
   interrupted = false
 }
 
+function forceLatest(behavior: ScrollBehavior = 'auto') {
+  const list = activeList || document.querySelector<HTMLElement>('.chat-page #messages')
+  if (!list) return
+  if (behavior === 'smooth') list.scrollTo({ top: list.scrollHeight, behavior })
+  else list.scrollTop = list.scrollHeight
+}
+
 function scrollToLatest() {
   const list = activeList
   if (!list || interrupted || !hydrationStarted || performance.now() > stickUntil) return
@@ -29,21 +36,41 @@ function scrollToLatest() {
 function startHydrationWindow() {
   if (!activeList || hydrationStarted) return
   hydrationStarted = true
-  stickUntil = performance.now() + 2800
-  scrollToLatest()
-  ;[60, 140, 280, 520, 900, 1400, 2100, 2700].forEach(delay => {
+  stickUntil = performance.now() + 4500
+  forceLatest()
+  ;[40, 100, 180, 320, 520, 800, 1200, 1700, 2300, 3000, 3800, 4450].forEach(delay => {
     window.setTimeout(scrollToLatest, delay)
   })
   cleanupTimer = window.setTimeout(() => {
     listObserver?.disconnect()
     listObserver = null
-  }, 3100)
+  }, 4800)
+}
+
+function bindLatestButton() {
+  const button = document.querySelector<HTMLButtonElement>('.chat-page #chatTop')
+  if (!button) return
+  button.textContent = '↓'
+  button.setAttribute('aria-label', 'Ir al último mensaje')
+  button.title = 'Ir al último mensaje'
+  if (button.dataset.latestBound === '1') return
+  button.dataset.latestBound = '1'
+  button.addEventListener('click', event => {
+    event.preventDefault()
+    event.stopImmediatePropagation()
+    interrupted = true
+    forceLatest('smooth')
+  }, { capture: true })
 }
 
 function bindList(list: HTMLElement) {
-  if (activeList === list) return
+  if (activeList === list) {
+    bindLatestButton()
+    return
+  }
   clearListState()
   activeList = list
+  bindLatestButton()
 
   const interrupt = () => {
     interrupted = true
@@ -65,12 +92,14 @@ function bindList(list: HTMLElement) {
   listObserver.observe(list, { childList: true, subtree: true })
 
   if (list.querySelector('.bubble')) startHydrationWindow()
+  else requestAnimationFrame(() => forceLatest())
 }
 
 function scan() {
   const list = document.querySelector<HTMLElement>('.chat-page #messages')
   if (list) {
     bindList(list)
+    bindLatestButton()
     return
   }
   if (activeList) clearListState()
