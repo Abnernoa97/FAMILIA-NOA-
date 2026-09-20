@@ -30,6 +30,8 @@ window.addEventListener('popstate', () => {
     if (albumBack) { albumBack.click(); return }
     const albumsBack = document.querySelector<HTMLButtonElement>('#albumsBack')
     if (albumsBack) { albumsBack.click(); return }
+    window.dispatchEvent(new CustomEvent('familia-home'))
+    return
   }
 
   const level = history.state?.[PROFILE_STATE]
@@ -50,7 +52,15 @@ document.addEventListener('click', event => {
   if (target.closest('[data-chat-image]')) { pushStateFlag(CHAT_IMAGE_STATE, true); return }
   if (target.closest('[data-photo-index]')) { pushStateFlag(PHOTO_VIEWER_STATE, true); return }
   if (target.closest('[data-album-id]')) { pushStateFlag(PHOTOS_STATE, 2); return }
-  if (target.closest('#photos, #navphotos')) { pushStateFlag(PHOTOS_STATE, 1); return }
+  if (target.closest('#photos, #navphotos')) {
+    // Keep a guaranteed in-app home entry below the Albums view. This prevents
+    // Android hardware Back from leaving the PWA when Photos is the first
+    // navigated screen in the current browser history.
+    const base = { ...(history.state || {}), [PHOTOS_STATE]:0 }
+    history.replaceState(base, '', location.href)
+    history.pushState({ ...base, [PHOTOS_STATE]:1 }, '', location.href)
+    return
+  }
   if (target.closest('#chat, #navchat')) { pushStateFlag(CHAT_STATE, true); return }
   if (target.closest('#change')) { pushStateFlag(PROFILE_STATE, 1); return }
   if (target.closest('[data-profile-id]')) { pushStateFlag(PROFILE_STATE, 2); return }
