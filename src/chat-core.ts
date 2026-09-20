@@ -121,6 +121,8 @@ export async function openChat(options: OpenChatOptions) {
   let loadingOlder = false
   let stickToLatest = true
   let closed = false
+  type PendingPhoto = { id:string; file:File; objectUrl:string; replyToId:string | null; busy:boolean }
+  const photoQueue = new Map<string, PendingPhoto>()
 
   app.innerHTML = `<main class="chat-page"><button id="back" class="chat-native-back" type="button" aria-label="Volver"></button><section class="chat-messages" id="messages"><div class="chat-loading">Cargando mensajes…</div></section><div id="replyPreview"></div><form class="chat-composer" id="composer"><button class="chat-attach" id="chatAttach" type="button" aria-label="Adjuntar foto">＋</button><input id="chatAttachmentInput" type="file" accept="image/jpeg,image/png,image/webp,image/heic" hidden><input id="message" maxlength="2000" placeholder="Escribe algo…" autocomplete="off"><button class="chat-send" type="submit">Enviar</button></form></main>`
 
@@ -313,64 +315,88 @@ export async function openChat(options: OpenChatOptions) {
     input.focus()
   }
 
-  const pendingPhoto = (url: string) => {
-    const id = `pending-${crypto.randomUUID()}`
+  const pendingPhoto = (job: PendingPhoto) => {
     list.querySelector('.chat-empty')?.remove()
-    list.insertAdjacentHTML('beforeend', `<article class="chat-bubble mine chat-pending" data-pending-id="${id}"><a class="chat-attachment"><img src="${esc(url)}" alt="Foto" decoding="async"></a><small class="chat-meta"><span class="chat-spinner"></span> Enviando…</small></article>`)
+    list.insertAdjacentHTML('beforeend', `<article class="chat-bubble mine chat-pending" data-pending-id="${job.id}"><a class="chat-attachment"><img src="${esc(job.objectUrl)}" alt="Foto" decoding="async"></a><small class="chat-meta" data-pending-state><span class="chat-spinner"></span> Enviando…</small></article>`)
     stickToLatest = true
     requestAnimationFrame(scrollLatest)
-    return list.querySelector<HTMLElement>(`[data-pending-id="${id}"]`)
   }
 
-  const onPhoto = async () => {
-    const file = fileInput.files?.[0]
-    fileInput.value = ''
-    if (!file) return
-    if (!file.type.startsWith('image/')) { notify('Archivo no compatible', 'Selecciona una imagen.'); return }
-    if (file.type === 'image/gif') { notify('GIF no compatible', 'Envía una foto JPG, PNG, WebP o HEIC.'); return }
-    if (file.size > 15 * 1024 * 1024) { notify('Foto demasiado grande', 'La foto debe pesar menos de 15 MB.'); return }
+  const pendingElement = (id:string) => list.querySelector<HTMLElement>(`[data-pending-id="${CSS.escape(id)}"]`)
 
-    const objectUrl = URL.createObjectURL(file)
-    const pending = pendingPhoto(objectUrl)
-    attach.disabled = true
+  const setPendingState = (id:string, state:'sending'|'error') => {
+    const pending = pendingElement(id)
+    const meta = pending?.querySelector<HTMLElement>('[data-pending-state]')
+    if (!meta) return
+    meta.innerHTML = state === 'sending'
+      ? '<span class="chat-spinner"></span> Enviando…'
+      : '<button type="button" class="chat-retry" data-retry-photo>Reintentar</button> · No enviado'
+  }
+
+  const sendPhotoJob = async (job: PendingPhoto) => {
+    if (job.busy || closed) return
+    job.busy = true
+    setPendingState(job.id, 'sending')
+    let path = ''
     try {
-      const optimized = await optimizePhoto(file)
-      const path = `chat/${memberId}/${crypto.randomUUID()}.${optimized.ext}`
+      const optimized = await optimizePhoto(job.file)
+      path = `chat/${memberId}/${crypto.randomUUID()}.${optimized.ext}`
       const { error: uploadError } = await supabase.storage.from('family-photos').upload(path, optimized.blob, {
-        contentType:optimized.type,
-        cacheControl:'31536000',
-        upsert:false
+        contentType:optimized.type, cacheControl:'31536000', upsert:false
       })
       if (uploadError) throw uploadError
       const { data, error:insertError } = await supabase.from('messages').insert({
-        sender_id:memberId,
-        body:'',
-        attachment_path:path,
-        attachment_type:optimized.type,
-        attachment_name:optimized.name,
-        attachment_size:optimized.blob.size,
-        reply_to_id:features?.getReplyToId() || null
+        sender_id:memberId, body:'', attachment_path:path, attachment_type:optimized.type,
+        attachment_name:optimized.name, attachment_size:optimized.blob.size, reply_to_id:job.replyToId
       }).select(MESSAGE_FIELDS).single()
       if (insertError || !data) {
         await supabase.storage.from('family-photos').remove([path])
         throw insertError || new Error('Message insert failed')
       }
-      pending?.remove()
-      features?.clearReply()
+      pendingElement(job.id)?.remove()
+      photoQueue.delete(job.id)
+      URL.revokeObjectURL(job.objectUrl)
+      if (job.replyToId === features?.getReplyToId()) features?.clearReply()
       const message = nameRow(data as RawChatRow)
       if (!byId.has(message.id)) await appendMessage(message, true)
       else scrollLatest()
     } catch (error) {
       console.error('Chat photo send failed', error)
-      if (pending) {
-        const meta = pending.querySelector<HTMLElement>('.chat-meta')
-        if (meta) meta.textContent = 'No se pudo enviar'
-        window.setTimeout(() => pending.remove(), 2200)
-      }
-    } finally {
-      attach.disabled = false
-      URL.revokeObjectURL(objectUrl)
+      job.busy = false
+      setPendingState(job.id, 'error')
     }
+  }
+
+  const onPhoto = () => {
+    const files = Array.from(fileInput.files || [])
+    fileInput.value = ''
+    for (const file of files) {
+      if (!file.type.startsWith('image/')) { notify('Archivo no compatible', 'Selecciona una imagen.'); continue }
+      if (file.type === 'image/gif') { notify('GIF no compatible', 'Envía una foto JPG, PNG, WebP o HEIC.'); continue }
+      if (file.size > 15 * 1024 * 1024) { notify('Foto demasiado grande', 'La foto debe pesar menos de 15 MB.'); continue }
+      const job: PendingPhoto = {
+        id:`pending-${crypto.randomUUID()}`,
+        file,
+        objectUrl:URL.createObjectURL(file),
+        replyToId:features?.getReplyToId() || null,
+        busy:false
+      }
+      photoQueue.set(job.id, job)
+      pendingPhoto(job)
+      void sendPhotoJob(job)
+    }
+  }
+
+  const onPendingClick = (event:Event) => {
+    const button = (event.target as HTMLElement).closest<HTMLElement>('[data-retry-photo]')
+    if (!button) return
+    const pending = button.closest<HTMLElement>('[data-pending-id]')
+    const job = pending?.dataset.pendingId ? photoQueue.get(pending.dataset.pendingId) : null
+    if (job) void sendPhotoJob(job)
+  }
+
+  const onOnline = () => {
+    photoQueue.forEach(job => { if (!job.busy) void sendPhotoJob(job) })
   }
 
   const viewport = window.visualViewport
@@ -380,6 +406,8 @@ export async function openChat(options: OpenChatOptions) {
   composer.addEventListener('submit', onSubmit)
   attach.addEventListener('click', () => fileInput.click())
   fileInput.addEventListener('change', onPhoto)
+  list.addEventListener('click', onPendingClick)
+  window.addEventListener('online', onOnline)
   viewport?.addEventListener('resize', updateViewport)
   viewport?.addEventListener('scroll', updateViewport)
   window.addEventListener('resize', updateViewport)
@@ -415,6 +443,10 @@ export async function openChat(options: OpenChatOptions) {
     input.removeEventListener('focus', onFocus)
     composer.removeEventListener('submit', onSubmit)
     fileInput.removeEventListener('change', onPhoto)
+    list.removeEventListener('click', onPendingClick)
+    window.removeEventListener('online', onOnline)
+    photoQueue.forEach(job => URL.revokeObjectURL(job.objectUrl))
+    photoQueue.clear()
     viewport?.removeEventListener('resize', updateViewport)
     viewport?.removeEventListener('scroll', updateViewport)
     window.removeEventListener('resize', updateViewport)
