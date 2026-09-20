@@ -3,6 +3,8 @@ import { supabase } from './supabase'
 import { clearIdentity, getIdentity, setIdentity } from './core/identity'
 import { closeChat, openChat } from './chat-core'
 import { startHomeChatUnread, stopHomeChatUnread } from './chat-features'
+import { initNavigation, enterView, replaceView, type AppView } from './core/navigation'
+import { closeMediaViewer, isMediaViewerOpen } from './core/media-viewer'
 
 type Member = { id: string; name: string; active: boolean; must_share_location: boolean }
 
@@ -136,7 +138,8 @@ function startFamilyRealtime() {
     .subscribe()
 }
 
-function openChatScreen() {
+function openChatScreen(push = true) {
+  if (push) enterView('chat')
   stopHomeChatUnread()
   void openChat({
     app,
@@ -149,6 +152,7 @@ function openChatScreen() {
 }
 
 function renderHome() {
+  replaceView('home')
   closeChat()
   stopHomeChatUnread()
   app.innerHTML = `<main class="shell"><header class="top"><div><p class="eyebrow">FAMILIA NOA</p><h1>Hola, ${esc(memberName)} <span>♡</span></h1></div><button class="avatar" id="change">${esc(memberName.charAt(0))}</button></header><section class="hero"><p class="eyebrow">TODOS CERCA</p><h2>¿Cómo está la familia hoy?</h2><p>Habla, comparte y revisa que todos estén bien.</p></section><section class="grid"><button class="card dark" id="chat"><i>✦</i><b>Chat</b><small>Habla con todos</small></button><button class="card photo" id="photos"><i>◌</i><b>Fotos</b><small>Momentos de familia</small></button><button class="card" id="location"><i>⌖</i><b>Ubicación</b><small>Ver dónde estamos</small></button><button class="card ok" id="ok"><i>♥</i><b>Estoy bien</b><small>Avísale a la familia</small></button><button class="card help" id="help"><i>!</i><b>Ayuda</b><small>Necesito a mi familia</small></button></section><nav><button class="active">Inicio</button><button id="navchat">Chat</button><button id="navphotos">Fotos</button><button id="navlocation">Ubicación</button></nav></main>`
@@ -163,10 +167,10 @@ function renderHome() {
     settingsChannel?.unsubscribe()
     login()
   })
-  document.querySelector('#chat')!.addEventListener('click', openChatScreen)
-  document.querySelector('#navchat')!.addEventListener('click', openChatScreen)
-  document.querySelector('#photos')!.addEventListener('click', renderPhotos)
-  document.querySelector('#navphotos')!.addEventListener('click', renderPhotos)
+  document.querySelector('#chat')!.addEventListener('click', () => openChatScreen())
+  document.querySelector('#navchat')!.addEventListener('click', () => openChatScreen())
+  document.querySelector('#photos')!.addEventListener('click', () => void renderPhotos())
+  document.querySelector('#navphotos')!.addEventListener('click', () => void renderPhotos())
   document.querySelector('#location')!.addEventListener('click', renderLocation)
   document.querySelector('#navlocation')!.addEventListener('click', renderLocation)
   document.querySelector('#ok')!.addEventListener('click', setWellbeing)
@@ -185,7 +189,8 @@ async function sendHelp() {
   sheet(error ? 'No se pudo enviar' : 'Ayuda enviada', error ? 'Inténtalo de nuevo en un momento.' : 'La familia recibirá tu alerta.')
 }
 
-async function renderPhotos() {
+async function renderPhotos(push = true) {
+  if (push) enterView('photos')
   stopHomeChatUnread()
   closeChat()
   app.innerHTML = '<main class="page photo-page" data-photo-page><div class="loading">Cargando álbumes…</div></main>'
@@ -253,3 +258,11 @@ async function boot() {
 
 void loadSettings()
 void boot()
+
+initNavigation((view:AppView) => {
+  if (view === 'media') return
+  if (isMediaViewerOpen()) closeMediaViewer()
+  if (view === 'chat') { openChatScreen(false); return }
+  if (view === 'photos' || view === 'album') { void renderPhotos(false); return }
+  if (view === 'home') renderHome()
+})
