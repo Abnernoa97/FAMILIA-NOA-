@@ -11,15 +11,29 @@ function bindChatViewport(page: HTMLElement) {
   if (!list || !input || !composer) return () => {}
 
   let stickToLatest = true
-  let forceLatestUntil = 0
-  let revealTimer: number | null = null
+  let initialPositioned = false
   let listObserver: MutationObserver | null = null
 
-  const scrollLatest = (behavior: ScrollBehavior = 'auto') => {
+  // The old floating arrow is no longer part of Chat.
+  page.querySelector('#chatTop')?.remove()
+
+  const jumpLatest = () => {
     if (!list.isConnected) return
-    stickToLatest = true
-    if (behavior === 'smooth') list.scrollTo({ top: list.scrollHeight, behavior })
-    else list.scrollTop = list.scrollHeight
+    list.scrollTop = Math.max(0, list.scrollHeight - list.clientHeight)
+  }
+
+  const revealAtLatest = () => {
+    if (initialPositioned) return
+    if (!list.querySelector('.bubble, .empty')) return
+
+    jumpLatest()
+    requestAnimationFrame(() => {
+      if (!list.isConnected) return
+      jumpLatest()
+      initialPositioned = true
+      stickToLatest = true
+      list.classList.add('chat-ready')
+    })
   }
 
   const updateViewport = () => {
@@ -31,71 +45,45 @@ function bindChatViewport(page: HTMLElement) {
     page.style.setProperty('--chat-viewport-top', `${top}px`)
 
     if (document.activeElement === input || stickToLatest) {
-      requestAnimationFrame(() => scrollLatest())
+      requestAnimationFrame(jumpLatest)
     }
   }
 
-  const revealDirectlyAtLatest = () => {
-    if (!list.querySelector('.bubble')) return
-    list.classList.add('chat-positioning')
-    listObserver?.disconnect()
-    listObserver = null
-    if (revealTimer) window.clearTimeout(revealTimer)
-
-    requestAnimationFrame(() => {
-      requestAnimationFrame(() => {
-        revealTimer = window.setTimeout(() => {
-          if (!list.isConnected) return
-          scrollLatest()
-          list.classList.remove('chat-positioning')
-        }, 160)
-      })
-    })
-  }
-
-  listObserver = new MutationObserver(() => revealDirectlyAtLatest())
-  listObserver.observe(list, { childList: true })
-  if (list.querySelector('.bubble')) revealDirectlyAtLatest()
-
-  const oldButton = page.querySelector<HTMLButtonElement>('#chatTop')
-  let latestButton: HTMLButtonElement | null = null
-  if (oldButton) {
-    latestButton = oldButton.cloneNode(true) as HTMLButtonElement
-    latestButton.textContent = '↓'
-    latestButton.setAttribute('aria-label', 'Ir al último mensaje')
-    latestButton.title = 'Ir al último mensaje'
-    oldButton.replaceWith(latestButton)
-  }
-
-  const onLatestClick = () => scrollLatest('smooth')
-  latestButton?.addEventListener('click', onLatestClick)
+  listObserver = new MutationObserver(() => {
+    if (!initialPositioned) {
+      revealAtLatest()
+      return
+    }
+    if (stickToLatest || document.activeElement === input) {
+      requestAnimationFrame(jumpLatest)
+    }
+  })
+  listObserver.observe(list, { childList: true, subtree: true })
+  revealAtLatest()
 
   const onScroll = () => {
+    if (!initialPositioned) return
     stickToLatest = isNearBottom(list)
   }
   list.addEventListener('scroll', onScroll, { passive: true })
 
   const onFocus = () => {
     stickToLatest = true
-    requestAnimationFrame(() => scrollLatest())
-    window.setTimeout(() => scrollLatest(), 80)
-    window.setTimeout(() => scrollLatest(), 220)
+    requestAnimationFrame(jumpLatest)
   }
   input.addEventListener('focus', onFocus)
 
   const onSubmit = () => {
     stickToLatest = true
-    forceLatestUntil = performance.now() + 2500
-    requestAnimationFrame(() => scrollLatest())
+    requestAnimationFrame(jumpLatest)
   }
   composer.addEventListener('submit', onSubmit, { capture: true })
 
   const onChatMessage = (event: Event) => {
     const detail = (event as CustomEvent<{ type?: string }>).detail
     if (detail?.type !== 'insert') return
-    if (stickToLatest || performance.now() < forceLatestUntil) {
-      requestAnimationFrame(() => scrollLatest())
-      window.setTimeout(() => scrollLatest(), 80)
+    if (stickToLatest || document.activeElement === input) {
+      requestAnimationFrame(jumpLatest)
     }
   }
   window.addEventListener('familia-noa:chat-message', onChatMessage)
@@ -108,10 +96,8 @@ function bindChatViewport(page: HTMLElement) {
   updateViewport()
 
   return () => {
-    if (revealTimer) window.clearTimeout(revealTimer)
     listObserver?.disconnect()
     listObserver = null
-    latestButton?.removeEventListener('click', onLatestClick)
     list.removeEventListener('scroll', onScroll)
     input.removeEventListener('focus', onFocus)
     composer.removeEventListener('submit', onSubmit, { capture: true })
@@ -120,7 +106,7 @@ function bindChatViewport(page: HTMLElement) {
     viewport?.removeEventListener('scroll', updateViewport)
     window.removeEventListener('resize', updateViewport)
     window.removeEventListener('orientationchange', updateViewport)
-    list.classList.remove('chat-positioning')
+    list.classList.remove('chat-ready')
   }
 }
 
