@@ -146,7 +146,6 @@ function openChatScreen(push = true) {
     memberId,
     memberName,
     members:members.map(member => ({ id:member.id, name:member.name })),
-    onBack:renderHome,
     notify:sheet
   })
 }
