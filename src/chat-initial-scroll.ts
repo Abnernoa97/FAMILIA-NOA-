@@ -5,6 +5,7 @@ let cleanupTimer: number | null = null
 let hydrationStarted = false
 let stickUntil = 0
 let interrupted = false
+let scanScheduled = false
 
 function clearListState() {
   listObserver?.disconnect()
@@ -49,12 +50,13 @@ function startHydrationWindow() {
 
 function bindLatestButton() {
   const button = document.querySelector<HTMLButtonElement>('.chat-page #chatTop')
-  if (!button) return
-  button.textContent = '↓'
+  if (!button || button.dataset.latestBound === '1') return
+
+  // Mark first so changing textContent cannot create a MutationObserver feedback loop.
+  button.dataset.latestBound = '1'
+  if (button.textContent !== '↓') button.textContent = '↓'
   button.setAttribute('aria-label', 'Ir al último mensaje')
   button.title = 'Ir al último mensaje'
-  if (button.dataset.latestBound === '1') return
-  button.dataset.latestBound = '1'
   button.addEventListener('click', event => {
     event.preventDefault()
     event.stopImmediatePropagation()
@@ -99,12 +101,20 @@ function scan() {
   const list = document.querySelector<HTMLElement>('.chat-page #messages')
   if (list) {
     bindList(list)
-    bindLatestButton()
     return
   }
   if (activeList) clearListState()
 }
 
-pageObserver = new MutationObserver(scan)
+function scheduleScan() {
+  if (scanScheduled) return
+  scanScheduled = true
+  requestAnimationFrame(() => {
+    scanScheduled = false
+    scan()
+  })
+}
+
+pageObserver = new MutationObserver(scheduleScan)
 pageObserver.observe(document.body, { childList: true, subtree: true })
 scan()
