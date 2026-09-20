@@ -1,8 +1,6 @@
 /* CHAT MINIMAL UI — compact, quiet controls, content first. */
-.chat-page .pagehead{padding:8px 12px 4px;gap:0}
-.chat-page .pagehead>div{display:none!important}
-.chat-page .pagehead>button:first-child{width:38px;height:38px;font-size:25px}
-.chat-page .messages{gap:6px;padding:14px 14px 10px}
+.chat-page .pagehead{display:none!important}
+.chat-page .messages{gap:6px;padding:max(8px,env(safe-area-inset-top)) 14px 10px}
 .chat-page .bubble{max-width:min(82%,520px);padding:9px 11px 7px;border-radius:16px 16px 16px 5px;box-shadow:none}
 .chat-page .bubble.mine{border-radius:16px 16px 5px 16px}
 .chat-page .bubble p{font-size:15px;line-height:1.38}
@@ -40,7 +38,7 @@
 .chat-page .composer input{height:44px;font-size:14px}
 .chat-page .composer>button[type="submit"]{height:44px;padding:0 16px}
 .chat-page .chat-attach-button{width:44px!important;height:44px!important;flex-basis:44px!important;background:#171716!important;color:#fff!important;border:0!important}
-.chat-page .back-to-top{width:34px!important;height:34px!important;right:12px!important;bottom:calc(60px + env(safe-area-inset-bottom))!important;font-size:16px;opacity:.9}
+.chat-page .back-to-top{width:34px!important;height:34px!important;right:12px!important;bottom:calc(60px + env(safe-area-inset-bottom))!important;font-size:18px;opacity:.9}
 
 @media(max-width:480px){
   .chat-page .bubble{max-width:86%}
