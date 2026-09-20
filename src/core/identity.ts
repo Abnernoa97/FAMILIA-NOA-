@@ -5,28 +5,45 @@ export type FamilyIdentity = {
   name: string
 }
 
-const PROFILE_KEY = 'familia-noa-profile'
-const MEMBER_KEY = 'familia-noa-member'
+const IDENTITY_KEY = 'familia-noa-identity'
+const LEGACY_PROFILE_KEY = 'familia-noa-profile'
+const LEGACY_MEMBER_KEY = 'familia-noa-member'
 const IDENTITY_EVENT = 'familia-noa:identity-changed'
 
-function readProfile(): FamilyIdentity | null {
+function normalize(value: any): FamilyIdentity | null {
+  const memberId = value?.memberId || value?.id
+  const name = value?.name
+  if (!memberId || !name) return null
+  return { memberId: String(memberId), name: String(name) }
+}
+
+function readIdentity(): FamilyIdentity | null {
   try {
-    const raw = sessionStorage.getItem(PROFILE_KEY)
-    if (!raw) return null
-    const value = JSON.parse(raw) as Partial<FamilyIdentity> & { id?: string }
-    if (!value?.id && !value?.memberId) return null
-    if (!value.name) return null
-    return {
-      memberId: String(value.memberId || value.id),
-      name: String(value.name),
+    const raw = sessionStorage.getItem(IDENTITY_KEY)
+    if (raw) return normalize(JSON.parse(raw))
+
+    // One-time migration for devices that still have the pre-centralized session.
+    const legacy = sessionStorage.getItem(LEGACY_PROFILE_KEY)
+    if (legacy) {
+      const identity = normalize(JSON.parse(legacy))
+      if (identity) {
+        sessionStorage.setItem(IDENTITY_KEY, JSON.stringify(identity))
+        sessionStorage.removeItem(LEGACY_PROFILE_KEY)
+        localStorage.removeItem(LEGACY_MEMBER_KEY)
+        return identity
+      }
     }
   } catch {
-    return null
+    // Invalid/stale browser state is discarded below.
   }
+  sessionStorage.removeItem(IDENTITY_KEY)
+  sessionStorage.removeItem(LEGACY_PROFILE_KEY)
+  localStorage.removeItem(LEGACY_MEMBER_KEY)
+  return null
 }
 
 export function getIdentity(): FamilyIdentity | null {
-  return readProfile()
+  return readIdentity()
 }
 
 export function getMemberId(): string {
@@ -34,7 +51,7 @@ export function getMemberId(): string {
 }
 
 export function getMemberName(): string {
-  return getIdentity()?.name || localStorage.getItem(MEMBER_KEY) || ''
+  return getIdentity()?.name || ''
 }
 
 export function isAuthenticated(): boolean {
@@ -42,14 +59,18 @@ export function isAuthenticated(): boolean {
 }
 
 export function setIdentity(identity: FamilyIdentity): void {
-  localStorage.setItem(MEMBER_KEY, identity.name)
-  sessionStorage.setItem(PROFILE_KEY, JSON.stringify({ id: identity.memberId, memberId: identity.memberId, name: identity.name }))
-  window.dispatchEvent(new CustomEvent<FamilyIdentity>(IDENTITY_EVENT, { detail: identity }))
+  const normalized = normalize(identity)
+  if (!normalized) return
+  sessionStorage.setItem(IDENTITY_KEY, JSON.stringify(normalized))
+  sessionStorage.removeItem(LEGACY_PROFILE_KEY)
+  localStorage.removeItem(LEGACY_MEMBER_KEY)
+  window.dispatchEvent(new CustomEvent<FamilyIdentity>(IDENTITY_EVENT, { detail: normalized }))
 }
 
 export function clearIdentity(): void {
-  localStorage.removeItem(MEMBER_KEY)
-  sessionStorage.removeItem(PROFILE_KEY)
+  sessionStorage.removeItem(IDENTITY_KEY)
+  sessionStorage.removeItem(LEGACY_PROFILE_KEY)
+  localStorage.removeItem(LEGACY_MEMBER_KEY)
   window.dispatchEvent(new CustomEvent(IDENTITY_EVENT))
 }
 
