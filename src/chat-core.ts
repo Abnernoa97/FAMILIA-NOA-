@@ -143,9 +143,7 @@ export async function openChat(options: OpenChatOptions) {
     list.scrollTop = Math.max(0, list.scrollHeight - list.clientHeight)
   }
 
-  const updateViewport = () => {
-    if (!page.isConnected) return
-    const closeImageViewer = () => document.querySelector('.chat-image-viewer')?.remove()
+  const closeImageViewer = () => document.querySelector('.chat-image-viewer')?.remove()
 
   const onImageClick = (event:Event) => {
     const button = (event.target as HTMLElement).closest<HTMLElement>('[data-chat-image]')
@@ -163,7 +161,9 @@ export async function openChat(options: OpenChatOptions) {
     document.body.appendChild(viewer)
   }
 
-  const viewport = window.visualViewport
+  const updateViewport = () => {
+    if (!page.isConnected) return
+    const viewport = window.visualViewport
     const height = Math.max(1, Math.round(viewport?.height || window.innerHeight))
     const top = Math.max(0, Math.round(viewport?.offsetTop || 0))
     page.style.setProperty('--chat-vh', `${height}px`)
