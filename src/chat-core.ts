@@ -2,6 +2,7 @@ import { supabase } from './supabase'
 import { startChatFeatures } from './chat-features'
 import { openMediaViewer, closeMediaViewer } from './core/media-viewer'
 import { enterView, backView } from './core/navigation'
+import { Outbox } from './core/outbox'
 
 type ChatMessage = {
   id: string
@@ -123,10 +124,10 @@ export async function openChat(options: OpenChatOptions) {
   let loadingOlder = false
   let stickToLatest = true
   let closed = false
-  type PendingPhoto = { id:string; file:File; objectUrl:string; replyToId:string | null; busy:boolean }
-  const photoQueue = new Map<string, PendingPhoto>()
-  type PendingText = { id:string; body:string; replyToId:string | null; busy:boolean }
-  const textQueue = new Map<string, PendingText>()
+  type PendingText = { kind:'text'; id:string; body:string; replyToId:string|null; busy:boolean }
+  type PendingPhoto = { kind:'photo'; id:string; file:File; objectUrl:string; replyToId:string|null; busy:boolean }
+  type PendingJob = PendingText | PendingPhoto
+  let outbox: Outbox<PendingJob>
 
   app.innerHTML = `<main class="chat-page"><button id="back" class="chat-native-back" type="button" aria-label="Volver"></button><section class="chat-messages" id="messages"><div class="chat-loading">Cargando mensajes…</div></section><div id="replyPreview"></div><form class="chat-composer" id="composer"><button class="chat-attach" id="chatAttach" type="button" aria-label="Adjuntar foto">＋</button><input id="chatAttachmentInput" type="file" accept="image/jpeg,image/png,image/webp,image/heic" hidden><input id="message" maxlength="2000" placeholder="Escribe algo…" autocomplete="off"><button class="chat-send" type="submit">Enviar</button></form></main>`
 
@@ -325,8 +326,6 @@ export async function openChat(options: OpenChatOptions) {
   }
 
   const sendTextJob = async (job:PendingText) => {
-    if (job.busy || closed) return
-    job.busy = true
     setPendingTextState(job.id, 'sending')
     const payload:Record<string,unknown> = { sender_id:memberId, body:job.body }
     if (job.replyToId) payload.reply_to_id = job.replyToId
@@ -334,14 +333,14 @@ export async function openChat(options: OpenChatOptions) {
       const { data, error } = await supabase.from('messages').insert(payload).select(MESSAGE_FIELDS).single()
       if (error || !data) throw error || new Error('Message insert failed')
       pendingTextElement(job.id)?.remove()
-      textQueue.delete(job.id)
+      outbox.done(job.id)
       const message = nameRow(data as RawChatRow)
       if (!byId.has(message.id)) await appendMessage(message, true)
       else scrollLatest()
     } catch (error) {
       console.error('Chat text send failed', error)
-      job.busy = false
       setPendingTextState(job.id, 'error')
+      throw error
     }
   }
 
@@ -350,6 +349,7 @@ export async function openChat(options: OpenChatOptions) {
     const body = input.value.trim()
     if (!body || !memberId) return
     const job:PendingText = {
+      kind:'text',
       id:`pending-text-${crypto.randomUUID()}`,
       body,
       replyToId:features?.getReplyToId() || null,
@@ -357,9 +357,8 @@ export async function openChat(options: OpenChatOptions) {
     }
     input.value = ''
     features?.clearReply()
-    textQueue.set(job.id, job)
     renderPendingText(job)
-    void sendTextJob(job)
+    outbox.add(job)
     input.focus()
   }
 
@@ -382,8 +381,6 @@ export async function openChat(options: OpenChatOptions) {
   }
 
   const sendPhotoJob = async (job: PendingPhoto) => {
-    if (job.busy || closed) return
-    job.busy = true
     setPendingState(job.id, 'sending')
     let path = ''
     try {
@@ -402,7 +399,7 @@ export async function openChat(options: OpenChatOptions) {
         throw insertError || new Error('Message insert failed')
       }
       pendingElement(job.id)?.remove()
-      photoQueue.delete(job.id)
+      outbox.done(job.id)
       URL.revokeObjectURL(job.objectUrl)
       if (job.replyToId === features?.getReplyToId()) features?.clearReply()
       const message = nameRow(data as RawChatRow)
@@ -410,10 +407,12 @@ export async function openChat(options: OpenChatOptions) {
       else scrollLatest()
     } catch (error) {
       console.error('Chat photo send failed', error)
-      job.busy = false
       setPendingState(job.id, 'error')
+      throw error
     }
   }
+
+  outbox = new Outbox<PendingJob>(job => job.kind === 'text' ? sendTextJob(job) : sendPhotoJob(job))
 
   const onPhoto = () => {
     const files = Array.from(fileInput.files || [])
@@ -423,15 +422,15 @@ export async function openChat(options: OpenChatOptions) {
       if (file.type === 'image/gif') { notify('GIF no compatible', 'Envía una foto JPG, PNG, WebP o HEIC.'); continue }
       if (file.size > 15 * 1024 * 1024) { notify('Foto demasiado grande', 'La foto debe pesar menos de 15 MB.'); continue }
       const job: PendingPhoto = {
+        kind:'photo',
         id:`pending-${crypto.randomUUID()}`,
         file,
         objectUrl:URL.createObjectURL(file),
         replyToId:features?.getReplyToId() || null,
         busy:false
       }
-      photoQueue.set(job.id, job)
       pendingPhoto(job)
-      void sendPhotoJob(job)
+      outbox.add(job)
     }
   }
 
@@ -452,10 +451,6 @@ export async function openChat(options: OpenChatOptions) {
     }
   }
 
-  const onOnline = () => {
-    photoQueue.forEach(job => { if (!job.busy) void sendPhotoJob(job) })
-    textQueue.forEach(job => { if (!job.busy) void sendTextJob(job) })
-  }
 
   const viewport = window.visualViewport
   back.addEventListener('click', backView)
@@ -466,7 +461,6 @@ export async function openChat(options: OpenChatOptions) {
   fileInput.addEventListener('change', onPhoto)
   list.addEventListener('click', onPendingClick)
   list.addEventListener('click', onImageClick)
-  window.addEventListener('online', onOnline)
   viewport?.addEventListener('resize', updateViewport)
   viewport?.addEventListener('scroll', updateViewport)
   window.addEventListener('resize', updateViewport)
@@ -505,10 +499,7 @@ export async function openChat(options: OpenChatOptions) {
     list.removeEventListener('click', onPendingClick)
     list.removeEventListener('click', onImageClick)
     closeMediaViewer()
-    window.removeEventListener('online', onOnline)
-    photoQueue.forEach(job => URL.revokeObjectURL(job.objectUrl))
-    photoQueue.clear()
-    textQueue.clear()
+    outbox.clear(job => { if (job.kind === 'photo') URL.revokeObjectURL(job.objectUrl) })
     viewport?.removeEventListener('resize', updateViewport)
     viewport?.removeEventListener('scroll', updateViewport)
     window.removeEventListener('resize', updateViewport)
