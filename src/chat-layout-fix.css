@@ -37,10 +37,12 @@ body:has(.chat-page) #app{
   overflow-y:auto !important;
   overscroll-behavior:contain;
   -webkit-overflow-scrolling:touch;
+  scroll-behavior:auto !important;
   padding-bottom:10px;
 }
 
-.chat-page .messages.chat-positioning{
+/* Do not show the history at the top and then animate downward. */
+.chat-page .messages:not(.chat-ready){
   visibility:hidden !important;
 }
 
@@ -67,12 +69,10 @@ body:has(.chat-page) #app{
   padding:8px 10px max(8px,env(safe-area-inset-bottom)) !important;
 }
 
-.chat-page .back-to-top{
-  position:absolute !important;
-  right:14px !important;
-  bottom:calc(68px + env(safe-area-inset-bottom)) !important;
-  width:38px !important;
-  height:38px !important;
+/* Legacy arrow controls are disabled completely. */
+.chat-page .back-to-top,
+.chat-page .chat-new-indicator{
+  display:none !important;
 }
 
 .chat-page .chat-attachment img{
