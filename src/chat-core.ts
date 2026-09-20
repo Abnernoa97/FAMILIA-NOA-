@@ -51,7 +51,7 @@ function bubbleHtml(message: ChatMessage, quoted: ChatMessage | null, mine: bool
   const deleted = !!message.deleted_at
   const isImage = !deleted && !!message.attachment_path && (message.attachment_type || '').startsWith('image/')
   const attachment = isImage
-    ? `<a class="chat-attachment" href="${esc(storageUrl(message.attachment_path!))}" target="_blank" rel="noreferrer"><img src="${esc(storageUrl(message.attachment_path!))}" alt="${esc(message.attachment_name || 'Foto')}" ${priorityImage ? 'loading="eager" fetchpriority="high"' : 'loading="lazy"'} decoding="async"></a>`
+    ? `<button type="button" class="chat-attachment" data-chat-image="${esc(storageUrl(message.attachment_path!))}" aria-label="Ver foto"><img src="${esc(storageUrl(message.attachment_path!))}" alt="${esc(message.attachment_name || 'Foto')}" ${priorityImage ? 'loading="eager" fetchpriority="high"' : 'loading="lazy"'} decoding="async"></button>`
     : ''
   const body = deleted ? 'Mensaje eliminado' : message.body
   const bodyHtml = body ? `<p>${esc(body)}</p>` : ''
@@ -145,7 +145,25 @@ export async function openChat(options: OpenChatOptions) {
 
   const updateViewport = () => {
     if (!page.isConnected) return
-    const viewport = window.visualViewport
+    const closeImageViewer = () => document.querySelector('.chat-image-viewer')?.remove()
+
+  const onImageClick = (event:Event) => {
+    const button = (event.target as HTMLElement).closest<HTMLElement>('[data-chat-image]')
+    if (!button) return
+    const src = button.dataset.chatImage
+    if (!src) return
+    closeImageViewer()
+    const viewer = document.createElement('div')
+    viewer.className = 'chat-image-viewer'
+    viewer.innerHTML = `<button type="button" class="chat-image-close" aria-label="Cerrar">×</button><img src="${esc(src)}" alt="Foto del chat">`
+    viewer.addEventListener('click', event => {
+      const target = event.target as HTMLElement
+      if (target === viewer || target.closest('.chat-image-close')) closeImageViewer()
+    })
+    document.body.appendChild(viewer)
+  }
+
+  const viewport = window.visualViewport
     const height = Math.max(1, Math.round(viewport?.height || window.innerHeight))
     const top = Math.max(0, Math.round(viewport?.offsetTop || 0))
     page.style.setProperty('--chat-vh', `${height}px`)
@@ -455,6 +473,7 @@ export async function openChat(options: OpenChatOptions) {
   attach.addEventListener('click', () => fileInput.click())
   fileInput.addEventListener('change', onPhoto)
   list.addEventListener('click', onPendingClick)
+  list.addEventListener('click', onImageClick)
   window.addEventListener('online', onOnline)
   viewport?.addEventListener('resize', updateViewport)
   viewport?.addEventListener('scroll', updateViewport)
@@ -492,6 +511,8 @@ export async function openChat(options: OpenChatOptions) {
     composer.removeEventListener('submit', onSubmit)
     fileInput.removeEventListener('change', onPhoto)
     list.removeEventListener('click', onPendingClick)
+    list.removeEventListener('click', onImageClick)
+    closeImageViewer()
     window.removeEventListener('online', onOnline)
     photoQueue.forEach(job => URL.revokeObjectURL(job.objectUrl))
     photoQueue.clear()
