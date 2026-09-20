@@ -123,6 +123,8 @@ export async function openChat(options: OpenChatOptions) {
   let closed = false
   type PendingPhoto = { id:string; file:File; objectUrl:string; replyToId:string | null; busy:boolean }
   const photoQueue = new Map<string, PendingPhoto>()
+  type PendingText = { id:string; body:string; replyToId:string | null; busy:boolean }
+  const textQueue = new Map<string, PendingText>()
 
   app.innerHTML = `<main class="chat-page"><button id="back" class="chat-native-back" type="button" aria-label="Volver"></button><section class="chat-messages" id="messages"><div class="chat-loading">Cargando mensajes…</div></section><div id="replyPreview"></div><form class="chat-composer" id="composer"><button class="chat-attach" id="chatAttach" type="button" aria-label="Adjuntar foto">＋</button><input id="chatAttachmentInput" type="file" accept="image/jpeg,image/png,image/webp,image/heic" hidden><input id="message" maxlength="2000" placeholder="Escribe algo…" autocomplete="off"><button class="chat-send" type="submit">Enviar</button></form></main>`
 
@@ -294,24 +296,60 @@ export async function openChat(options: OpenChatOptions) {
     requestAnimationFrame(scrollLatest)
   }
 
-  const onSubmit = async (event: SubmitEvent) => {
+  const pendingTextElement = (id:string) => list.querySelector<HTMLElement>(`[data-pending-text-id="${CSS.escape(id)}"]`)
+
+  const renderPendingText = (job:PendingText) => {
+    const quoted = job.replyToId ? byId.get(job.replyToId) || null : null
+    list.querySelector('.chat-empty')?.remove()
+    list.insertAdjacentHTML('beforeend', `<article class="chat-bubble mine chat-pending" data-pending-text-id="${job.id}">${quotedHtml(quoted)}<p>${esc(job.body)}</p><small class="chat-meta" data-pending-text-state><span class="chat-spinner"></span> Enviando…</small></article>`)
+    stickToLatest = true
+    requestAnimationFrame(scrollLatest)
+  }
+
+  const setPendingTextState = (id:string, state:'sending'|'error') => {
+    const meta = pendingTextElement(id)?.querySelector<HTMLElement>('[data-pending-text-state]')
+    if (!meta) return
+    meta.innerHTML = state === 'sending'
+      ? '<span class="chat-spinner"></span> Enviando…'
+      : '<button type="button" class="chat-retry" data-retry-text>Reintentar</button> · No enviado'
+  }
+
+  const sendTextJob = async (job:PendingText) => {
+    if (job.busy || closed) return
+    job.busy = true
+    setPendingTextState(job.id, 'sending')
+    const payload:Record<string,unknown> = { sender_id:memberId, body:job.body }
+    if (job.replyToId) payload.reply_to_id = job.replyToId
+    try {
+      const { data, error } = await supabase.from('messages').insert(payload).select(MESSAGE_FIELDS).single()
+      if (error || !data) throw error || new Error('Message insert failed')
+      pendingTextElement(job.id)?.remove()
+      textQueue.delete(job.id)
+      const message = nameRow(data as RawChatRow)
+      if (!byId.has(message.id)) await appendMessage(message, true)
+      else scrollLatest()
+    } catch (error) {
+      console.error('Chat text send failed', error)
+      job.busy = false
+      setPendingTextState(job.id, 'error')
+    }
+  }
+
+  const onSubmit = (event: SubmitEvent) => {
     event.preventDefault()
     const body = input.value.trim()
     if (!body || !memberId) return
-    const replyToId = features?.getReplyToId() || null
-    input.disabled = true
-    const payload: Record<string, unknown> = { sender_id:memberId, body }
-    if (replyToId) payload.reply_to_id = replyToId
-    const { data, error } = await supabase.from('messages').insert(payload).select(MESSAGE_FIELDS).single()
-    input.disabled = false
-    if (error || !data) {
-      notify('No se pudo enviar', 'Inténtalo de nuevo en un momento.')
-      return
+    const job:PendingText = {
+      id:`pending-text-${crypto.randomUUID()}`,
+      body,
+      replyToId:features?.getReplyToId() || null,
+      busy:false
     }
     input.value = ''
     features?.clearReply()
-    const message = nameRow(data as RawChatRow)
-    await appendMessage(message, true)
+    textQueue.set(job.id, job)
+    renderPendingText(job)
+    void sendTextJob(job)
     input.focus()
   }
 
@@ -388,15 +426,25 @@ export async function openChat(options: OpenChatOptions) {
   }
 
   const onPendingClick = (event:Event) => {
-    const button = (event.target as HTMLElement).closest<HTMLElement>('[data-retry-photo]')
-    if (!button) return
-    const pending = button.closest<HTMLElement>('[data-pending-id]')
-    const job = pending?.dataset.pendingId ? photoQueue.get(pending.dataset.pendingId) : null
-    if (job) void sendPhotoJob(job)
+    const target = event.target as HTMLElement
+    const photoButton = target.closest<HTMLElement>('[data-retry-photo]')
+    if (photoButton) {
+      const pending = photoButton.closest<HTMLElement>('[data-pending-id]')
+      const job = pending?.dataset.pendingId ? photoQueue.get(pending.dataset.pendingId) : null
+      if (job) void sendPhotoJob(job)
+      return
+    }
+    const textButton = target.closest<HTMLElement>('[data-retry-text]')
+    if (textButton) {
+      const pending = textButton.closest<HTMLElement>('[data-pending-text-id]')
+      const job = pending?.dataset.pendingTextId ? textQueue.get(pending.dataset.pendingTextId) : null
+      if (job) void sendTextJob(job)
+    }
   }
 
   const onOnline = () => {
     photoQueue.forEach(job => { if (!job.busy) void sendPhotoJob(job) })
+    textQueue.forEach(job => { if (!job.busy) void sendTextJob(job) })
   }
 
   const viewport = window.visualViewport
@@ -447,6 +495,7 @@ export async function openChat(options: OpenChatOptions) {
     window.removeEventListener('online', onOnline)
     photoQueue.forEach(job => URL.revokeObjectURL(job.objectUrl))
     photoQueue.clear()
+    textQueue.clear()
     viewport?.removeEventListener('resize', updateViewport)
     viewport?.removeEventListener('scroll', updateViewport)
     window.removeEventListener('resize', updateViewport)
