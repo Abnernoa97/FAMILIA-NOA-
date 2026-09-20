@@ -50,7 +50,7 @@ const loadChat = async () => {
   try {
     await import('./chat-runtime')
     await import('./chat-reply-thumbnail')
-    await import('./chat-initial-scroll')
+    await import('./chat-viewport')
     chatLoaded = true
   } catch (error) {
     chatLoaded = false
