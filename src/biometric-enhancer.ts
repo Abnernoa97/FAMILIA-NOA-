@@ -13,6 +13,7 @@ const supported = () => typeof window !== 'undefined' && !!window.PublicKeyCrede
 let setupInProgress = false
 
 type PasskeyDevice = { memberId: string; credentialId?: string }
+type BackendSession = { access_token:string; refresh_token:string }
 
 function readDevice(): PasskeyDevice | null {
   try {
@@ -44,7 +45,15 @@ async function call(action: string, payload: Record<string, unknown> = {}) {
   return data
 }
 
-function session(profile: { id: string; name: string }) {
+async function session(profile: { id:string; name:string }, backend: BackendSession | undefined) {
+  if (!backend?.access_token || !backend.refresh_token) throw new Error('No se pudo crear la sesión familiar.')
+  const { error } = await supabase.auth.setSession({ access_token:backend.access_token, refresh_token:backend.refresh_token })
+  if (error) throw error
+  const { data:{ user }, error:userError } = await supabase.auth.getUser()
+  if (userError || !user || user.app_metadata?.family_member !== true || String(user.app_metadata?.member_id || '') !== profile.id) {
+    await supabase.auth.signOut({ scope:'local' })
+    throw userError || new Error('La sesión familiar no coincide con este perfil.')
+  }
   setIdentity({ memberId:profile.id, name:profile.name })
   window.location.reload()
 }
@@ -75,7 +84,7 @@ async function biometric(button: HTMLButtonElement, error: HTMLElement) {
     const result = await call('auth-verify', { token: optionsResult.token, response })
     if (!result?.profile?.id) throw new Error('No se pudo identificar el perfil.')
     writeDevice({ memberId:result.profile.id, credentialId:response.id })
-    session(result.profile)
+    await session(result.profile, result.session)
   } catch (err) {
     if (timeout) clearTimeout(timeout)
     const name = err instanceof Error ? err.name : ''
