@@ -5,6 +5,7 @@ import { enterView, backView } from './core/navigation'
 import { Outbox } from './core/outbox'
 import { optimizePhoto } from './core/media-pipeline'
 import { bindChatViewport } from './core/chat-viewport'
+import { mediaUrl, primeMedia, signMedia } from './core/private-media'
 
 type ChatMessage = {
   id: string
@@ -39,7 +40,7 @@ const time = (value: string) => new Date(value).toLocaleTimeString('es-MX', { ho
 let activeCleanup: (() => void) | null = null
 
 function storageUrl(path: string) {
-  return supabase.storage.from('family-photos').getPublicUrl(path).data.publicUrl
+  return mediaUrl(path)
 }
 
 function quotedHtml(quoted: ChatMessage | null) {
@@ -120,7 +121,9 @@ export async function openChat(options: OpenChatOptions) {
     if (before) query = query.lt('created_at', before)
     const { data, error } = await query
     if (error) throw error
-    return ((data || []) as RawChatRow[]).reverse().map(nameRow)
+    const rows=((data || []) as RawChatRow[]).reverse().map(nameRow)
+    await primeMedia(rows.map(row=>row.attachment_path))
+    return rows
   }
 
   const fetchMissingReplies = async (messages: ChatMessage[]) => {
@@ -128,7 +131,9 @@ export async function openChat(options: OpenChatOptions) {
     if (!ids.length) return
     const { data, error } = await supabase.from('messages').select(MESSAGE_FIELDS).in('id', ids)
     if (error) return
-    ;((data || []) as RawChatRow[]).map(nameRow).forEach(message => byId.set(message.id, message))
+    const replies=((data || []) as RawChatRow[]).map(nameRow)
+    await primeMedia(replies.map(row=>row.attachment_path))
+    replies.forEach(message => byId.set(message.id, message))
   }
 
   const elementFor = (id: string) => list.querySelector<HTMLElement>(`.chat-bubble[data-message-id="${CSS.escape(id)}"]`)
@@ -279,6 +284,7 @@ export async function openChat(options: OpenChatOptions) {
       pendingTextElement(job.id)?.remove()
       outbox.done(job.id)
       const message = nameRow(data as RawChatRow)
+      if(message.attachment_path) await signMedia(message.attachment_path)
       if (!byId.has(message.id)) await appendMessage(message, true)
       else scrollLatest()
     } catch (error) {
@@ -408,7 +414,7 @@ export async function openChat(options: OpenChatOptions) {
     .on('postgres_changes', { event:'INSERT', schema:'public', table:'messages' }, payload => {
       const row = payload.new as RawChatRow
       if (!row?.id || seenIds.has(row.id) || closed) return
-      void appendMessage(nameRow(row), false)
+      void (async()=>{if(row.attachment_path)await signMedia(row.attachment_path);await appendMessage(nameRow(row), false)})()
     })
     .on('postgres_changes', { event:'UPDATE', schema:'public', table:'messages' }, payload => {
       const row = payload.new as RawChatRow
