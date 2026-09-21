@@ -302,7 +302,7 @@ export async function openChat(options: OpenChatOptions) {
     input.value = ''
     features?.clearReply()
     renderPendingText(job)
-    outbox.add(job)
+    void outbox.add(job)
     input.focus()
   }
 
@@ -383,7 +383,7 @@ export async function openChat(options: OpenChatOptions) {
         busy:false
       }
       pendingPhoto(job)
-      outbox.add(job)
+      void outbox.add(job)
     }
   }
 
