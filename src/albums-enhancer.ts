@@ -2,6 +2,7 @@ import { supabase } from './supabase'
 import { getIdentity, getMemberId } from './core/identity'
 import { openMediaViewer } from './core/media-viewer'
 import { enterView, backView } from './core/navigation'
+import { mediaUrl, primeMedia, signMedia } from './core/private-media'
 
 const BUCKET='family-photos'
 const MAX_BYTES=15*1024*1024
@@ -15,7 +16,7 @@ let membersLoaded=false
 let photosChannel: ReturnType<typeof supabase.channel> | null = null
 
 const esc=(v:string)=>v.replace(/[&<>\"']/g,c=>({'&':'&amp;','<':'&lt;','>':'&gt;','\"':'&quot;',"'":'&#039;'}[c]!))
-const photoUrl=(path:string)=>supabase.storage.from(BUCKET).getPublicUrl(path).data.publicUrl
+const photoUrl=(path:string)=>mediaUrl(path)
 
 function styles(){
  if(document.getElementById('familia-albums-style'))return
@@ -86,6 +87,7 @@ async function upload(files:FileList|File[],status:HTMLElement){
    const path=`${meId}/${crypto.randomUUID()}.jpg`;uploadedPath=path
    const {error:upErr}=await supabase.storage.from(BUCKET).upload(path,blob,{contentType:'image/jpeg',cacheControl:'31536000',upsert:false});if(upErr)throw upErr
    await registerPhoto(meId,path,'image/jpeg',blob.size,width,height)
+   await signMedia(path)
   }catch(e:any){
    if(uploadedPath)await supabase.storage.from(BUCKET).remove([uploadedPath])
    status.textContent=e?.message||'No se pudo subir la foto.';status.classList.add('error');return
@@ -105,6 +107,7 @@ async function renderList(){
  const root=document.querySelector<HTMLElement>('[data-photo-page]');if(!root)return
  const membersResult=await loadMembers();const members=membersResult.members
  const photosResult=await loadAlbumSummary();const photos=photosResult.photos
+ await primeMedia(photos.map(p=>p.storage_path))
  if(membersResult.error||photosResult.error){root.className='albums-page';root.innerHTML='<div class="album-empty-state"><b>No se pudieron cargar los álbumes</b><span>Inténtalo de nuevo.</span></div>';return}
  root.className='albums-page'
  root.innerHTML=`<header class="albums-head"><button type="button" id="albumsBack" aria-label="Volver">‹</button><div><p class="eyebrow">FAMILIA NOA</p><h1>Álbumes</h1></div></header><p class="albums-intro">Cada foto que compartes en la app se guarda automáticamente en tu álbum personal.</p><div class="album-actions"><label class="album-upload-label" for="familyAlbumUpload">＋ Subir fotos</label><input class="album-file" id="familyAlbumUpload" type="file" accept="image/*" multiple></div><div class="album-status" id="albumStatus"></div><section class="album-grid">${members.map(m=>card(m,photos)).join('')}</section>`
@@ -118,6 +121,7 @@ async function renderAlbum(id:string){
  const [membersResult,photosResult]=await Promise.all([loadMembers(),loadAlbumPhotos(id)])
  if(membersResult.error||photosResult.error){root.innerHTML='<div class="album-empty-state"><b>No se pudieron cargar las fotos</b><span>Inténtalo de nuevo.</span></div>';return}
  const member=membersResult.members.find(m=>m.id===id);if(!member)return
+ await primeMedia(photosResult.photos.map(p=>p.storage_path))
  activeAlbumId=id
  const mine=photosResult.photos;viewerPhotos=mine
  const meId=getMemberId()
