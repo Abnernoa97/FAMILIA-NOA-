@@ -1,12 +1,18 @@
 import './styles.css'
 import { supabase } from './supabase'
-import { clearIdentity, getIdentity, setIdentity } from './core/identity'
+import { clearIdentity, getAuthenticatedFamilyMember, getIdentity, setIdentity } from './core/identity'
 import { closeChat, openChat } from './chat-core'
 import { startHomeChatUnread, stopHomeChatUnread } from './chat-features'
 import { initNavigation, enterView, replaceView, type AppView } from './core/navigation'
 import { closeMediaViewer, isMediaViewerOpen } from './core/media-viewer'
 
 type Member = { id: string; name: string; active: boolean; must_share_location: boolean }
+type FamilySessionResponse = {
+  ok?: boolean
+  profile?: { id:string; name:string }
+  session?: { access_token:string; refresh_token:string }
+  error?: string
+}
 
 const FALLBACK = ['Mamá', 'Papá', 'Romel', 'Osniel', 'Abner']
 let members: Member[] = []
@@ -37,6 +43,29 @@ function stopActiveViews() {
   stopHomeChatUnread()
 }
 
+async function clearFamilySession() {
+  try { await supabase.auth.signOut({ scope:'local' }) } catch {}
+  clearIdentity()
+  memberName = ''
+  memberId = ''
+}
+
+async function acceptFamilySession(result: FamilySessionResponse) {
+  const profile = result.profile
+  const session = result.session
+  if (!profile?.id || !profile.name || !session?.access_token || !session.refresh_token) throw new Error('INVALID_FAMILY_SESSION')
+  const { error:sessionError } = await supabase.auth.setSession({ access_token:session.access_token, refresh_token:session.refresh_token })
+  if (sessionError) throw sessionError
+  const { data:{ user }, error:userError } = await supabase.auth.getUser()
+  if (userError || !user || user.app_metadata?.family_member !== true || String(user.app_metadata?.member_id || '') !== profile.id) {
+    await supabase.auth.signOut({ scope:'local' })
+    throw userError || new Error('FAMILY_SESSION_MISMATCH')
+  }
+  setIdentity({ memberId:profile.id, name:profile.name })
+  memberName = profile.name
+  memberId = profile.id
+}
+
 function login(errorText = '') {
   stopActiveViews()
   app.innerHTML = `<main class="login"><div class="brand"><span>FAMILIA</span><strong>NOA</strong></div><p class="eyebrow">PRIVATE FAMILY SPACE</p><h1>¿Quién eres?</h1><p class="intro">Un solo lugar para estar cerca, estés donde estés.</p>${errorText ? `<div class="errorbox">${esc(errorText)}</div>` : ''}<div class="members">${members.map(member => `<button class="member" data-name="${esc(member.name)}">${esc(member.name)}<span>›</span></button>`).join('')}</div></main>`
@@ -54,19 +83,24 @@ function securityStep(name: string) {
     const house = document.querySelector<HTMLInputElement>('#house')!.value.trim()
     const nickname = document.querySelector<HTMLInputElement>('#nickname')!.value.trim()
     const error = document.querySelector('#securityError')!
+    const submit = document.querySelector<HTMLButtonElement>('#security button[type="submit"]')!
     error.textContent = 'Verificando…'
-    const { data, error:rpcError } = await supabase.rpc('login_by_family_credentials', { p_member_id:selected.id, p_house_number:house, p_nickname:nickname })
-    if (rpcError || !data?.length) {
+    submit.disabled = true
+    try {
+      const { data, error:functionError } = await supabase.functions.invoke('family-session', {
+        body:{ member_id:selected.id, house_number:house, nickname }
+      })
+      const result = data as FamilySessionResponse | null
+      if (functionError || !result?.ok) throw functionError || new Error(result?.error || 'LOGIN_FAILED')
+      await acceptFamilySession(result)
+      renderHome()
+      startSettingsRealtime()
+      startFamilyRealtime()
+    } catch (loginError) {
+      console.error('Family session login failed', loginError)
       error.textContent = 'Datos incorrectos. Comprueba el número de la casa y tu apodo.'
-      return
+      submit.disabled = false
     }
-    const profile = data[0] as { id:string; name:string }
-    setIdentity({ memberId:profile.id, name:profile.name })
-    memberName = profile.name
-    memberId = profile.id
-    renderHome()
-    startSettingsRealtime()
-    startFamilyRealtime()
   })
 }
 
@@ -126,9 +160,7 @@ function startFamilyRealtime() {
       membersLoaded = true
       const current = members.find(member => member.id === memberId)
       if (!current) {
-        clearIdentity()
-        memberName = ''
-        memberId = ''
+        void clearFamilySession()
         login('Este perfil ya no está activo.')
       }
     })
@@ -157,13 +189,11 @@ function renderHome() {
   app.innerHTML = `<main class="shell"><header class="top"><div><p class="eyebrow">FAMILIA NOA</p><h1>Hola, ${esc(memberName)} <span>♡</span></h1></div><button class="avatar" id="change">${esc(memberName.charAt(0))}</button></header><section class="hero"><p class="eyebrow">TODOS CERCA</p><h2>¿Cómo está la familia hoy?</h2><p>Habla, comparte y revisa que todos estén bien.</p></section><section class="grid"><button class="card dark" id="chat"><i>✦</i><b>Chat</b><small>Habla con todos</small></button><button class="card photo" id="photos"><i>◌</i><b>Fotos</b><small>Momentos de familia</small></button><button class="card" id="location"><i>⌖</i><b>Ubicación</b><small>Ver dónde estamos</small></button><button class="card ok" id="ok"><i>♥</i><b>Estoy bien</b><small>Avísale a la familia</small></button><button class="card help" id="help"><i>!</i><b>Ayuda</b><small>Necesito a mi familia</small></button></section><nav><button class="active">Inicio</button><button id="navchat">Chat</button><button id="navphotos">Fotos</button><button id="navlocation">Ubicación</button></nav></main>`
   if (settingsCache) applySettings(settingsCache)
   startHomeChatUnread(memberId)
-  document.querySelector('#change')!.addEventListener('click', () => {
+  document.querySelector('#change')!.addEventListener('click', async () => {
     stopActiveViews()
-    clearIdentity()
-    memberName = ''
-    memberId = ''
     familySyncChannel?.unsubscribe()
     settingsChannel?.unsubscribe()
+    await clearFamilySession()
     login()
   })
   document.querySelector('#chat')!.addEventListener('click', () => openChatScreen())
@@ -240,18 +270,20 @@ function sheet(title: string, text: string) {
 
 async function boot() {
   await loadMembers()
-  const identity = getIdentity()
-  if (identity && members.some(member => member.id === identity.memberId)) {
-    memberId = identity.memberId
-    memberName = identity.name
+  const authenticated = await getAuthenticatedFamilyMember()
+  if (authenticated && members.some(member => member.id === authenticated.id)) {
+    const identity = getIdentity()
+    if (!identity || identity.memberId !== authenticated.id || identity.name !== authenticated.name) {
+      setIdentity({ memberId:authenticated.id, name:authenticated.name })
+    }
+    memberId = authenticated.id
+    memberName = authenticated.name
     renderHome()
     startSettingsRealtime()
     startFamilyRealtime()
     return
   }
-  if (identity) clearIdentity()
-  memberName = ''
-  memberId = ''
+  await clearFamilySession()
   login()
 }
 
