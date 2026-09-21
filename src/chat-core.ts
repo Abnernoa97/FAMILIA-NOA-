@@ -356,7 +356,16 @@ export async function openChat(options: OpenChatOptions) {
     }
   }
 
-  outbox = new Outbox<PendingJob>(job => job.kind === 'text' ? sendTextJob(job) : sendPhotoJob(job))
+  outbox = new Outbox<PendingJob>(job => job.kind === 'text' ? sendTextJob(job) : sendPhotoJob(job), `chat:${memberId}`)
+
+  await outbox.restore(job => {
+    if (job.kind === 'photo') {
+      job.objectUrl = URL.createObjectURL(job.file)
+      pendingPhoto(job)
+    } else {
+      renderPendingText(job)
+    }
+  })
 
   const onPhoto = () => {
     const files = Array.from(fileInput.files || [])
