@@ -422,6 +422,14 @@ export async function openChat(options: OpenChatOptions) {
     })
     .subscribe()
 
+  back.addEventListener('click', backView)
+  list.addEventListener('scroll', onScroll, { passive:true })
+  composer.addEventListener('submit', onSubmit)
+  attach.addEventListener('click', () => fileInput.click())
+  fileInput.addEventListener('change', onPhoto)
+  list.addEventListener('click', onPendingClick)
+  list.addEventListener('click', onImageClick)
+
   activeCleanup = () => {
     closed = true
     features?.cleanup()
