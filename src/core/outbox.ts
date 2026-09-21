@@ -32,7 +32,7 @@ export class Outbox<T extends OutboxJob>{
   if(!('indexedDB'in window))return
   try{for(const job of await load<T>(this.scope)){if(this.jobs.has(job.id))continue;this.jobs.set(job.id,job);onRestore?.(job)}this.retryAll()}catch(error){console.error('Outbox restore failed',error)}
  }
- add(job:T){this.jobs.set(job.id,job);if('indexedDB'in window)void put(this.scope,job).catch(error=>console.error('Outbox persist failed',error));void this.run(job).catch(()=>{})}
+ async add(job:T){this.jobs.set(job.id,job);if('indexedDB'in window){try{await put(this.scope,job)}catch(error){console.error('Outbox persist failed',error)}}void this.run(job).catch(()=>{})}
  get(id:string){return this.jobs.get(id)}
  done(id:string){this.jobs.delete(id);if('indexedDB'in window)void remove(this.scope,id).catch(error=>console.error('Outbox cleanup failed',error))}
  async run(job:T){if(job.busy)return;job.busy=true;try{await this.send(job)}catch{job.busy=false;throw new Error('OUTBOX_SEND_FAILED')}}
