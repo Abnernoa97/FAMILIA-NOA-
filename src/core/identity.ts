@@ -22,7 +22,6 @@ function readIdentity(): FamilyIdentity | null {
     const raw = sessionStorage.getItem(IDENTITY_KEY)
     if (raw) return normalize(JSON.parse(raw))
 
-    // One-time migration for devices that still have the pre-centralized session.
     const legacy = sessionStorage.getItem(LEGACY_PROFILE_KEY)
     if (legacy) {
       const identity = normalize(JSON.parse(legacy))
@@ -33,9 +32,7 @@ function readIdentity(): FamilyIdentity | null {
         return identity
       }
     }
-  } catch {
-    // Invalid/stale browser state is discarded below.
-  }
+  } catch {}
   sessionStorage.removeItem(IDENTITY_KEY)
   sessionStorage.removeItem(LEGACY_PROFILE_KEY)
   localStorage.removeItem(LEGACY_MEMBER_KEY)
@@ -80,16 +77,26 @@ export function onIdentityChange(listener: (identity: FamilyIdentity | null) => 
   return () => window.removeEventListener(IDENTITY_EVENT, handler)
 }
 
-export async function getCurrentMember(): Promise<{ id: string; name: string; active: boolean } | null> {
-  const identity = getIdentity()
-  if (!identity) return null
+export async function getAuthenticatedFamilyMember(): Promise<{ id:string; name:string; active:boolean } | null> {
+  const { data:{ user }, error:userError } = await supabase.auth.getUser()
+  if (userError || !user || user.app_metadata?.family_member !== true) return null
+  const memberId = String(user.app_metadata?.member_id || '')
+  if (!memberId) return null
   const { data, error } = await supabase
     .from('family_members')
     .select('id,name,active')
-    .eq('id', identity.memberId)
+    .eq('id', memberId)
     .maybeSingle()
   if (error || !data?.active) return null
-  return data as { id: string; name: string; active: boolean }
+  return data as { id:string; name:string; active:boolean }
+}
+
+export async function getCurrentMember(): Promise<{ id:string; name:string; active:boolean } | null> {
+  const identity = getIdentity()
+  if (!identity) return null
+  const member = await getAuthenticatedFamilyMember()
+  if (!member || member.id !== identity.memberId) return null
+  return member
 }
 
 export const identityEventName = IDENTITY_EVENT
