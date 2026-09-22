@@ -1,4 +1,4 @@
-const CACHE = 'familia-noa-v4';
+const CACHE = 'familia-noa-v5';
 const BASE = new URL(self.registration.scope).pathname;
 const STATIC = [
   BASE,
@@ -43,8 +43,11 @@ self.addEventListener('fetch', event => {
 
   const isNavigation = event.request.mode === 'navigate';
   const isCode = ['script', 'style', 'worker'].includes(event.request.destination);
+  // Match HAVANA NICE's mobile-safe rule: every same-origin built JS/CSS file
+  // is network-first even when a mobile browser omits request.destination.
+  const isCodePath = url.pathname.endsWith('.js') || url.pathname.endsWith('.css');
 
-  if (isNavigation || isCode) {
+  if (isNavigation || isCode || isCodePath) {
     event.respondWith((async () => {
       try {
         const fresh = await fetch(event.request, { cache:'no-store' });
