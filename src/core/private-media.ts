@@ -54,9 +54,26 @@ export function forgetMedia(path:string|null|undefined){
   if(path)cache.delete(path)
 }
 
+function chatMessageId(path:string){
+  const match=path.match(/^chat\/[0-9a-f-]{36}\/([0-9a-f-]{36})\.[^/]+$/i)
+  return match?.[1]||''
+}
+
+function missingObject(error:any){
+  const message=String(error?.message||error||'').toLowerCase()
+  const status=Number(error?.statusCode||error?.status||0)
+  return status===404||message.includes('not found')||message.includes('does not exist')
+}
+
 export async function removeMedia(path:string|null|undefined){
   if(!path)return
   const {error}=await supabase.storage.from(BUCKET).remove([path])
-  if(error)throw error
+  if(error&&!missingObject(error))throw error
   forgetMedia(path)
+
+  const messageId=chatMessageId(path)
+  if(messageId){
+    const {error:finalizeError}=await supabase.rpc('finalize_chat_media_delete',{p_message_id:messageId})
+    if(finalizeError)throw finalizeError
+  }
 }
