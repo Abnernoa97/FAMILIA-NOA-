@@ -36,6 +36,11 @@ const PAGE_SIZE = 50
 const MESSAGE_FIELDS = 'id,sender_id,body,created_at,reply_to_id,edited_at,deleted_at,attachment_path,attachment_type,attachment_name,attachment_size'
 const esc = (value: string) => value.replace(/[&<>"']/g, char => ({ '&':'&amp;', '<':'&lt;', '>':'&gt;', '"':'&quot;', "'":'&#039;' }[char] || char))
 const time = (value: string) => new Date(value).toLocaleTimeString('es-MX', { hour:'2-digit', minute:'2-digit' })
+const compareMessages = (a: ChatMessage, b: ChatMessage) => {
+  const byTime = new Date(a.created_at).getTime() - new Date(b.created_at).getTime()
+  return byTime || a.id.localeCompare(b.id)
+}
+const orderMessages = (messages: ChatMessage[]) => [...messages].sort(compareMessages)
 
 let activeCleanup: (() => void) | null = null
 
@@ -104,6 +109,8 @@ export async function openChat(options: OpenChatOptions) {
     list.scrollTop = Math.max(0, list.scrollHeight - list.clientHeight)
   }
 
+  const elementFor = (id: string) => list.querySelector<HTMLElement>(`.chat-bubble[data-message-id="${CSS.escape(id)}"]`)
+
   const settleLatestMedia = (message:ChatMessage) => {
     if (!message.attachment_path || !stickToLatest) return
     const bubble = elementFor(message.id)
@@ -132,7 +139,7 @@ export async function openChat(options: OpenChatOptions) {
       p_limit: PAGE_SIZE
     })
     if (error) throw error
-    const rows=((data || []) as RawChatRow[]).map(nameRow).reverse()
+    const rows=orderMessages(((data || []) as RawChatRow[]).map(nameRow))
     await primeMedia(rows.map(row=>row.attachment_path))
     return rows
   }
@@ -146,8 +153,6 @@ export async function openChat(options: OpenChatOptions) {
     await primeMedia(replies.map(row=>row.attachment_path))
     replies.forEach(message => byId.set(message.id, message))
   }
-
-  const elementFor = (id: string) => list.querySelector<HTMLElement>(`.chat-bubble[data-message-id="${CSS.escape(id)}"]`)
 
   const renderMessage = (message: ChatMessage, priorityImage = false) => bubbleHtml(message, message.reply_to_id ? byId.get(message.reply_to_id) || null : null, message.sender_id === memberId, priorityImage)
 
@@ -179,7 +184,7 @@ export async function openChat(options: OpenChatOptions) {
     if (message.reply_to_id && !byId.has(message.reply_to_id)) await fetchMissingReplies([message])
     byId.set(message.id, message)
     seenIds.add(message.id)
-    all.push(message)
+    all = orderMessages([...all, message])
     if (all.length > 100) {
       const removed = all.splice(0, all.length - 100)
       removed.forEach(item => {
@@ -187,8 +192,13 @@ export async function openChat(options: OpenChatOptions) {
         if (!all.some(loaded => loaded.reply_to_id === item.id)) byId.delete(item.id)
       })
     }
+    if (!all.some(item => item.id === message.id)) return
     list.querySelector('.chat-empty')?.remove()
-    list.insertAdjacentHTML('beforeend', renderMessage(message, true))
+    const messageIndex = all.findIndex(item => item.id === message.id)
+    const nextMessage = all[messageIndex + 1]
+    const nextElement = nextMessage ? elementFor(nextMessage.id) : null
+    if (nextElement) nextElement.insertAdjacentHTML('beforebegin', renderMessage(message, true))
+    else list.insertAdjacentHTML('beforeend', renderMessage(message, true))
     const bubble = elementFor(message.id)
     if (bubble && features) features.onMessageInserted(message)
     settleLatestMedia(message)
@@ -200,7 +210,7 @@ export async function openChat(options: OpenChatOptions) {
 
   const renderInitial = async () => {
     try {
-      all = await fetchPage()
+      all = orderMessages(await fetchPage())
       all.forEach(message => {
         byId.set(message.id, message)
         seenIds.add(message.id)
@@ -249,7 +259,7 @@ export async function openChat(options: OpenChatOptions) {
       if (!older.length) { hasMore = false; return }
       older.forEach(message => byId.set(message.id, message))
       await fetchMissingReplies(older)
-      all = [...older, ...all]
+      all = orderMessages([...older, ...all])
       oldestCreatedAt = all[0]?.created_at || oldestCreatedAt
       hasMore = older.length === PAGE_SIZE
       const html = older.map(message => renderMessage(message)).join('')
@@ -454,7 +464,7 @@ export async function openChat(options: OpenChatOptions) {
     try {
       const { data, error } = await supabase.rpc('get_chat_messages', { p_before:null, p_limit:100 })
       if (error) throw error
-      const canonical = ((data || []) as RawChatRow[]).map(nameRow).reverse()
+      const canonical = orderMessages(((data || []) as RawChatRow[]).map(nameRow))
       await primeMedia(canonical.map(message => message.attachment_path))
       await fetchMissingReplies(canonical)
       for (const message of canonical) {
@@ -475,6 +485,7 @@ export async function openChat(options: OpenChatOptions) {
           replaceMessageElement(message.id)
         }
       }
+      all = orderMessages(all)
     } catch (error) {
       console.error('Chat synchronization failed', error)
     } finally {
