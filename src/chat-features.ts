@@ -22,6 +22,7 @@ type ChatFeaturesOptions = {
   isAtBottom: () => boolean
   scrollLatest: () => void
   applyLocalUpdate: (id: string, patch: Partial<FeatureMessage>) => void
+  removeMedia?: (path: string) => Promise<void>
 }
 
 type ReactionRow = { message_id: string; member_id: string; reaction: string }
@@ -35,10 +36,8 @@ function unreadBadge(count: number) {
   document.querySelectorAll('.chat-unread-badge').forEach(el => el.remove())
   if (count <= 0) return
   const text = count > 99 ? '99+' : String(count)
-  const cardLabel = document.querySelector('#chat b')
-  const nav = document.querySelector('#navchat')
-  if (cardLabel) cardLabel.insertAdjacentHTML('beforeend', `<span class="chat-unread-badge">${text}</span>`)
-  if (nav) nav.insertAdjacentHTML('beforeend', `<span class="chat-unread-badge">${text}</span>`)
+  document.querySelector('#chat b')?.insertAdjacentHTML('beforeend', `<span class="chat-unread-badge">${text}</span>`)
+  document.querySelector('#navchat')?.insertAdjacentHTML('beforeend', `<span class="chat-unread-badge">${text}</span>`)
 }
 
 async function refreshHomeUnread(memberId: string) {
@@ -59,7 +58,7 @@ export function startHomeChatUnread(memberId: string) {
   homeUnreadMemberId = memberId
   void refreshHomeUnread(memberId)
   homeUnreadChannel = supabase.channel(`familia-noa-chat-unread-${memberId}`)
-    .on('postgres_changes', { event: 'INSERT', schema: 'public', table: 'messages' }, () => {
+    .on('postgres_changes', { event:'INSERT', schema:'public', table:'messages' }, () => {
       window.setTimeout(() => {
         if (homeUnreadMemberId === memberId) void refreshHomeUnread(memberId)
       }, 80)
@@ -72,15 +71,15 @@ function showEditDialog(initial: string, onSave: (value: string) => Promise<void
   overlay.className = 'chat-dialog'
   overlay.innerHTML = `<div class="chat-dialog-card"><h3>Editar mensaje</h3><textarea id="chatEditInput">${esc(initial)}</textarea><div class="chat-dialog-actions"><button type="button" data-cancel>Cancelar</button><button type="button" class="confirm" data-save>Guardar</button></div></div>`
   document.body.appendChild(overlay)
-  const input = overlay.querySelector<HTMLTextAreaElement>('#chatEditInput')!
-  input.focus()
-  input.setSelectionRange(input.value.length, input.value.length)
+  const editInput = overlay.querySelector<HTMLTextAreaElement>('#chatEditInput')!
+  editInput.focus()
+  editInput.setSelectionRange(editInput.value.length, editInput.value.length)
   const close = () => overlay.remove()
   overlay.querySelector('[data-cancel]')!.addEventListener('click', close)
   overlay.addEventListener('click', event => { if (event.target === overlay) close() })
   overlay.querySelector<HTMLButtonElement>('[data-save]')!.addEventListener('click', async event => {
     const button = event.currentTarget as HTMLButtonElement
-    const value = input.value.trim()
+    const value = editInput.value.trim()
     if (!value) return
     button.disabled = true
     try { await onSave(value); close() } finally { button.disabled = false }
@@ -97,7 +96,7 @@ export function startChatFeatures(options: ChatFeaturesOptions) {
   let lastReadTail = ''
   const pendingReactionIds = new Set<string>()
 
-  const messageElement = (id: string) => list.querySelector<HTMLElement>(`.chat-bubble[data-message-id="${CSS.escape(id)}"]`)
+  const messageElement = (id:string) => list.querySelector<HTMLElement>(`.chat-bubble[data-message-id="${CSS.escape(id)}"]`)
 
   const renderReplyPreview = () => {
     if (!replyToId) {
@@ -118,11 +117,12 @@ export function startChatFeatures(options: ChatFeaturesOptions) {
       const src = options.imageUrl(message.attachment_path!)
       preview.innerHTML = `<div class="chat-reply-preview image-only"><img src="${esc(src)}" alt="Foto respondida" decoding="async"><button type="button" data-cancel-reply aria-label="Cancelar respuesta">×</button></div>`
     } else {
-      preview.innerHTML = `<div class="chat-reply-preview"><div><b>Respondiendo</b><span>${esc(message.body || 'Mensaje')}</span></div><button type="button" data-cancel-reply aria-label="Cancelar respuesta">×</button></div>`
+      const label = message.body || (message.attachment_type?.startsWith('video/') ? 'Video' : message.attachment_type?.startsWith('audio/') ? 'Audio' : 'Mensaje')
+      preview.innerHTML = `<div class="chat-reply-preview"><div><b>Respondiendo</b><span>${esc(label)}</span></div><button type="button" data-cancel-reply aria-label="Cancelar respuesta">×</button></div>`
     }
   }
 
-  const setReply = (id: string) => {
+  const setReply = (id:string) => {
     const message = options.getMessage(id)
     if (!message || message.deleted_at) return
     replyToId = id
@@ -136,24 +136,19 @@ export function startChatFeatures(options: ChatFeaturesOptions) {
     renderReplyPreview()
   }
 
-  const reactionMarkup = (rows: ReactionRow[]) => {
-    if (!rows.length) return ''
-    const counts = new Map<string, number>()
+  const reactionMarkup = (rows:ReactionRow[]) => {
+    const counts = new Map<string,number>()
     const mine = new Set<string>()
     rows.forEach(row => {
       counts.set(row.reaction, (counts.get(row.reaction) || 0) + 1)
       if (row.member_id === memberId) mine.add(row.reaction)
     })
-    return Array.from(counts.entries()).map(([reaction, count]) => `<button type="button" class="chat-reaction${mine.has(reaction) ? ' is-mine' : ''}" data-react="${esc(reaction)}">${reaction} ${count}</button>`).join('')
+    return [...counts.entries()].map(([reaction,count]) => `<button type="button" class="chat-reaction${mine.has(reaction) ? ' is-mine' : ''}" data-react="${esc(reaction)}">${reaction} ${count}</button>`).join('')
   }
 
-  const renderReactions = (rows: ReactionRow[], ids: string[]) => {
-    const grouped = new Map<string, ReactionRow[]>()
-    rows.forEach(row => {
-      const group = grouped.get(row.message_id) || []
-      group.push(row)
-      grouped.set(row.message_id, group)
-    })
+  const renderReactions = (rows:ReactionRow[], ids:string[]) => {
+    const grouped = new Map<string,ReactionRow[]>()
+    rows.forEach(row => grouped.set(row.message_id, [...(grouped.get(row.message_id) || []), row]))
     ids.forEach(id => {
       const bubble = messageElement(id)
       if (!bubble) return
@@ -169,14 +164,14 @@ export function startChatFeatures(options: ChatFeaturesOptions) {
     })
   }
 
-  const refreshReactions = async (ids: string[]) => {
+  const refreshReactions = async (ids:string[]) => {
     const unique = [...new Set(ids.filter(Boolean))]
     if (!unique.length) return
     const { data, error } = await supabase.from('chat_reactions').select('message_id,member_id,reaction').in('message_id', unique)
     if (!error) renderReactions((data || []) as ReactionRow[], unique)
   }
 
-  const scheduleReactionRefresh = (id: string) => {
+  const scheduleReactionRefresh = (id:string) => {
     if (id) pendingReactionIds.add(id)
     if (reactionTimer) window.clearTimeout(reactionTimer)
     reactionTimer = window.setTimeout(() => {
@@ -189,12 +184,11 @@ export function startChatFeatures(options: ChatFeaturesOptions) {
   const refreshReadReceipts = async () => {
     const ownIds = options.getMessages().filter(message => message.sender_id === memberId).map(message => message.id)
     if (!ownIds.length) return
-    const { data, error } = await supabase.rpc('get_chat_read_receipts', { p_message_ids: ownIds })
+    const { data, error } = await supabase.rpc('get_chat_read_receipts', { p_message_ids:ownIds })
     if (error) return
-    const read = new Set((data || []).filter((row: any) => row.member_id !== memberId).map((row: any) => row.message_id))
+    const read = new Set((data || []).filter((row:any) => row.member_id !== memberId).map((row:any) => row.message_id))
     ownIds.forEach(id => {
-      const bubble = messageElement(id)
-      const meta = bubble?.querySelector<HTMLElement>('.chat-meta')
+      const meta = messageElement(id)?.querySelector<HTMLElement>('.chat-meta')
       if (!meta) return
       let state = meta.querySelector<HTMLElement>('.chat-read-state')
       if (read.has(id)) {
@@ -204,9 +198,7 @@ export function startChatFeatures(options: ChatFeaturesOptions) {
           meta.appendChild(state)
         }
         state.textContent = ' ✓✓'
-      } else {
-        state?.remove()
-      }
+      } else state?.remove()
     })
   }
 
@@ -215,107 +207,115 @@ export function startChatFeatures(options: ChatFeaturesOptions) {
     receiptTimer = window.setTimeout(() => void refreshReadReceipts(), 120)
   }
 
-  const markRead = async (force = false) => {
+  const markRead = async (force=false) => {
     if (document.visibilityState !== 'visible' || !options.isAtBottom()) return
     const incoming = options.getMessages().filter(message => message.sender_id !== memberId && !message.deleted_at).slice(-80)
     const tail = incoming.at(-1)?.id || ''
     if (!force && tail && tail === lastReadTail) return
     lastReadTail = tail
-    const ids = incoming.map(message => message.id)
-    const { error } = await supabase.rpc('mark_chat_messages_read', { p_member_id: memberId, p_message_ids: ids })
+    const { error } = await supabase.rpc('mark_chat_messages_read', { p_member_id:memberId, p_message_ids:incoming.map(message => message.id) })
     if (!error) {
       unreadBadge(0)
       scheduleReceiptRefresh()
     }
   }
 
-  const scheduleMarkRead = (delay = 100, force = false) => {
+  const scheduleMarkRead = (delay=100, force=false) => {
     if (readTimer) window.clearTimeout(readTimer)
     readTimer = window.setTimeout(() => void markRead(force), delay)
   }
 
-  const decorateMessage = (bubble: HTMLElement, message: FeatureMessage) => {
+  const decorateMessage = (bubble:HTMLElement, message:FeatureMessage) => {
     if (bubble.dataset.featuresReady === '1') return
     bubble.dataset.featuresReady = '1'
     if (message.deleted_at) return
-    const tools = document.createElement('div')
-    tools.className = 'chat-tools'
     const own = message.sender_id === memberId
     const canEdit = own && !!message.body.trim() && !message.attachment_path
+    const tools = document.createElement('div')
+    tools.className = 'chat-tools'
     tools.innerHTML = `<button type="button" data-reply>↩ Responder</button><button type="button" data-reaction-toggle aria-label="Reaccionar">☺︎</button><span class="chat-reaction-picker">${['❤️','😂','👍','😮','😢','🙏'].map(reaction => `<button type="button" data-react="${reaction}">${reaction}</button>`).join('')}</span>${canEdit ? '<button type="button" data-edit>Editar</button>' : ''}${own ? '<button type="button" data-delete>Eliminar</button>' : ''}`
     bubble.appendChild(tools)
   }
 
-  const decorateAll = () => {
-    options.getMessages().forEach(message => {
-      const bubble = messageElement(message.id)
-      if (bubble) decorateMessage(bubble, message)
-    })
-  }
+  const decorateAll = () => options.getMessages().forEach(message => {
+    const bubble = messageElement(message.id)
+    if (bubble) decorateMessage(bubble, message)
+  })
 
-  const onListClick = async (event: Event) => {
+  const onListClick = async (event:Event) => {
     const target = event.target as HTMLElement
+    if (target.closest('[data-cancel-reply]')) { clearReply(); return }
     const bubble = target.closest<HTMLElement>('.chat-bubble[data-message-id]')
     const messageId = bubble?.dataset.messageId || ''
-
-    if (target.closest('[data-cancel-reply]')) { clearReply(); return }
     if (!bubble || !messageId) return
 
     if (target.closest('[data-reply]')) { setReply(messageId); return }
-    if (target.closest('[data-reaction-toggle]')) {
-      bubble.classList.toggle('reactions-open')
-      return
-    }
+    if (target.closest('[data-reaction-toggle]')) { bubble.classList.toggle('reactions-open'); return }
+
     const reactionButton = target.closest<HTMLButtonElement>('[data-react]')
     if (reactionButton) {
-      const reaction = reactionButton.dataset.react || ''
       bubble.classList.remove('reactions-open')
+      const reaction = reactionButton.dataset.react || ''
       if (!reaction) return
-      const { error } = await supabase.rpc('toggle_chat_reaction', { p_member_id: memberId, p_message_id: messageId, p_reaction: reaction })
+      const { error } = await supabase.rpc('toggle_chat_reaction', { p_member_id:memberId, p_message_id:messageId, p_reaction:reaction })
       if (!error) await refreshReactions([messageId])
       return
     }
+
     if (target.closest('[data-edit]')) {
       const message = options.getMessage(messageId)
       if (!message || message.sender_id !== memberId || message.deleted_at) return
       showEditDialog(message.body, async value => {
-        const { data, error } = await supabase.rpc('edit_chat_message', { p_member_id: memberId, p_message_id: messageId, p_body: value })
-        if (!error && data) options.applyLocalUpdate(messageId, { body: value })
+        const { data, error } = await supabase.rpc('edit_chat_message', { p_member_id:memberId, p_message_id:messageId, p_body:value })
+        if (!error && data) options.applyLocalUpdate(messageId, { body:value })
       })
       return
     }
+
     if (target.closest('[data-delete]')) {
+      const message = options.getMessage(messageId)
+      if (!message || message.sender_id !== memberId || message.deleted_at) return
       if (!confirm('¿Eliminar este mensaje?')) return
-      const { data, error } = await supabase.rpc('delete_chat_message', { p_member_id: memberId, p_message_id: messageId })
+      const mediaPath = message.attachment_path
+      const { data, error } = await supabase.rpc('delete_chat_message', { p_member_id:memberId, p_message_id:messageId })
       if (!error && data) {
         if (replyToId === messageId) clearReply()
-        options.applyLocalUpdate(messageId, { deleted_at: new Date().toISOString(), body: '' })
+        options.applyLocalUpdate(messageId, {
+          deleted_at:new Date().toISOString(),
+          body:'',
+          attachment_path:null,
+          attachment_type:null,
+          attachment_name:null
+        })
+        if (mediaPath && options.removeMedia) {
+          try { await options.removeMedia(mediaPath) }
+          catch (cleanupError) { console.error('Deleted Chat media cleanup failed', cleanupError) }
+        }
       }
       return
     }
+
     const quoted = target.closest<HTMLElement>('[data-jump]')
     if (quoted) {
-      const id = quoted.dataset.jump || ''
-      const source = id ? messageElement(id) : null
-      if (source) {
-        source.scrollIntoView({ behavior: 'smooth', block: 'center' })
-        source.classList.remove('chat-reply-flash')
-        void source.offsetWidth
-        source.classList.add('chat-reply-flash')
-        window.setTimeout(() => source.classList.remove('chat-reply-flash'), 900)
-      }
+      const source = messageElement(quoted.dataset.jump || '')
+      if (!source) return
+      source.scrollIntoView({ behavior:'smooth', block:'center' })
+      source.classList.remove('chat-reply-flash')
+      void source.offsetWidth
+      source.classList.add('chat-reply-flash')
+      window.setTimeout(() => source.classList.remove('chat-reply-flash'), 900)
     }
   }
 
-  const onDoubleClick = (event: MouseEvent) => {
-    const bubble = (event.target as HTMLElement).closest<HTMLElement>('.chat-bubble[data-message-id]')
-    if (bubble?.dataset.messageId) setReply(bubble.dataset.messageId)
+  const onDoubleClick = (event:MouseEvent) => {
+    const id = (event.target as HTMLElement).closest<HTMLElement>('.chat-bubble[data-message-id]')?.dataset.messageId
+    if (id) setReply(id)
   }
 
   let touchId = ''
   let touchX = 0
   let touchY = 0
-  const onTouchStart = (event: TouchEvent) => {
+  const onTouchStart = (event:TouchEvent) => {
     const bubble = (event.target as HTMLElement).closest<HTMLElement>('.chat-bubble[data-message-id]')
     if (!bubble) return
     const touch = event.touches[0]
@@ -323,7 +323,7 @@ export function startChatFeatures(options: ChatFeaturesOptions) {
     touchX = touch.clientX
     touchY = touch.clientY
   }
-  const onTouchEnd = (event: TouchEvent) => {
+  const onTouchEnd = (event:TouchEvent) => {
     if (!touchId) return
     const touch = event.changedTouches[0]
     const dx = touch.clientX - touchX
@@ -333,26 +333,23 @@ export function startChatFeatures(options: ChatFeaturesOptions) {
     if (dx > 58 && dx > dy * 1.2) setReply(id)
   }
 
-  const onScroll = () => {
-    if (options.isAtBottom()) scheduleMarkRead(100)
-  }
+  const onScroll = () => { if (options.isAtBottom()) scheduleMarkRead(100) }
   const onVisibility = () => { if (document.visibilityState === 'visible') scheduleMarkRead(80, true) }
 
   list.addEventListener('click', onListClick)
   list.addEventListener('dblclick', onDoubleClick)
-  list.addEventListener('touchstart', onTouchStart, { passive: true })
-  list.addEventListener('touchend', onTouchEnd, { passive: true })
-  list.addEventListener('scroll', onScroll, { passive: true })
+  list.addEventListener('touchstart', onTouchStart, { passive:true })
+  list.addEventListener('touchend', onTouchEnd, { passive:true })
+  list.addEventListener('scroll', onScroll, { passive:true })
   preview.addEventListener('click', onListClick)
   document.addEventListener('visibilitychange', onVisibility)
   window.addEventListener('focus', onVisibility)
 
   featureChannel = supabase.channel(`familia-noa-chat-features-${memberId}`)
-    .on('postgres_changes', { event: '*', schema: 'public', table: 'chat_reactions' }, payload => {
-      const id = (payload.new as any)?.message_id || (payload.old as any)?.message_id || ''
-      scheduleReactionRefresh(id)
+    .on('postgres_changes', { event:'*', schema:'public', table:'chat_reactions' }, payload => {
+      scheduleReactionRefresh((payload.new as any)?.message_id || (payload.old as any)?.message_id || '')
     })
-    .on('postgres_changes', { event: '*', schema: 'public', table: 'chat_read_receipts' }, scheduleReceiptRefresh)
+    .on('postgres_changes', { event:'*', schema:'public', table:'chat_read_receipts' }, scheduleReceiptRefresh)
     .subscribe()
 
   decorateAll()
@@ -366,16 +363,16 @@ export function startChatFeatures(options: ChatFeaturesOptions) {
     decorateMessage,
     decorateAll,
     refreshReactions,
-    onMessageInserted(message: FeatureMessage) {
+    onMessageInserted(message:FeatureMessage) {
       const bubble = messageElement(message.id)
       if (bubble) decorateMessage(bubble, message)
       if (options.isAtBottom()) scheduleMarkRead(80)
     },
-    onMessagesPrepended(ids: string[]) {
+    onMessagesPrepended(ids:string[]) {
       decorateAll()
       void refreshReactions(ids)
     },
-    onMessageUpdated(message: FeatureMessage) {
+    onMessageUpdated(message:FeatureMessage) {
       const bubble = messageElement(message.id)
       if (bubble) decorateMessage(bubble, message)
       scheduleReactionRefresh(message.id)
