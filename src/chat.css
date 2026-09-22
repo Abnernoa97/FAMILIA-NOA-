@@ -65,11 +65,11 @@ body:has(.chat-page) #app{
 .chat-meta{display:block;text-align:right;color:#8a867e;font-size:9px;margin-top:3px}
 .chat-read-state{font-weight:700;letter-spacing:-.06em}
 
-.chat-attachment{display:block;width:100%;margin-top:5px;padding:0;border:0;border-radius:12px;overflow:hidden;background:#e8e3da;text-decoration:none;color:inherit;cursor:pointer}
-.chat-attachment img{display:block;width:100%;aspect-ratio:4/3;max-height:280px;object-fit:cover;background:#e8e3da}
-.chat-video{background:#0d0d0d;cursor:default;border-radius:12px}
-.chat-video-player{display:block;width:100%;height:auto;aspect-ratio:auto 16/9;max-height:min(54dvh,420px);object-fit:contain;background:#0d0d0d;color-scheme:dark}
-.chat-audio{display:grid;grid-template-columns:36px minmax(110px,1fr) auto;align-items:center;gap:9px;min-width:230px;background:#efebe3;cursor:default;padding:8px 10px;border-radius:12px}
+.chat-attachment{display:block;width:100%;margin-top:5px;padding:0;border:0;border-radius:12px;overflow:hidden;background:#e8e3da;text-decoration:none;color:inherit;cursor:pointer;touch-action:manipulation}
+.chat-attachment img{display:block;width:100%;aspect-ratio:4/3;max-height:280px;object-fit:cover;background:#e8e3da;pointer-events:none}
+.chat-video{background:#0d0d0d;cursor:pointer;border-radius:12px}
+.chat-video-player{display:block;width:100%;height:auto;aspect-ratio:auto 16/9;max-height:min(54dvh,420px);object-fit:contain;background:#0d0d0d;color-scheme:dark;pointer-events:none}
+.chat-audio{display:grid;grid-template-columns:36px minmax(110px,1fr) auto;align-items:center;gap:9px;min-width:230px;background:#efebe3;cursor:default;padding:8px 10px;border-radius:12px;touch-action:auto}
 .chat-audio-player{display:none}
 .chat-audio-toggle{width:36px;height:36px;border:0;border-radius:50%;display:grid;place-items:center;padding:0;background:#171716;color:#fff;font-size:13px;line-height:1;cursor:pointer}
 .chat-audio-track{position:relative;height:4px;border-radius:999px;background:#cbc5bb;overflow:hidden;cursor:pointer;touch-action:none}
