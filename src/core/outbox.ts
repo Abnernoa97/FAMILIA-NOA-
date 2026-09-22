@@ -17,8 +17,14 @@ async function put<T extends OutboxJob>(scope:string,job:T){
 async function remove(scope:string,id:string){
  const database=await db();await new Promise<void>((resolve,reject)=>{const tx=database.transaction(STORE,'readwrite');tx.objectStore(STORE).delete(`${scope}:${id}`);tx.oncomplete=()=>resolve();tx.onerror=()=>reject(tx.error)});database.close()
 }
+function migratePersistedJob(raw:any){
+ const job={...raw,busy:false}
+ // Pre-video Chat stored pending images as kind:"photo". Keep those jobs retryable after the media upgrade.
+ if(job.kind==='photo'&&job.file){job.kind='media';job.mediaKind='image'}
+ return job
+}
 async function load(scope:string):Promise<any[]>{
- const database=await db();const rows=await new Promise<any[]>((resolve,reject)=>{const tx=database.transaction(STORE,'readonly'),request=tx.objectStore(STORE).getAll();request.onsuccess=()=>resolve(request.result||[]);request.onerror=()=>reject(request.error)});database.close();return rows.filter(row=>row.scope===scope).map(row=>({...row.job,busy:false}))
+ const database=await db();const rows=await new Promise<any[]>((resolve,reject)=>{const tx=database.transaction(STORE,'readonly'),request=tx.objectStore(STORE).getAll();request.onsuccess=()=>resolve(request.result||[]);request.onerror=()=>reject(request.error)});database.close();return rows.filter(row=>row.scope===scope).map(row=>migratePersistedJob(row.job))
 }
 
 export class Outbox<T extends OutboxJob>{
@@ -39,7 +45,7 @@ export class Outbox<T extends OutboxJob>{
     const job=this.normalize?this.normalize(raw):raw as T
     if(!job||this.jobs.has(job.id))continue
     this.jobs.set(job.id,job)
-    if(this.normalize){try{await put(this.scope,job)}catch(error){console.error('Outbox migration persist failed',error)}}
+    try{await put(this.scope,job)}catch(error){console.error('Outbox migration persist failed',error)}
     onRestore?.(job)
    }
    this.retryAll()
