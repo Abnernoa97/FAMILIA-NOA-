@@ -5,7 +5,7 @@ import { enterView, backView } from './core/navigation'
 import { Outbox } from './core/outbox'
 import { optimizePhoto } from './core/media-pipeline'
 import { bindChatViewport } from './core/chat-viewport'
-import { mediaUrl, primeMedia, signMedia, uploadMedia, removeMedia } from './core/private-media'
+import { mediaUrl, primeMedia, signMedia } from './core/private-media'
 
 type ChatMessage = {
   id: string
@@ -367,57 +367,41 @@ export async function openChat(options: OpenChatOptions) {
       : '<button type="button" class="chat-retry" data-retry-photo>Reintentar</button> · No enviado'
   }
 
-  const finishPendingPhoto = async (job:PendingPhoto, message:ChatMessage) => {
-    pendingElement(job.id)?.remove()
-    outbox.done(job.id)
-    URL.revokeObjectURL(job.objectUrl)
-    if (job.replyToId === features?.getReplyToId()) features?.clearReply()
-    await signMedia(message.attachment_path)
-    if (!byId.has(message.id)) await appendMessage(message, true)
-    else scrollLatest()
-  }
-
   const sendPhotoJob = async (job: PendingPhoto) => {
     setPendingState(job.id, 'sending')
+    let path = ''
     try {
       const optimized = await optimizePhoto(job.file)
       const alreadySent = await existingMessage(job.id)
       if (alreadySent) {
-        await finishPendingPhoto(job, alreadySent)
+        pendingElement(job.id)?.remove()
+        outbox.done(job.id)
+        URL.revokeObjectURL(job.objectUrl)
+        if (!byId.has(alreadySent.id)) await appendMessage(alreadySent, true)
         return
       }
-
-      const path = `r2:chat/${memberId}/${job.id}.${optimized.ext}`
-      await uploadMedia(path, optimized.blob, optimized.type)
-
+      path = `chat/${memberId}/${job.id}.${optimized.ext}`
+      await supabase.storage.from('family-photos').remove([path])
+      const { error: uploadError } = await supabase.storage.from('family-photos').upload(path, optimized.blob, {
+        contentType:optimized.type, cacheControl:'31536000', upsert:false
+      })
+      if (uploadError) throw uploadError
       const { data, error:insertError } = await supabase.from('messages').insert({
-        id:job.id,
-        sender_id:memberId,
-        body:'',
-        attachment_path:path,
-        attachment_type:optimized.type,
-        attachment_name:optimized.name,
-        attachment_size:optimized.blob.size,
-        reply_to_id:job.replyToId
+        id:job.id, sender_id:memberId, body:'', attachment_path:path, attachment_type:optimized.type,
+        attachment_name:optimized.name, attachment_size:optimized.blob.size, reply_to_id:job.replyToId
       }).select(MESSAGE_FIELDS).single()
-
       if (insertError || !data) {
-        let existing:ChatMessage|null = null
-        try {
-          existing = await existingMessage(job.id)
-        } catch (lookupError) {
-          console.error('Chat photo reconciliation failed', lookupError)
-          throw insertError || new Error('Message insert failed')
-        }
-        if (existing) {
-          await finishPendingPhoto(job, existing)
-          return
-        }
-        try { await removeMedia(path) } catch (cleanupError) { console.error('Chat orphan media cleanup failed', cleanupError) }
+        await supabase.storage.from('family-photos').remove([path])
         throw insertError || new Error('Message insert failed')
       }
-
-      await finishPendingPhoto(job, nameRow(data as RawChatRow))
+      pendingElement(job.id)?.remove()
+      outbox.done(job.id)
+      URL.revokeObjectURL(job.objectUrl)
+      if (job.replyToId === features?.getReplyToId()) features?.clearReply()
+      const message = nameRow(data as RawChatRow)
+      await signMedia(message.attachment_path)
+      if (!byId.has(message.id)) await appendMessage(message, true)
+      else scrollLatest()
     } catch (error) {
       console.error('Chat photo send failed', error)
       setPendingState(job.id, 'error')
@@ -510,7 +494,10 @@ export async function openChat(options: OpenChatOptions) {
   }
 
   const onConnectivityReturn = () => {
-    if (!closed) void synchronizeLatest()
+    if (!closed) {
+      outbox.retryAll()
+      void synchronizeLatest()
+    }
   }
   const onVisibilityReturn = () => {
     if (document.visibilityState === 'visible') void synchronizeLatest()
