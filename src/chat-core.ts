@@ -3,7 +3,7 @@ import { startChatFeatures } from './chat-features'
 import { openMediaViewer, closeMediaViewer } from './core/media-viewer'
 import { enterView, backView } from './core/navigation'
 import { Outbox } from './core/outbox'
-import { optimizePhoto, prepareVideo, isSupportedVideo, CHAT_VIDEO_MAX_BYTES } from './core/media-pipeline'
+import { optimizePhoto, prepareVideo, prepareAudio, isSupportedVideo, isSupportedAudio, CHAT_VIDEO_MAX_BYTES, CHAT_AUDIO_MAX_BYTES } from './core/media-pipeline'
 import { bindChatViewport } from './core/chat-viewport'
 import { mediaUrl, primeMedia, signMedia } from './core/private-media'
 
@@ -33,6 +33,7 @@ type OpenChatOptions = {
 }
 
 type PreparedMedia = { blob:Blob; type:string; name:string; ext:string }
+type MediaKind = 'image'|'video'|'audio'
 
 const PAGE_SIZE = 50
 const MAX_LOADED_MESSAGES = 100
@@ -47,6 +48,7 @@ const compareMessages = (a: ChatMessage, b: ChatMessage) => {
 const orderMessages = (messages: ChatMessage[]) => [...messages].sort(compareMessages)
 const isImageMessage = (message:ChatMessage) => !!message.attachment_path && (message.attachment_type || '').startsWith('image/')
 const isVideoMessage = (message:ChatMessage) => !!message.attachment_path && (message.attachment_type || '').startsWith('video/')
+const isAudioMessage = (message:ChatMessage) => !!message.attachment_path && (message.attachment_type || '').startsWith('audio/')
 
 let activeCleanup: (() => void) | null = null
 
@@ -67,6 +69,9 @@ function quotedHtml(quoted: ChatMessage | null) {
   if (isVideoMessage(quoted)) {
     return `<button type="button" class="chat-quoted" data-jump="${esc(quoted.id)}"><b>${esc(quoted.sender?.name || 'Familia')}</b><span>🎬 Video</span></button>`
   }
+  if (isAudioMessage(quoted)) {
+    return `<button type="button" class="chat-quoted" data-jump="${esc(quoted.id)}"><b>${esc(quoted.sender?.name || 'Familia')}</b><span>🎵 Audio</span></button>`
+  }
   return `<button type="button" class="chat-quoted" data-jump="${esc(quoted.id)}"><b>${esc(quoted.sender?.name || 'Familia')}</b><span>${esc(quoted.body || 'Mensaje')}</span></button>`
 }
 
@@ -80,6 +85,9 @@ function attachmentHtml(message:ChatMessage, priorityMedia=false){
   }
   if(isVideoMessage(message)){
     return `<div class="chat-attachment chat-video"><video class="chat-video-player" src="${esc(src)}" controls playsinline ${priorityMedia ? 'preload="metadata"' : 'preload="none"'} aria-label="${esc(message.attachment_name || 'Video')}"></video></div>`
+  }
+  if(isAudioMessage(message)){
+    return `<div class="chat-attachment chat-audio"><audio class="chat-audio-player" src="${esc(src)}" controls preload="metadata" aria-label="${esc(message.attachment_name || 'Audio')}"></audio></div>`
   }
   return ''
 }
@@ -110,11 +118,11 @@ export async function openChat(options: OpenChatOptions) {
   let stickToLatest = true
   let closed = false
   type PendingText = { kind:'text'; id:string; body:string; replyToId:string|null; busy:boolean }
-  type PendingMedia = { kind:'media'; mediaKind:'image'|'video'; id:string; file:File; objectUrl:string; replyToId:string|null; busy:boolean }
+  type PendingMedia = { kind:'media'; mediaKind:MediaKind; id:string; file:File; objectUrl:string; replyToId:string|null; busy:boolean }
   type PendingJob = PendingText | PendingMedia
   let outbox: Outbox<PendingJob>
 
-  app.innerHTML = `<main class="chat-page"><button id="back" class="chat-native-back" type="button" aria-label="Volver"></button><section class="chat-messages" id="messages"><div class="chat-loading">Cargando mensajes…</div></section><div id="replyPreview"></div><form class="chat-composer" id="composer"><button class="chat-attach" id="chatAttach" type="button" aria-label="Adjuntar foto o video">＋</button><input id="chatAttachmentInput" type="file" accept="image/jpeg,image/png,image/webp,image/heic,video/mp4,video/webm,video/quicktime,video/x-m4v" hidden><input id="message" maxlength="2000" placeholder="Escribe algo…" autocomplete="off"><button class="chat-send" type="submit">Enviar</button></form></main>`
+  app.innerHTML = `<main class="chat-page"><button id="back" class="chat-native-back" type="button" aria-label="Volver"></button><section class="chat-messages" id="messages"><div class="chat-loading">Cargando mensajes…</div></section><div id="replyPreview"></div><form class="chat-composer" id="composer"><button class="chat-attach" id="chatAttach" type="button" aria-label="Adjuntar" aria-expanded="false">＋</button><div class="chat-attach-menu" id="chatAttachMenu" hidden><button type="button" data-attach-kind="image"><span>📷</span>Foto</button><button type="button" data-attach-kind="video"><span>🎬</span>Video</button><button type="button" data-attach-kind="audio"><span>🎵</span>Audio</button></div><input id="chatAttachmentInput" type="file" hidden><input id="message" maxlength="2000" placeholder="Escribe algo…" autocomplete="off"><button class="chat-send" type="submit">Enviar</button></form></main>`
 
   const page = app.querySelector<HTMLElement>('.chat-page')!
   const list = app.querySelector<HTMLElement>('#messages')!
@@ -122,6 +130,7 @@ export async function openChat(options: OpenChatOptions) {
   const input = app.querySelector<HTMLInputElement>('#message')!
   const preview = app.querySelector<HTMLElement>('#replyPreview')!
   const attach = app.querySelector<HTMLButtonElement>('#chatAttach')!
+  const attachMenu = app.querySelector<HTMLElement>('#chatAttachMenu')!
   const fileInput = app.querySelector<HTMLInputElement>('#chatAttachmentInput')!
   const back = app.querySelector<HTMLButtonElement>('#back')!
 
@@ -351,8 +360,10 @@ export async function openChat(options: OpenChatOptions) {
     list.querySelector('.chat-empty')?.remove()
     const previewHtml = job.mediaKind === 'video'
       ? `<div class="chat-attachment chat-video"><video class="chat-video-player" src="${esc(job.objectUrl)}" controls playsinline preload="metadata"></video></div>`
-      : `<div class="chat-attachment"><img src="${esc(job.objectUrl)}" alt="Foto" decoding="async"></div>`
-    const label = job.mediaKind === 'video' ? 'Enviando video…' : 'Enviando foto…'
+      : job.mediaKind === 'audio'
+        ? `<div class="chat-attachment chat-audio"><audio class="chat-audio-player" src="${esc(job.objectUrl)}" controls preload="metadata"></audio></div>`
+        : `<div class="chat-attachment"><img src="${esc(job.objectUrl)}" alt="Foto" decoding="async"></div>`
+    const label = job.mediaKind === 'video' ? 'Enviando video…' : job.mediaKind === 'audio' ? 'Enviando audio…' : 'Enviando foto…'
     list.insertAdjacentHTML('beforeend', `<article class="chat-bubble mine chat-pending" data-pending-id="${job.id}">${previewHtml}<small class="chat-meta" data-pending-state><span class="chat-spinner"></span> ${label}</small></article>`)
     stickToLatest = true
     scheduleLatest()
@@ -368,7 +379,8 @@ export async function openChat(options: OpenChatOptions) {
 
   const prepareJobMedia = async (job:PendingMedia):Promise<PreparedMedia> => {
     if (job.mediaKind === 'image') return optimizePhoto(job.file)
-    return prepareVideo(job.file)
+    if (job.mediaKind === 'video') return prepareVideo(job.file)
+    return prepareAudio(job.file)
   }
 
   const finishPendingMedia = async (job:PendingMedia, message:ChatMessage) => {
@@ -432,28 +444,74 @@ export async function openChat(options: OpenChatOptions) {
 
   outbox = new Outbox<PendingJob>(job => job.kind === 'text' ? sendTextJob(job) : sendMediaJob(job), `chat:${memberId}`)
 
+  const configurePicker = (kind:MediaKind) => {
+    fileInput.value = ''
+    fileInput.dataset.mediaKind = kind
+    fileInput.accept = kind === 'image'
+      ? 'image/jpeg,image/png,image/webp,image/heic'
+      : kind === 'video'
+        ? 'video/mp4,video/webm,video/quicktime,video/x-m4v'
+        : 'audio/mpeg,audio/mp4,audio/x-m4a,audio/aac,audio/wav,audio/x-wav,audio/webm,audio/ogg'
+  }
+
+  const closeAttachMenu = () => {
+    attachMenu.hidden = true
+    attach.setAttribute('aria-expanded','false')
+  }
+
+  const onAttachClick = () => {
+    const next = !attachMenu.hidden
+    attachMenu.hidden = next
+    attach.setAttribute('aria-expanded', next ? 'false' : 'true')
+  }
+
+  const onAttachMenuClick = (event:Event) => {
+    const button = (event.target as HTMLElement).closest<HTMLButtonElement>('[data-attach-kind]')
+    const kind = button?.dataset.attachKind as MediaKind|undefined
+    if (!kind) return
+    configurePicker(kind)
+    closeAttachMenu()
+    fileInput.click()
+  }
+
+  const onDocumentPointer = (event:PointerEvent) => {
+    const target = event.target as Node
+    if (!attachMenu.hidden && !attachMenu.contains(target) && !attach.contains(target)) closeAttachMenu()
+  }
+
   const onAttachment = () => {
     const files = Array.from(fileInput.files || [])
+    const requestedKind = fileInput.dataset.mediaKind as MediaKind|undefined
     fileInput.value = ''
+    delete fileInput.dataset.mediaKind
+
     for (const file of files) {
       const type=file.type.toLowerCase()
-      const isImage=type.startsWith('image/')
-      const isVideo=type.startsWith('video/') || isSupportedVideo(file)
+      const isImage=requestedKind === 'image' || type.startsWith('image/')
+      const isVideo=requestedKind === 'video' || type.startsWith('video/') || isSupportedVideo(file)
+      const isAudio=requestedKind === 'audio' || type.startsWith('audio/') || isSupportedAudio(file)
+      let mediaKind:MediaKind
 
-      if (isImage) {
+      if (isImage && requestedKind !== 'video' && requestedKind !== 'audio') {
+        mediaKind='image'
         if (type === 'image/gif') { notify('GIF no compatible', 'Envía una foto JPG, PNG, WebP o HEIC.'); continue }
         if (file.size > MAX_IMAGE_SOURCE_BYTES) { notify('Foto demasiado grande', 'La foto debe pesar menos de 15 MB.'); continue }
-      } else if (isVideo) {
+      } else if (isVideo && requestedKind !== 'audio') {
+        mediaKind='video'
         if (!isSupportedVideo(file)) { notify('Video no compatible', 'Usa MP4, MOV, M4V o WebM.'); continue }
         if (file.size > CHAT_VIDEO_MAX_BYTES) { notify('Video demasiado grande', 'Para mantener el chat rápido y gratuito, cada video debe pesar 12 MB o menos.'); continue }
+      } else if (isAudio) {
+        mediaKind='audio'
+        if (!isSupportedAudio(file)) { notify('Audio no compatible', 'Usa MP3, M4A, AAC, WAV, WebM u OGG.'); continue }
+        if (file.size > CHAT_AUDIO_MAX_BYTES) { notify('Audio demasiado grande', 'Para mantener el chat rápido y gratuito, cada audio debe pesar 8 MB o menos.'); continue }
       } else {
-        notify('Archivo no compatible', 'Selecciona una foto o un video.');
+        notify('Archivo no compatible', 'Selecciona una foto, un video o un audio.');
         continue
       }
 
       const job:PendingMedia = {
         kind:'media',
-        mediaKind:isVideo?'video':'image',
+        mediaKind,
         id:crypto.randomUUID(),
         file,
         objectUrl:URL.createObjectURL(file),
@@ -521,7 +579,6 @@ export async function openChat(options: OpenChatOptions) {
 
   const onConnectivityReturn = () => { if (!closed) void synchronizeLatest() }
   const onVisibilityReturn = () => { if (document.visibilityState === 'visible') void synchronizeLatest() }
-  const onAttachClick = () => fileInput.click()
 
   const subscribeCore = () => {
     coreChannel = supabase.channel(`familia-noa-chat-core-${memberId}`)
@@ -552,9 +609,11 @@ export async function openChat(options: OpenChatOptions) {
   list.addEventListener('scroll', onScroll, { passive:true })
   composer.addEventListener('submit', onSubmit)
   attach.addEventListener('click', onAttachClick)
+  attachMenu.addEventListener('click', onAttachMenuClick)
   fileInput.addEventListener('change', onAttachment)
   list.addEventListener('click', onPendingClick)
   list.addEventListener('click', onImageClick)
+  document.addEventListener('pointerdown', onDocumentPointer)
   window.addEventListener('online', onConnectivityReturn)
   document.addEventListener('visibilitychange', onVisibilityReturn)
 
@@ -562,6 +621,7 @@ export async function openChat(options: OpenChatOptions) {
     closed = true
     window.removeEventListener('online', onConnectivityReturn)
     document.removeEventListener('visibilitychange', onVisibilityReturn)
+    document.removeEventListener('pointerdown', onDocumentPointer)
     features?.cleanup()
     features = null
     void coreChannel?.unsubscribe()
@@ -570,6 +630,7 @@ export async function openChat(options: OpenChatOptions) {
     list.removeEventListener('scroll', onScroll)
     composer.removeEventListener('submit', onSubmit)
     attach.removeEventListener('click', onAttachClick)
+    attachMenu.removeEventListener('click', onAttachMenuClick)
     fileInput.removeEventListener('change', onAttachment)
     list.removeEventListener('click', onPendingClick)
     list.removeEventListener('click', onImageClick)
