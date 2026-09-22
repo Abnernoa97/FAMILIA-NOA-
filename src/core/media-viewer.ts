@@ -20,7 +20,7 @@ function ensure(){
   overlay=document.createElement('div')
   overlay.className='family-media-viewer'
   overlay.hidden=true
-  overlay.innerHTML='<div class="family-media-stage"><button type="button" class="family-media-close" aria-label="Cerrar">×</button><button type="button" class="family-media-prev" aria-label="Anterior">‹</button><img class="family-media-image" alt=""><video class="family-media-video" playsinline preload="metadata" hidden></video><button type="button" class="family-media-next" aria-label="Siguiente">›</button><div class="family-media-count"></div></div>'
+  overlay.innerHTML='<div class="family-media-stage"><button type="button" class="family-media-close" aria-label="Cerrar">×</button><button type="button" class="family-media-prev" aria-label="Anterior">‹</button><img class="family-media-image" alt=""><video class="family-media-video" playsinline preload="metadata" style="max-width:100%;max-height:100%;width:auto;height:auto;object-fit:contain;background:#000" hidden></video><button type="button" class="family-media-next" aria-label="Siguiente">›</button><div class="family-media-count"></div></div>'
   document.body.appendChild(overlay)
 
   overlay.querySelector('.family-media-close')?.addEventListener('click',()=>{
