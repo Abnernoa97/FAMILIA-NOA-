@@ -31,6 +31,8 @@ let memberName = initialIdentity?.name || ''
 let memberId = initialIdentity?.memberId || ''
 let settingsChannel: ReturnType<typeof supabase.channel> | null = null
 let familySyncChannel: ReturnType<typeof supabase.channel> | null = null
+let mandatoryLocationVerified = false
+let mandatoryLocationGateActive = false
 const app = document.querySelector<HTMLDivElement>('#app')!
 document.title = 'FAMILIA NOA'
 
@@ -57,6 +59,14 @@ async function loadMembers(force = false) {
   if (!members.length) members = FALLBACK.map((name, index) => ({ id:String(index), name, active:true, must_share_location:name === 'Mamá' || name === 'Papá' }))
 }
 
+function currentMember(){
+  return members.find(member=>member.id===memberId)||null
+}
+
+function requiresMandatoryLocation(){
+  return !!currentMember()?.must_share_location&&!mandatoryLocationVerified
+}
+
 function stopActiveViews() {
   closeChat()
   stopHomeChatUnread()
@@ -67,6 +77,8 @@ async function clearFamilySession() {
   clearIdentity()
   memberName = ''
   memberId = ''
+  mandatoryLocationVerified = false
+  mandatoryLocationGateActive = false
 }
 
 async function acceptFamilySession(result: FamilySessionResponse) {
@@ -83,6 +95,8 @@ async function acceptFamilySession(result: FamilySessionResponse) {
   setIdentity({ memberId:profile.id, name:profile.name })
   memberName = profile.name
   memberId = profile.id
+  mandatoryLocationVerified = false
+  mandatoryLocationGateActive = false
 }
 
 function login(errorText = '') {
@@ -112,9 +126,9 @@ function securityStep(name: string) {
       const result = data as FamilySessionResponse | null
       if (functionError || !result?.ok) throw functionError || new Error(result?.error || 'LOGIN_FAILED')
       await acceptFamilySession(result)
-      renderHome()
       startSettingsRealtime()
       startFamilyRealtime()
+      enterFamilyHome()
     } catch (loginError) {
       console.error('Family session login failed', loginError)
       error.textContent = 'Datos incorrectos. Comprueba el número de la casa y tu apodo.'
@@ -181,7 +195,9 @@ function startFamilyRealtime() {
       if (!current) {
         void clearFamilySession()
         login('Este perfil ya no está activo.')
+        return
       }
+      if(current.must_share_location&&!mandatoryLocationVerified)renderMandatoryLocation()
     })
     .on('postgres_changes', { event:'*', schema:'public', table:'locations' }, () => {
       if (document.querySelector('.family-locations')) void loadLocations()
@@ -190,6 +206,7 @@ function startFamilyRealtime() {
 }
 
 function openChatScreen(push = true) {
+  if (requiresMandatoryLocation()) { renderMandatoryLocation(); return }
   if (push) enterView('chat')
   stopHomeChatUnread()
   void openChat({
@@ -201,8 +218,21 @@ function openChatScreen(push = true) {
   })
 }
 
+function enterFamilyHome(){
+  if(requiresMandatoryLocation()){
+    renderMandatoryLocation()
+    return
+  }
+  renderHome()
+}
+
 function renderHome() {
+  if(requiresMandatoryLocation()){
+    renderMandatoryLocation()
+    return
+  }
   replaceView('home')
+  mandatoryLocationGateActive=false
   closeChat()
   stopHomeChatUnread()
   app.innerHTML = `<main class="shell"><header class="top"><div><p class="eyebrow">FAMILIA NOA</p><h1>Hola, ${esc(memberName)} <span>♡</span></h1></div><button class="avatar" id="change">${esc(memberName.charAt(0))}</button></header><section class="hero"><p class="eyebrow">TODOS CERCA</p><h2>¿Cómo está la familia hoy?</h2><p>Habla, comparte y revisa que todos estén bien.</p></section><section class="grid"><button class="card dark" id="chat"><i>✦</i><b>Chat</b><small>Habla con todos</small></button><button class="card photo" id="photos"><i>◌</i><b>Fotos</b><small>Momentos de familia</small></button><button class="card" id="location"><i>⌖</i><b>Ubicación</b><small>Ver dónde estamos</small></button><button class="card ok" id="ok"><i>♥</i><b>Estoy bien</b><small>Avísale a la familia</small></button><button class="card help" id="help"><i>!</i><b>Ayuda</b><small>Necesito a mi familia</small></button></section><nav><button class="active">Inicio</button><button id="navchat">Chat</button><button id="navphotos">Fotos</button><button id="navlocation">Ubicación</button></nav></main>`
@@ -238,19 +268,32 @@ async function sendHelp() {
 }
 
 async function renderPhotos(push = true) {
+  if (requiresMandatoryLocation()) { renderMandatoryLocation(); return }
   if (push) enterView('photos')
   stopHomeChatUnread()
   closeChat()
   app.innerHTML = '<main class="page photo-page" data-photo-page><div class="loading">Cargando álbumes…</div></main>'
 }
 
+function renderMandatoryLocation(){
+  mandatoryLocationGateActive=true
+  replaceView('location')
+  stopHomeChatUnread()
+  closeChat()
+  app.innerHTML=`<main class="page location-page"><header class="pagehead"><div style="width:42px"></div><div><p class="eyebrow">FAMILIA NOA</p><h1>Ubicación requerida</h1></div></header><section class="locationbox"><div class="pin">⌖</div><div><p class="eyebrow">OBLIGATORIO</p><h2>Comparte tu ubicación para continuar</h2><p id="locationtext">Para ${esc(memberName)}, la ubicación debe estar activa y actualizarse al entrar a la app.</p></div><button class="primary" id="sharelocation">Activar ubicación y continuar</button></section><section class="family-locations" id="familylocations"><div class="location-section-title"><b>Familia</b><span>Se actualiza en tiempo real</span></div><div class="loading">Cargando…</div></section></main>`
+  document.querySelector('#sharelocation')!.addEventListener('click',()=>void shareLocation())
+  void loadLocations()
+}
+
 async function renderLocation(push = true) {
+  if (requiresMandatoryLocation()) { renderMandatoryLocation(); return }
+  mandatoryLocationGateActive=false
   if (push) enterView('location')
   stopHomeChatUnread()
   closeChat()
-  const current = members.find(member => member.id === memberId)
+  const current = currentMember()
   const mandatory = !!current?.must_share_location
-  app.innerHTML = `<main class="page location-page"><header class="pagehead"><button id="back" aria-label="Volver">‹</button><div><p class="eyebrow">FAMILIA NOA</p><h1>Ubicación</h1></div></header><section class="locationbox"><div class="pin">⌖</div><div><p class="eyebrow">TU UBICACIÓN</p><h2>${mandatory?'Mantener ubicación al día':'Compartir ubicación'}</h2><p id="locationtext">${mandatory?'Este perfil debe mantener su ubicación actualizada para la familia.':'Comparte tu ubicación con la familia cuando quieras.'}</p></div><button class="primary" id="sharelocation">Actualizar ubicación</button></section><section class="family-locations" id="familylocations"><div class="location-section-title"><b>Familia</b><span>Se actualiza en tiempo real</span></div><div class="loading">Cargando…</div></section></main>`
+  app.innerHTML = `<main class="page location-page"><header class="pagehead"><button id="back" aria-label="Volver">‹</button><div><p class="eyebrow">FAMILIA NOA</p><h1>Ubicación</h1></div></header><section class="locationbox"><div class="pin">⌖</div><div><p class="eyebrow">TU UBICACIÓN</p><h2>${mandatory?'Mantener ubicación al día':'Compartir ubicación'}</h2><p id="locationtext">${mandatory?'La ubicación es obligatoria para este perfil y se verifica cada vez que entras a la app.':'Comparte tu ubicación con la familia cuando quieras.'}</p></div><button class="primary" id="sharelocation">Actualizar ubicación</button></section><section class="family-locations" id="familylocations"><div class="location-section-title"><b>Familia</b><span>Se actualiza en tiempo real</span></div><div class="loading">Cargando…</div></section></main>`
   document.querySelector('#back')!.addEventListener('click', () => backView())
   document.querySelector('#sharelocation')!.addEventListener('click', () => void shareLocation())
   await loadLocations()
@@ -304,14 +347,20 @@ async function shareLocation() {
     },{onConflict:'member_id'})
     if(error)throw error
     text.textContent=`Ubicación actualizada ahora${Number.isFinite(accuracy)?` · precisión aproximada ${Math.round(accuracy)} m`:''}.`
+    mandatoryLocationVerified=true
     await loadLocations()
+    if(mandatoryLocationGateActive){
+      mandatoryLocationGateActive=false
+      renderHome()
+      return
+    }
   }catch(error){
     console.error('Family location update failed',error)
     text.textContent=geolocationErrorText(error)
   }finally{
     if(document.contains(button)){
       button.disabled=false
-      button.textContent='Actualizar ubicación'
+      button.textContent=mandatoryLocationGateActive?'Activar ubicación y continuar':'Actualizar ubicación'
     }
   }
 }
@@ -333,7 +382,7 @@ async function loadLocations() {
     const item=byMember.get(member.id)
     const mine=member.id===memberId
     if(!item){
-      return `<div class="locationrow locationrow-empty"><div class="location-person"><span class="location-dot"></span><div><b>${esc(member.name)}${mine?' · tú':''}</b><small>${member.must_share_location?'Ubicación pendiente':'Aún no ha compartido ubicación'}</small></div></div></div>`
+      return `<div class="locationrow locationrow-empty"><div class="location-person"><span class="location-dot"></span><div><b>${esc(member.name)}${mine?' · tú':''}</b><small>${member.must_share_location?'Ubicación obligatoria pendiente':'Aún no ha compartido ubicación'}</small></div></div></div>`
     }
     const ageMs=Date.now()-new Date(item.updated_at).getTime()
     const stale=Number.isFinite(ageMs)&&ageMs>24*60*60*1000
@@ -364,9 +413,10 @@ async function boot() {
     }
     memberId = authenticated.id
     memberName = authenticated.name
-    renderHome()
+    mandatoryLocationVerified=false
     startSettingsRealtime()
     startFamilyRealtime()
+    enterFamilyHome()
     return
   }
   await clearFamilySession()
@@ -379,6 +429,10 @@ void boot()
 initNavigation((view:AppView) => {
   if (view === 'media') return
   if (isMediaViewerOpen()) closeMediaViewer()
+  if(requiresMandatoryLocation()){
+    renderMandatoryLocation()
+    return
+  }
   if (view === 'chat') { openChatScreen(false); return }
   if (view === 'photos' || view === 'album') { void renderPhotos(false); return }
   if (view === 'location') { void renderLocation(false); return }
