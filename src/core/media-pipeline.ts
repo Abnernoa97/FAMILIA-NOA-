@@ -2,8 +2,10 @@ export type OptimizedPhoto={blob:Blob;type:string;name:string;ext:string;width:n
 export type PreparedVideo={blob:Blob;type:string;name:string;ext:string}
 export type PreparedAudio={blob:Blob;type:string;name:string;ext:string}
 
+export const CHAT_IMAGE_MAX_BYTES=15*1024*1024
 export const CHAT_VIDEO_MAX_BYTES=50*1024*1024
 export const CHAT_AUDIO_MAX_BYTES=8*1024*1024
+export const mediaLimitMb=(bytes:number)=>Math.round(bytes/(1024*1024))
 
 const VIDEO_TYPES:Record<string,{ext:string;type:string}>={
   'video/mp4':{ext:'mp4',type:'video/mp4'},
