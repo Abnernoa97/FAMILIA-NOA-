@@ -1,3 +1,7 @@
+import { installResumableChatUploads } from './core/resumable-storage'
+
+installResumableChatUploads()
+
 let biometricLoaded = false
 let profileLoaded = false
 let albumsLoaded = false
