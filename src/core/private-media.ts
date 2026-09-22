@@ -53,3 +53,10 @@ export async function primeMedia(paths:Array<string|null|undefined>){
 export function forgetMedia(path:string|null|undefined){
   if(path)cache.delete(path)
 }
+
+export async function removeMedia(path:string|null|undefined){
+  if(!path)return
+  const {error}=await supabase.storage.from(BUCKET).remove([path])
+  if(error)throw error
+  forgetMedia(path)
+}
