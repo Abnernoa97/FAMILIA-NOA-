@@ -84,7 +84,7 @@ function attachmentHtml(message:ChatMessage, priorityMedia=false){
     return `<button type="button" class="chat-attachment" data-chat-image="${esc(src)}" aria-label="Ver foto"><img src="${esc(src)}" alt="${esc(message.attachment_name || 'Foto')}" ${priorityMedia ? 'loading="eager" fetchpriority="high"' : 'loading="lazy"'} decoding="async"></button>`
   }
   if(isVideoMessage(message)){
-    return `<div class="chat-attachment chat-video"><video class="chat-video-player" src="${esc(src)}" controls playsinline ${priorityMedia ? 'preload="metadata"' : 'preload="none"'} aria-label="${esc(message.attachment_name || 'Video')}"></video></div>`
+    return `<div class="chat-attachment chat-video"><video class="chat-video-player" src="${esc(src)}" playsinline ${priorityMedia ? 'preload="metadata"' : 'preload="none"'} aria-label="${esc(message.attachment_name || 'Video')}"></video></div>`
   }
   if(isAudioMessage(message)){
     return `<div class="chat-attachment chat-audio"><audio class="chat-audio-player" src="${esc(src)}" controls preload="metadata" aria-label="${esc(message.attachment_name || 'Audio')}"></audio></div>`
@@ -148,6 +148,16 @@ export async function openChat(options: OpenChatOptions) {
     if (!src) return
     enterView('media')
     openMediaViewer([{ src, alt:'Foto del chat' }])
+  }
+
+  const onVideoClick = (event:Event) => {
+    const video = (event.target as HTMLElement).closest<HTMLVideoElement>('.chat-video-player')
+    if (!video) return
+    event.preventDefault()
+    event.stopPropagation()
+    if (video.ended) video.currentTime = 0
+    if (video.paused) void video.play().catch(error => console.error('Chat video play failed', error))
+    else video.pause()
   }
 
   const unbindViewport = bindChatViewport(page, list, input, () => stickToLatest, scrollLatest)
@@ -359,7 +369,7 @@ export async function openChat(options: OpenChatOptions) {
   const renderPendingMedia = (job: PendingMedia) => {
     list.querySelector('.chat-empty')?.remove()
     const previewHtml = job.mediaKind === 'video'
-      ? `<div class="chat-attachment chat-video"><video class="chat-video-player" src="${esc(job.objectUrl)}" controls playsinline preload="metadata"></video></div>`
+      ? `<div class="chat-attachment chat-video"><video class="chat-video-player" src="${esc(job.objectUrl)}" playsinline preload="metadata"></video></div>`
       : job.mediaKind === 'audio'
         ? `<div class="chat-attachment chat-audio"><audio class="chat-audio-player" src="${esc(job.objectUrl)}" controls preload="metadata"></audio></div>`
         : `<div class="chat-attachment"><img src="${esc(job.objectUrl)}" alt="Foto" decoding="async"></div>`
@@ -613,6 +623,7 @@ export async function openChat(options: OpenChatOptions) {
   fileInput.addEventListener('change', onAttachment)
   list.addEventListener('click', onPendingClick)
   list.addEventListener('click', onImageClick)
+  list.addEventListener('click', onVideoClick)
   document.addEventListener('pointerdown', onDocumentPointer)
   window.addEventListener('online', onConnectivityReturn)
   document.addEventListener('visibilitychange', onVisibilityReturn)
@@ -634,6 +645,7 @@ export async function openChat(options: OpenChatOptions) {
     fileInput.removeEventListener('change', onAttachment)
     list.removeEventListener('click', onPendingClick)
     list.removeEventListener('click', onImageClick)
+    list.removeEventListener('click', onVideoClick)
     closeMediaViewer()
     outbox.clear(job => { if (job.kind === 'media') URL.revokeObjectURL(job.objectUrl) })
     unbindViewport()
