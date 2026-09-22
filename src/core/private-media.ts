@@ -1,4 +1,5 @@
 import { supabase } from '../supabase'
+import { isVideoStoragePath, videoPosterPath } from './video-poster'
 
 const BUCKET = 'family-photos'
 const TTL_SECONDS = 60 * 60
@@ -67,9 +68,10 @@ function missingObject(error:any){
 
 export async function removeMedia(path:string|null|undefined){
   if(!path)return
-  const {error}=await supabase.storage.from(BUCKET).remove([path])
+  const paths=isVideoStoragePath(path)?[path,videoPosterPath(path)]:[path]
+  const {error}=await supabase.storage.from(BUCKET).remove(paths)
   if(error&&!missingObject(error))throw error
-  forgetMedia(path)
+  paths.forEach(forgetMedia)
 
   const messageId=chatMessageId(path)
   if(messageId){
