@@ -216,7 +216,9 @@ async function renderList(){
  const root=document.querySelector<HTMLElement>('[data-photo-page]');if(!root)return
  activeAlbumId=null
  resetSelection()
- const membersResult=await loadMembers();const members=membersResult.members
+ const membersResult=await loadMembers()
+ const meId=getIdentity()?.memberId||getMemberId()
+ const members=[...membersResult.members].sort((a,b)=>a.id===meId?-1:b.id===meId?1:0)
  const photosResult=await loadAlbumSummary();const photos=photosResult.photos
  await primeMedia(photos.map(p=>p.storage_path))
  const available=photos.filter(p=>!!photoUrl(p.storage_path))
