@@ -17,6 +17,7 @@ import {
 import { uploadChatMedia } from './core/resumable-storage'
 import { bindChatViewport } from './core/chat-viewport'
 import { mediaUrl, primeMedia, signMedia, removeMedia } from './core/private-media'
+import { createVideoPoster, videoPosterPath } from './core/video-poster'
 import { beginVoiceRecording, canRecordVoice, type VoiceRecorderSession } from './core/voice-recorder'
 
 type ChatMessage = {
@@ -95,7 +96,8 @@ function attachmentHtml(message:ChatMessage,priorityMedia=false){
     return `<button type="button" class="chat-attachment" data-chat-media-type="image" data-chat-media-path="${esc(path)}" aria-label="Ver foto"><img src="${esc(src)}" alt="${esc(message.attachment_name||'Foto')}" ${priorityMedia?'loading="eager" fetchpriority="high"':'loading="lazy"'} decoding="async"></button>`
   }
   if(isVideoMessage(message)){
-    return `<button type="button" class="chat-attachment chat-video" data-chat-media-type="video" data-chat-media-path="${esc(path)}" aria-label="Abrir video"><video class="chat-video-player" src="${esc(src)}" playsinline ${priorityMedia?'preload="metadata"':'preload="none"'} aria-label="${esc(message.attachment_name||'Video')}"></video></button>`
+    const posterPath=videoPosterPath(path)
+    return `<button type="button" class="chat-attachment chat-video" data-chat-media-type="video" data-chat-media-path="${esc(path)}" data-chat-media-poster-path="${esc(posterPath)}" aria-label="Abrir video"><span class="chat-video-fallback">Video</span><img class="chat-video-poster" alt="Vista previa del video" decoding="async" ${priorityMedia?'loading="eager"':'loading="lazy"'} hidden><span class="chat-video-play" aria-hidden="true">▶</span></button>`
   }
   if(isAudioMessage(message))return audioPlayerHtml(src,isVoiceMessage(message)?'mensaje de voz':(message.attachment_name||'audio'),path)
   return''
@@ -150,6 +152,24 @@ export async function openChat(options:OpenChatOptions){
   const elementFor=(id:string)=>list.querySelector<HTMLElement>(`.chat-bubble[data-message-id="${CSS.escape(id)}"]`)
   const nameRow=(row:RawChatRow):ChatMessage=>({...row,sender:{name:memberNames.get(row.sender_id)||(row.sender_id===memberId?memberName:'Familia')}})
 
+  const hydrateVideoPosters=async(root:ParentNode=list)=>{
+    const cards=Array.from(root.querySelectorAll<HTMLElement>('.chat-video[data-chat-media-poster-path]'))
+    const paths=[...new Set(cards.map(card=>card.dataset.chatMediaPosterPath||'').filter(Boolean))]
+    if(!paths.length)return
+    await primeMedia(paths)
+    cards.forEach(card=>{
+      const path=card.dataset.chatMediaPosterPath||''
+      const src=path?mediaUrl(path):''
+      const image=card.querySelector<HTMLImageElement>('.chat-video-poster')
+      if(!src||!image)return
+      const reveal=()=>{if(!image.naturalWidth)return;image.hidden=false;card.classList.add('has-poster')}
+      image.onload=reveal
+      image.onerror=()=>{image.hidden=true;card.classList.remove('has-poster')}
+      if(image.getAttribute('src')!==src)image.src=src
+      if(image.complete)reveal()
+    })
+  }
+
   const onMediaClick=(event:Event)=>{
     const media=(event.target as HTMLElement).closest<HTMLElement>('[data-chat-media-type]')
     if(!media)return
@@ -158,17 +178,22 @@ export async function openChat(options:OpenChatOptions){
     void(async()=>{
       const type=media.dataset.chatMediaType==='video'?'video':'image'
       const path=media.dataset.chatMediaPath||''
+      const posterPath=type==='video'?(media.dataset.chatMediaPosterPath||''):''
       let src=media.dataset.chatMediaSrc||''
+      let poster=''
       if(path){
         try{src=await signMedia(path)}catch(error){console.error('Chat media authorization failed',error);return}
       }
+      if(type==='video'&&posterPath){
+        try{poster=await signMedia(posterPath)}catch{}
+      }
       if(!src){
-        const element=media.querySelector<HTMLImageElement|HTMLVideoElement>('img,video')
+        const element=type==='video'?media.querySelector<HTMLVideoElement>('video'):media.querySelector<HTMLImageElement>('img')
         src=element?.currentSrc||element?.getAttribute('src')||''
       }
       if(!src)return
       enterView('media')
-      openMediaViewer([{src,alt:type==='video'?'Video del chat':'Foto del chat',type}])
+      openMediaViewer([{src,poster,alt:type==='video'?'Video del chat':'Foto del chat',type}])
     })()
   }
 
@@ -247,7 +272,10 @@ export async function openChat(options:OpenChatOptions){
     if(!message||!current)return
     current.outerHTML=renderMessage(message,true)
     const next=elementFor(id)
-    if(next&&features){features.decorateMessage(next,message);features.onMessageUpdated(message)}
+    if(next){
+      void hydrateVideoPosters(next)
+      if(features){features.decorateMessage(next,message);features.onMessageUpdated(message)}
+    }
     if(stickToLatest)scheduleLatest()
   }
 
@@ -277,6 +305,8 @@ export async function openChat(options:OpenChatOptions){
     const nextElement=nextMessage?elementFor(nextMessage.id):null
     if(nextElement)nextElement.insertAdjacentHTML('beforebegin',renderMessage(message,true))
     else list.insertAdjacentHTML('beforeend',renderMessage(message,true))
+    const inserted=elementFor(message.id)
+    if(inserted)void hydrateVideoPosters(inserted)
     if(features)features.onMessageInserted(message)
     if(forceBottom||stickToLatest||message.sender_id===memberId){stickToLatest=true;scheduleLatest()}
   }
@@ -290,6 +320,7 @@ export async function openChat(options:OpenChatOptions){
       oldestCreatedAt=all[0]?.created_at||''
       hasMore=all.length===PAGE_SIZE
       list.innerHTML=all.length?all.map((message,index)=>renderMessage(message,index>=all.length-4)).join(''):'<div class="chat-empty">Todavía no hay mensajes. Sé el primero ❤️</div>'
+      void hydrateVideoPosters()
       features=startChatFeatures({
         list,composer,input,preview,memberId,
         getMessage:id=>byId.get(id),
@@ -323,6 +354,7 @@ export async function openChat(options:OpenChatOptions){
       oldestCreatedAt=all[0]?.created_at||oldestCreatedAt
       hasMore=older.length===PAGE_SIZE
       list.insertAdjacentHTML('afterbegin',older.map(message=>renderMessage(message)).join(''))
+      void hydrateVideoPosters()
       features?.onMessagesPrepended(older.map(message=>message.id))
       list.scrollTop=list.scrollHeight-previousHeight+previousTop
     }catch(error){console.error('Older Chat history load failed',error)}
@@ -381,7 +413,7 @@ export async function openChat(options:OpenChatOptions){
   const renderPendingMedia=(job:PendingMedia)=>{
     list.querySelector('.chat-empty')?.remove()
     const previewHtml=job.mediaKind==='video'
-      ?`<button type="button" class="chat-attachment chat-video" data-chat-media-type="video" data-chat-media-src="${esc(job.objectUrl)}" aria-label="Abrir video"><video class="chat-video-player" src="${esc(job.objectUrl)}" playsinline preload="metadata"></video></button>`
+      ?`<button type="button" class="chat-attachment chat-video" data-chat-media-type="video" data-chat-media-src="${esc(job.objectUrl)}" aria-label="Abrir video"><video class="chat-video-player" src="${esc(job.objectUrl)}" playsinline preload="metadata"></video><span class="chat-video-play" aria-hidden="true">▶</span></button>`
       :job.mediaKind==='audio'
         ?audioPlayerHtml(job.objectUrl,job.file.name.startsWith('voz-')?'mensaje de voz':'audio')
         :`<button type="button" class="chat-attachment" data-chat-media-type="image" data-chat-media-src="${esc(job.objectUrl)}" aria-label="Ver foto"><img src="${esc(job.objectUrl)}" alt="Foto" decoding="async"></button>`
@@ -409,7 +441,12 @@ export async function openChat(options:OpenChatOptions){
   }
 
   const finishPendingMedia=async(job:PendingMedia,message:ChatMessage)=>{
-    if(message.attachment_path){try{await signMedia(message.attachment_path)}catch(error){console.error('Chat media post-send authorization failed',error)}}
+    if(message.attachment_path){
+      try{await signMedia(message.attachment_path)}catch(error){console.error('Chat media post-send authorization failed',error)}
+      if(isVideoMessage(message)){
+        try{await signMedia(videoPosterPath(message.attachment_path))}catch{}
+      }
+    }
     pendingElement(job.id)?.remove();outbox.done(job.id);URL.revokeObjectURL(job.objectUrl)
     if(job.replyToId===features?.getReplyToId())features?.clearReply()
     if(!byId.has(message.id))await appendMessage(message,true);else scrollLatest()
@@ -422,12 +459,23 @@ export async function openChat(options:OpenChatOptions){
       const alreadySent=await existingMessage(job.id)
       if(alreadySent){await finishPendingMedia(job,alreadySent);return}
       const prepared=await prepareJobMedia(job)
+      const posterPromise=job.mediaKind==='video'?createVideoPoster(job.file):Promise.resolve<Blob|null>(null)
       path=`chat/${memberId}/${job.id}.${prepared.ext}`
       await uploadChatMedia(path,prepared.blob,{
         contentType:prepared.type,
         cacheControl:'31536000',
         onProgress:(uploaded,total)=>setPendingMediaProgress(job.id,uploaded,total)
       })
+      if(job.mediaKind==='video'){
+        const poster=await posterPromise
+        if(poster){
+          const posterPath=videoPosterPath(path)
+          try{
+            await uploadChatMedia(posterPath,poster,{contentType:'image/jpeg',cacheControl:'31536000'})
+            await signMedia(posterPath)
+          }catch(posterError){console.warn('Chat video poster upload skipped',posterError)}
+        }
+      }
       const {data,error:insertError}=await supabase.from('messages').insert({
         id:job.id,sender_id:memberId,body:'',attachment_path:path,attachment_type:prepared.type,
         attachment_name:prepared.name,attachment_size:prepared.blob.size,reply_to_id:job.replyToId
@@ -564,6 +612,7 @@ export async function openChat(options:OpenChatOptions){
           replaceMessageElement(message.id)
         }
       }
+      void hydrateVideoPosters()
       all=orderMessages(all)
     }catch(error){console.error('Chat synchronization failed',error)}
     finally{synchronizing=false}
