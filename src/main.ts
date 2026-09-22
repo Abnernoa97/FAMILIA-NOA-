@@ -29,25 +29,11 @@ document.title = 'FAMILIA NOA'
 
 const esc = (value: string) => value.replace(/[&<>"']/g, char => ({ '&':'&amp;', '<':'&lt;', '>':'&gt;', '"':'&quot;', "'":'&#039;' }[char] || char))
 const time = (value: string) => new Date(value).toLocaleTimeString('es-MX', { hour:'2-digit', minute:'2-digit' })
-const STARTUP_TIMEOUT_MS = 6500
-
-function withTimeout<T>(promise: Promise<T>, ms = STARTUP_TIMEOUT_MS): Promise<T> {
-  return Promise.race([
-    promise,
-    new Promise<T>((_, reject) => window.setTimeout(() => reject(new Error('NETWORK_TIMEOUT')), ms))
-  ])
-}
 
 async function loadMembers(force = false) {
   if (membersLoaded && !force) return
-  try {
-    const { data } = await withTimeout(
-      supabase.from('family_members').select('id,name,active,must_share_location').eq('active', true).order('created_at')
-    )
-    members = (data || []) as Member[]
-  } catch (error) {
-    console.warn('Family members startup request timed out; using safe fallback.', error)
-  }
+  const { data } = await supabase.from('family_members').select('id,name,active,must_share_location').eq('active', true).order('created_at')
+  members = (data || []) as Member[]
   membersLoaded = true
   if (!members.length) members = FALLBACK.map((name, index) => ({ id:String(index), name, active:true, must_share_location:name === 'Mamá' || name === 'Papá' }))
 }
@@ -58,7 +44,7 @@ function stopActiveViews() {
 }
 
 async function clearFamilySession() {
-  try { await withTimeout(supabase.auth.signOut({ scope:'local' }), 3000) } catch {}
+  try { await supabase.auth.signOut({ scope:'local' }) } catch {}
   clearIdentity()
   memberName = ''
   memberId = ''
@@ -283,15 +269,8 @@ function sheet(title: string, text: string) {
 }
 
 async function boot() {
-  // Never leave the installed PWA trapped behind the native splash while a
-  // cellular request is slow or filtered. Startup has a hard network deadline.
   await loadMembers()
-  let authenticated: Awaited<ReturnType<typeof getAuthenticatedFamilyMember>> = null
-  try {
-    authenticated = await withTimeout(getAuthenticatedFamilyMember())
-  } catch (error) {
-    console.warn('Family session startup validation timed out.', error)
-  }
+  const authenticated = await getAuthenticatedFamilyMember()
   if (authenticated && members.some(member => member.id === authenticated.id)) {
     const identity = getIdentity()
     if (!identity || identity.memberId !== authenticated.id || identity.name !== authenticated.name) {
