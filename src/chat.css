@@ -36,6 +36,7 @@ body:has(.chat-page) #app{
   overscroll-behavior:contain;
   -webkit-overflow-scrolling:touch;
   scroll-behavior:auto;
+  scroll-padding-bottom:12px;
   padding:max(8px,env(safe-area-inset-top)) 14px 10px;
   visibility:hidden;
 }
@@ -64,6 +65,9 @@ body:has(.chat-page) #app{
 
 .chat-attachment{display:block;width:100%;margin-top:5px;padding:0;border:0;border-radius:10px;overflow:hidden;background:#e8e3da;text-decoration:none;color:inherit;cursor:pointer}
 .chat-attachment img{display:block;width:100%;aspect-ratio:4/3;max-height:300px;object-fit:cover;background:#e8e3da}
+.chat-video{background:#111;cursor:default}
+.chat-video-player{display:block;width:100%;aspect-ratio:16/9;max-height:300px;object-fit:contain;background:#111}
+.chat-media-unavailable{width:100%;margin-top:5px;min-height:86px;border-radius:10px;display:grid;place-items:center;text-align:center;padding:14px;background:#e8e3da;color:#77736b;font-size:11px}
 
 .chat-quoted{display:flex;flex-direction:column;width:100%;text-align:left;background:#efebe3;border-left:2px solid #8b8478;border-radius:7px;padding:6px 8px;margin:0 0 6px;color:#514e48}
 .chat-quoted b{font-size:10px;margin:0}
@@ -135,4 +139,3 @@ body:has(.chat-page) #app{
   .chat-bubble:has(> .chat-attachment){width:86%}
   .chat-messages{padding-left:12px;padding-right:12px}
 }
-
