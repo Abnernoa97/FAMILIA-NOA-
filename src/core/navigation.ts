@@ -1,4 +1,4 @@
-export type AppView='home'|'chat'|'photos'|'album'|'media'|'profile'|'profile-detail'
+export type AppView='home'|'chat'|'photos'|'album'|'media'|'profile'|'profile-detail'|'location'
 const KEY='familiaNoaView'
 export function currentView():AppView{return (history.state?.[KEY]||'home') as AppView}
 export function enterView(view:AppView){
