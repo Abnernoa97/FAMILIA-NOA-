@@ -67,6 +67,8 @@ body:has(.chat-page) #app{
 .chat-attachment img{display:block;width:100%;aspect-ratio:4/3;max-height:300px;object-fit:cover;background:#e8e3da}
 .chat-video{background:#111;cursor:default}
 .chat-video-player{display:block;width:100%;aspect-ratio:16/9;max-height:300px;object-fit:contain;background:#111}
+.chat-audio{background:#efebe3;cursor:default;padding:8px 10px}
+.chat-audio-player{display:block;width:100%;height:40px}
 .chat-media-unavailable{width:100%;margin-top:5px;min-height:86px;border-radius:10px;display:grid;place-items:center;text-align:center;padding:14px;background:#e8e3da;color:#77736b;font-size:11px}
 
 .chat-quoted{display:flex;flex-direction:column;width:100%;text-align:left;background:#efebe3;border-left:2px solid #8b8478;border-radius:7px;padding:6px 8px;margin:0 0 6px;color:#514e48}
@@ -111,9 +113,16 @@ body:has(.chat-page) #app{
 .chat-composer input#message{flex:1;min-width:0;height:44px;border:1px solid #d9d4ca;border-radius:22px;background:#fff;padding:0 16px;font:14px 'DM Sans',sans-serif;color:#171716;outline:none}
 .chat-composer input#message:focus{border-color:#171716;box-shadow:0 0 0 3px #17171610}
 .chat-attach,.chat-send{height:44px;border-radius:22px;background:#171716;color:#fff;font-weight:700}
-.chat-attach{width:44px;flex:0 0 44px;padding:0;font-size:19px}
+.chat-attach{width:44px;flex:0 0 44px;padding:0;font-size:19px;transition:transform .16s ease}
+.chat-attach[aria-expanded="true"]{transform:rotate(45deg)}
 .chat-send{padding:0 16px}
 .chat-attach:disabled,.chat-send:disabled,.chat-composer input:disabled{opacity:.55}
+
+.chat-attach-menu{position:absolute;left:10px;bottom:calc(100% + 8px);z-index:25;min-width:156px;padding:6px;background:#fffdf9;border:1px solid #ddd8ce;border-radius:16px;box-shadow:0 14px 38px #17171626;display:grid;gap:3px}
+.chat-attach-menu[hidden]{display:none}
+.chat-attach-menu button{height:44px;padding:0 12px;border-radius:11px;background:transparent;color:#272622;display:flex;align-items:center;gap:10px;text-align:left;font-weight:600}
+.chat-attach-menu button:active{background:#efebe3}
+.chat-attach-menu button span{width:25px;text-align:center;font-size:18px}
 
 .chat-pending{opacity:.94;min-width:180px}
 .chat-retry{border:0;background:transparent;color:#171716;font:700 10px 'DM Sans',sans-serif;padding:2px 4px;text-decoration:underline;cursor:pointer}
