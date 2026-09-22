@@ -1,13 +1,26 @@
 export type OptimizedPhoto={blob:Blob;type:string;name:string;ext:string;width:number;height:number}
 export type PreparedVideo={blob:Blob;type:string;name:string;ext:string}
+export type PreparedAudio={blob:Blob;type:string;name:string;ext:string}
 
 export const CHAT_VIDEO_MAX_BYTES=12*1024*1024
+export const CHAT_AUDIO_MAX_BYTES=8*1024*1024
 
 const VIDEO_TYPES:Record<string,{ext:string;type:string}>={
   'video/mp4':{ext:'mp4',type:'video/mp4'},
   'video/webm':{ext:'webm',type:'video/webm'},
   'video/quicktime':{ext:'mov',type:'video/quicktime'},
   'video/x-m4v':{ext:'m4v',type:'video/x-m4v'}
+}
+
+const AUDIO_TYPES:Record<string,{ext:string;type:string}>={
+  'audio/mpeg':{ext:'mp3',type:'audio/mpeg'},
+  'audio/mp4':{ext:'m4a',type:'audio/mp4'},
+  'audio/x-m4a':{ext:'m4a',type:'audio/mp4'},
+  'audio/aac':{ext:'aac',type:'audio/aac'},
+  'audio/wav':{ext:'wav',type:'audio/wav'},
+  'audio/x-wav':{ext:'wav',type:'audio/wav'},
+  'audio/webm':{ext:'webm',type:'audio/webm'},
+  'audio/ogg':{ext:'ogg',type:'audio/ogg'}
 }
 
 async function decode(file:File):Promise<{source:CanvasImageSource;width:number;height:number;dispose:()=>void}>{
@@ -66,4 +79,18 @@ export function prepareVideo(file:File):PreparedVideo{
 
 export function isSupportedVideo(file:File){
   try{prepareVideo(file);return true}catch{return false}
+}
+
+export function prepareAudio(file:File):PreparedAudio{
+  const direct=AUDIO_TYPES[file.type.toLowerCase()]
+  if(direct)return{blob:file,type:direct.type,name:file.name||`audio.${direct.ext}`,ext:direct.ext}
+
+  const ext=(file.name.split('.').pop()||'').toLowerCase()
+  const fallback=Object.values(AUDIO_TYPES).find(item=>item.ext===ext)
+  if(!fallback)throw new Error('AUDIO_NOT_SUPPORTED')
+  return{blob:file,type:fallback.type,name:file.name||`audio.${fallback.ext}`,ext:fallback.ext}
+}
+
+export function isSupportedAudio(file:File){
+  try{prepareAudio(file);return true}catch{return false}
 }
