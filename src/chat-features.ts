@@ -95,8 +95,18 @@ export function startChatFeatures(options: ChatFeaturesOptions) {
   let featureChannel: ReturnType<typeof supabase.channel> | null = null
   let lastReadTail = ''
   const pendingReactionIds = new Set<string>()
+  const mediaCleanup = new Set<string>()
 
   const messageElement = (id:string) => list.querySelector<HTMLElement>(`.chat-bubble[data-message-id="${CSS.escape(id)}"]`)
+
+  const cleanupDeletedMedia = (message:FeatureMessage) => {
+    const path = message.attachment_path
+    if (!path || !message.deleted_at || message.sender_id !== memberId || !options.removeMedia || mediaCleanup.has(path)) return
+    mediaCleanup.add(path)
+    void options.removeMedia(path)
+      .catch(error => console.error('Deleted Chat media cleanup failed', error))
+      .finally(() => mediaCleanup.delete(path))
+  }
 
   const renderReplyPreview = () => {
     if (!replyToId) {
@@ -288,8 +298,10 @@ export function startChatFeatures(options: ChatFeaturesOptions) {
           attachment_name:null
         })
         if (mediaPath && options.removeMedia) {
-          try { await options.removeMedia(mediaPath) }
-          catch (cleanupError) { console.error('Deleted Chat media cleanup failed', cleanupError) }
+          mediaCleanup.add(mediaPath)
+          void options.removeMedia(mediaPath)
+            .catch(cleanupError => console.error('Deleted Chat media cleanup failed', cleanupError))
+            .finally(() => mediaCleanup.delete(mediaPath))
         }
       }
       return
@@ -353,6 +365,7 @@ export function startChatFeatures(options: ChatFeaturesOptions) {
     .subscribe()
 
   decorateAll()
+  options.getMessages().forEach(cleanupDeletedMedia)
   void refreshReactions(options.getMessages().map(message => message.id))
   scheduleMarkRead(160, true)
   scheduleReceiptRefresh()
@@ -366,15 +379,21 @@ export function startChatFeatures(options: ChatFeaturesOptions) {
     onMessageInserted(message:FeatureMessage) {
       const bubble = messageElement(message.id)
       if (bubble) decorateMessage(bubble, message)
+      cleanupDeletedMedia(message)
       if (options.isAtBottom()) scheduleMarkRead(80)
     },
     onMessagesPrepended(ids:string[]) {
       decorateAll()
+      ids.forEach(id => {
+        const message = options.getMessage(id)
+        if (message) cleanupDeletedMedia(message)
+      })
       void refreshReactions(ids)
     },
     onMessageUpdated(message:FeatureMessage) {
       const bubble = messageElement(message.id)
       if (bubble) decorateMessage(bubble, message)
+      cleanupDeletedMedia(message)
       scheduleReactionRefresh(message.id)
       scheduleReceiptRefresh()
     },
@@ -392,6 +411,7 @@ export function startChatFeatures(options: ChatFeaturesOptions) {
       window.removeEventListener('focus', onVisibility)
       void featureChannel?.unsubscribe()
       featureChannel = null
+      mediaCleanup.clear()
     }
   }
 }
