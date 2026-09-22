@@ -1,6 +1,7 @@
 let biometricLoaded = false
 let profileLoaded = false
 let albumsLoaded = false
+let locationLoaded = false
 
 const loadBiometric = async () => {
   if (biometricLoaded || !document.querySelector('.members')) return
@@ -41,13 +42,25 @@ const loadAlbums = async () => {
   }
 }
 
+const loadLocation = async () => {
+  if (locationLoaded || !document.querySelector('.location-page')) return
+  try {
+    await import('./location-map-enhancer')
+    locationLoaded = true
+  } catch (error) {
+    locationLoaded = false
+    console.error('Location map enhancer failed to load', error)
+  }
+}
+
 let observer: MutationObserver | null = null
 
 function scan() {
   void loadBiometric()
   void loadProfile()
   void loadAlbums()
-  if (biometricLoaded && profileLoaded && albumsLoaded) {
+  void loadLocation()
+  if (biometricLoaded && profileLoaded && albumsLoaded && locationLoaded) {
     observer?.disconnect()
     observer = null
   }
