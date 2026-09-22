@@ -377,6 +377,7 @@ export async function openChat(options: OpenChatOptions) {
       URL.revokeObjectURL(job.objectUrl)
       if (job.replyToId === features?.getReplyToId()) features?.clearReply()
       const message = nameRow(data as RawChatRow)
+      await signMedia(message.attachment_path)
       if (!byId.has(message.id)) await appendMessage(message, true)
       else scrollLatest()
     } catch (error) {
