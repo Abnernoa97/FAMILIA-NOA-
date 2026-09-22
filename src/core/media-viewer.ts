@@ -1,4 +1,4 @@
-import { backView, currentView, enterView } from './navigation'
+import { backView, currentView } from './navigation'
 
 type MediaItem = { src:string; alt?:string; type?:'image'|'video' }
 
@@ -7,10 +7,10 @@ let items:MediaItem[]=[]
 let index=0
 let closeHandler:(()=>void)|null=null
 
-function pauseOtherVideos(active?:HTMLVideoElement|null){
-  document.querySelectorAll<HTMLVideoElement>('video').forEach(video=>{
-    if(video!==active&&!video.paused){
-      try{video.pause()}catch{}
+function pauseOtherMedia(active?:HTMLMediaElement|null){
+  document.querySelectorAll<HTMLMediaElement>('video,audio').forEach(media=>{
+    if(media!==active&&!media.paused){
+      try{media.pause()}catch{}
     }
   })
 }
@@ -40,11 +40,11 @@ function ensure(){
     event.stopPropagation()
     if(viewerVideo.ended)viewerVideo.currentTime=0
     if(viewerVideo.paused){
-      pauseOtherVideos(viewerVideo)
+      pauseOtherMedia(viewerVideo)
       void viewerVideo.play().catch(()=>{})
     }else viewerVideo.pause()
   })
-  viewerVideo.addEventListener('play',()=>pauseOtherVideos(viewerVideo))
+  viewerVideo.addEventListener('play',()=>pauseOtherMedia(viewerVideo))
 
   let sx=0,sy=0
   overlay.addEventListener('touchstart',e=>{const t=e.changedTouches[0];sx=t.clientX;sy=t.clientY},{passive:true})
@@ -74,7 +74,7 @@ function show(next:number){
     video.src=item.src
     video.setAttribute('aria-label',item.alt||'Video')
     video.hidden=false
-    pauseOtherVideos(video)
+    pauseOtherMedia(video)
     void video.play().catch(()=>{})
   }else{
     image.src=item.src
@@ -101,25 +101,10 @@ export function closeMediaViewer(){
 
 export function isMediaViewerOpen(){return !!overlay&&!overlay.hidden}
 
-// Global media policy: only one video may produce sound/play at a time.
+// One active media element across the app prevents overlapping audio/video.
 document.addEventListener('play',event=>{
-  const video=event.target
-  if(video instanceof HTMLVideoElement)pauseOtherVideos(video)
-},true)
-
-// Chat videos always open in the shared fullscreen viewer. Capture phase keeps
-// the inline Chat click handler from starting a second video underneath it.
-document.addEventListener('click',event=>{
-  const target=event.target as HTMLElement|null
-  const video=target?.closest<HTMLVideoElement>('.chat-video-player')
-  if(!video)return
-  const src=video.currentSrc||video.src
-  if(!src)return
-  event.preventDefault()
-  event.stopPropagation()
-  pauseOtherVideos()
-  enterView('media')
-  openMediaViewer([{src,alt:video.getAttribute('aria-label')||'Video del chat',type:'video'}])
+  const media=event.target
+  if(media instanceof HTMLMediaElement)pauseOtherMedia(media)
 },true)
 
 window.addEventListener('keydown',e=>{
