@@ -1,7 +1,7 @@
 import * as tus from 'tus-js-client'
 import { supabase, SUPABASE_PUBLISHABLE_KEY, SUPABASE_URL } from '../supabase'
 
-const CHAT_BUCKET='family-photos'
+const MEDIA_BUCKET='family-photos'
 const RESUMABLE_THRESHOLD=6*1024*1024
 const CHUNK_SIZE=6*1024*1024
 const PROJECT_ID=new URL(SUPABASE_URL).hostname.split('.')[0]
@@ -31,9 +31,9 @@ function alreadyExists(error:any){
 }
 
 async function signedUpload(path:string){
-  const api=supabase.storage.from(CHAT_BUCKET)
+  const api=supabase.storage.from(MEDIA_BUCKET)
   const {data,error}=await api.createSignedUploadUrl(path,{upsert:false})
-  if(error||!data?.token)throw error||new Error('CHAT_SIGNED_UPLOAD_UNAVAILABLE')
+  if(error||!data?.token)throw error||new Error('MEDIA_SIGNED_UPLOAD_UNAVAILABLE')
   return{api,data}
 }
 
@@ -47,12 +47,12 @@ function xhrPut(url:string,path:string,file:Blob,options:UploadOptions,entry:Act
     xhr.setRequestHeader('apikey',SUPABASE_PUBLISHABLE_KEY)
     xhr.setRequestHeader('x-upsert','false')
     xhr.upload.onprogress=event=>{if(event.lengthComputable)emit(entry,event.loaded,event.total)}
-    xhr.onerror=()=>reject(new Error('CHAT_UPLOAD_NETWORK_ERROR'))
-    xhr.onabort=()=>reject(new Error('CHAT_UPLOAD_ABORTED'))
+    xhr.onerror=()=>reject(new Error('MEDIA_UPLOAD_NETWORK_ERROR'))
+    xhr.onabort=()=>reject(new Error('MEDIA_UPLOAD_ABORTED'))
     xhr.onload=()=>{
       if(xhr.status>=200&&xhr.status<300){emit(entry,file.size,file.size);resolve({data:{path},error:null});return}
       if(xhr.status===409){emit(entry,file.size,file.size);resolve({data:{path},error:null});return}
-      reject(new Error(`CHAT_SIGNED_UPLOAD_FAILED_${xhr.status}`))
+      reject(new Error(`MEDIA_SIGNED_UPLOAD_FAILED_${xhr.status}`))
     }
     xhr.send(body)
   })
@@ -60,7 +60,7 @@ function xhrPut(url:string,path:string,file:Blob,options:UploadOptions,entry:Act
 
 async function signedProgressUpload(path:string,file:Blob,options:UploadOptions,entry:ActiveUpload){
   const {data}=await signedUpload(path)
-  if(!data.signedUrl)throw new Error('CHAT_SIGNED_UPLOAD_URL_UNAVAILABLE')
+  if(!data.signedUrl)throw new Error('MEDIA_SIGNED_UPLOAD_URL_UNAVAILABLE')
   let directUrl=data.signedUrl
   try{const url=new URL(data.signedUrl);url.hostname=STORAGE_HOST;directUrl=url.toString()}catch{}
   try{return await xhrPut(directUrl,path,file,options,entry)}
@@ -83,7 +83,7 @@ async function resumableUpload(path:string,file:Blob,options:UploadOptions,entry
       uploadDataDuringCreation:true,
       removeFingerprintOnSuccess:true,
       metadata:{
-        bucketName:CHAT_BUCKET,
+        bucketName:MEDIA_BUCKET,
         objectName:path,
         contentType:options.contentType||file.type||'application/octet-stream',
         cacheControl:String(options.cacheControl||'31536000')
@@ -102,7 +102,7 @@ async function resumableUpload(path:string,file:Blob,options:UploadOptions,entry
 
 async function standardUpload(path:string,file:Blob,options:UploadOptions,entry:ActiveUpload):Promise<UploadResult>{
   emit(entry,0,file.size)
-  const {error}=await supabase.storage.from(CHAT_BUCKET).upload(path,file,{
+  const {error}=await supabase.storage.from(MEDIA_BUCKET).upload(path,file,{
     contentType:options.contentType||file.type||'application/octet-stream',
     cacheControl:options.cacheControl||'31536000',
     upsert:false
@@ -112,7 +112,7 @@ async function standardUpload(path:string,file:Blob,options:UploadOptions,entry:
   return{data:{path},error:null}
 }
 
-export function uploadChatMedia(path:string,file:Blob,options:UploadOptions={}):Promise<UploadResult>{
+export function uploadPrivateMedia(path:string,file:Blob,options:UploadOptions={}):Promise<UploadResult>{
   const existing=activeUploads.get(path)
   if(existing){
     if(options.onProgress)existing.listeners.add(options.onProgress)
@@ -126,7 +126,7 @@ export function uploadChatMedia(path:string,file:Blob,options:UploadOptions={}):
       if(file.size<=RESUMABLE_THRESHOLD)return await standardUpload(path,file,options,entry)
       try{return await resumableUpload(path,file,options,entry)}
       catch(tusError){
-        console.warn('Resumable Chat upload failed; using signed upload fallback.',tusError)
+        console.warn('Resumable media upload failed; using signed upload fallback.',tusError)
         return await signedProgressUpload(path,file,options,entry)
       }
     }finally{
@@ -136,3 +136,5 @@ export function uploadChatMedia(path:string,file:Blob,options:UploadOptions={}):
   activeUploads.set(path,entry)
   return entry.promise
 }
+
+export const uploadChatMedia=uploadPrivateMedia
