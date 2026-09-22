@@ -2,7 +2,7 @@ import { defineConfig } from 'vite'
 import { resolve } from 'node:path'
 
 export default defineConfig({
-  base: process.env.GITHUB_ACTIONS ? '/FAMILIA-NOA-/' : '/',
+  base: process.env.CF_PAGES || process.env.CLOUDFLARE ? '/' : (process.env.GITHUB_ACTIONS ? '/FAMILIA-NOA-/' : '/'),
   build: {
     rollupOptions: {
       input: {
