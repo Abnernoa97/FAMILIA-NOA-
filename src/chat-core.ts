@@ -127,11 +127,12 @@ export async function openChat(options: OpenChatOptions) {
   const nameRow = (row: RawChatRow): ChatMessage => ({ ...row, sender:{ name:memberNames.get(row.sender_id) || (row.sender_id === memberId ? memberName : 'Familia') } })
 
   const fetchPage = async (before?: string) => {
-    let query = supabase.from('messages').select(MESSAGE_FIELDS).order('created_at', { ascending:false }).limit(PAGE_SIZE)
-    if (before) query = query.lt('created_at', before)
-    const { data, error } = await query
+    const { data, error } = await supabase.rpc('get_chat_messages', {
+      p_before: before || null,
+      p_limit: PAGE_SIZE
+    })
     if (error) throw error
-    const rows=((data || []) as RawChatRow[]).reverse().map(nameRow)
+    const rows=((data || []) as RawChatRow[]).map(nameRow).reverse()
     await primeMedia(rows.map(row=>row.attachment_path))
     return rows
   }
@@ -451,9 +452,9 @@ export async function openChat(options: OpenChatOptions) {
     if (closed || synchronizing) return
     synchronizing = true
     try {
-      const { data, error } = await supabase.from('messages').select(MESSAGE_FIELDS).order('created_at', { ascending:false }).limit(100)
+      const { data, error } = await supabase.rpc('get_chat_messages', { p_before:null, p_limit:100 })
       if (error) throw error
-      const canonical = ((data || []) as RawChatRow[]).reverse().map(nameRow)
+      const canonical = ((data || []) as RawChatRow[]).map(nameRow).reverse()
       await primeMedia(canonical.map(message => message.attachment_path))
       await fetchMissingReplies(canonical)
       for (const message of canonical) {
