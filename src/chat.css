@@ -53,6 +53,7 @@ body:has(.chat-page) #app{
   padding:9px 11px 7px;
   contain:layout paint;
 }
+.chat-bubble:has(> .chat-attachment){width:min(82%,520px)}
 .chat-bubble.mine{align-self:flex-end;background:#e8eee5;border-color:#d9e1d5;border-radius:16px 16px 5px 16px}
 .chat-bubble.deleted{opacity:.72}
 .chat-sender{display:block;font-size:11px;letter-spacing:.02em;margin:0 0 4px;color:#514e48}
@@ -131,6 +132,7 @@ body:has(.chat-page) #app{
 
 @media(max-width:480px){
   .chat-bubble{max-width:86%}
+  .chat-bubble:has(> .chat-attachment){width:86%}
   .chat-messages{padding-left:12px;padding-right:12px}
 }
 
