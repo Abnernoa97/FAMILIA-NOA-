@@ -6,6 +6,7 @@ import { Outbox } from './core/outbox'
 import { optimizePhoto, prepareVideo, prepareAudio, isSupportedVideo, isSupportedAudio, CHAT_VIDEO_MAX_BYTES, CHAT_AUDIO_MAX_BYTES } from './core/media-pipeline'
 import { bindChatViewport } from './core/chat-viewport'
 import { mediaUrl, primeMedia, signMedia } from './core/private-media'
+import { beginVoiceRecording, canRecordVoice, type VoiceRecorderSession } from './core/voice-recorder'
 
 type ChatMessage = {
   id: string
@@ -41,6 +42,11 @@ const MAX_IMAGE_SOURCE_BYTES = 15 * 1024 * 1024
 const MESSAGE_FIELDS = 'id,sender_id,body,created_at,reply_to_id,edited_at,deleted_at,attachment_path,attachment_type,attachment_name,attachment_size'
 const esc = (value: string) => value.replace(/[&<>"']/g, char => ({ '&':'&amp;', '<':'&lt;', '>':'&gt;', '"':'&quot;', "'":'&#039;' }[char] || char))
 const time = (value: string) => new Date(value).toLocaleTimeString('es-MX', { hour:'2-digit', minute:'2-digit' })
+const mediaTime = (seconds: number) => {
+  const safe = Number.isFinite(seconds) && seconds > 0 ? Math.floor(seconds) : 0
+  const minutes = Math.floor(safe / 60)
+  return `${minutes}:${String(safe % 60).padStart(2, '0')}`
+}
 const compareMessages = (a: ChatMessage, b: ChatMessage) => {
   const byTime = new Date(a.created_at).getTime() - new Date(b.created_at).getTime()
   return byTime || a.id.localeCompare(b.id)
@@ -49,11 +55,16 @@ const orderMessages = (messages: ChatMessage[]) => [...messages].sort(compareMes
 const isImageMessage = (message:ChatMessage) => !!message.attachment_path && (message.attachment_type || '').startsWith('image/')
 const isVideoMessage = (message:ChatMessage) => !!message.attachment_path && (message.attachment_type || '').startsWith('video/')
 const isAudioMessage = (message:ChatMessage) => !!message.attachment_path && (message.attachment_type || '').startsWith('audio/')
+const isVoiceMessage = (message:ChatMessage) => isAudioMessage(message) && (message.attachment_name || '').startsWith('voz-')
 
 let activeCleanup: (() => void) | null = null
 
 function storageUrl(path: string) {
   return mediaUrl(path)
+}
+
+function audioPlayerHtml(src:string, label:string) {
+  return `<div class="chat-attachment chat-audio"><button type="button" class="chat-audio-toggle" aria-label="Reproducir ${esc(label)}">▶</button><div class="chat-audio-track" data-audio-seek><span class="chat-audio-progress"></span></div><span class="chat-audio-time">0:00</span><audio class="chat-audio-player" src="${esc(src)}" preload="metadata" aria-label="${esc(label)}"></audio></div>`
 }
 
 function quotedHtml(quoted: ChatMessage | null) {
@@ -67,10 +78,10 @@ function quotedHtml(quoted: ChatMessage | null) {
     return `<button type="button" class="chat-quoted" data-jump="${esc(quoted.id)}"><b>${esc(quoted.sender?.name || 'Familia')}</b><span>📷 Foto</span></button>`
   }
   if (isVideoMessage(quoted)) {
-    return `<button type="button" class="chat-quoted" data-jump="${esc(quoted.id)}"><b>${esc(quoted.sender?.name || 'Familia')}</b><span>🎬 Video</span></button>`
+    return `<button type="button" class="chat-quoted" data-jump="${esc(quoted.id)}"><b>${esc(quoted.sender?.name || 'Familia')}</b><span>Video</span></button>`
   }
   if (isAudioMessage(quoted)) {
-    return `<button type="button" class="chat-quoted" data-jump="${esc(quoted.id)}"><b>${esc(quoted.sender?.name || 'Familia')}</b><span>🎵 Audio</span></button>`
+    return `<button type="button" class="chat-quoted" data-jump="${esc(quoted.id)}"><b>${esc(quoted.sender?.name || 'Familia')}</b><span>${isVoiceMessage(quoted) ? 'Mensaje de voz' : 'Audio'}</span></button>`
   }
   return `<button type="button" class="chat-quoted" data-jump="${esc(quoted.id)}"><b>${esc(quoted.sender?.name || 'Familia')}</b><span>${esc(quoted.body || 'Mensaje')}</span></button>`
 }
@@ -87,7 +98,7 @@ function attachmentHtml(message:ChatMessage, priorityMedia=false){
     return `<div class="chat-attachment chat-video"><video class="chat-video-player" src="${esc(src)}" playsinline ${priorityMedia ? 'preload="metadata"' : 'preload="none"'} aria-label="${esc(message.attachment_name || 'Video')}"></video></div>`
   }
   if(isAudioMessage(message)){
-    return `<div class="chat-attachment chat-audio"><audio class="chat-audio-player" src="${esc(src)}" controls preload="metadata" aria-label="${esc(message.attachment_name || 'Audio')}"></audio></div>`
+    return audioPlayerHtml(src, isVoiceMessage(message) ? 'mensaje de voz' : (message.attachment_name || 'audio'))
   }
   return ''
 }
@@ -117,12 +128,15 @@ export async function openChat(options: OpenChatOptions) {
   let loadingOlder = false
   let stickToLatest = true
   let closed = false
+  let voiceSession: VoiceRecorderSession | null = null
+  let voiceTimer: number | null = null
+  let voiceBusy = false
   type PendingText = { kind:'text'; id:string; body:string; replyToId:string|null; busy:boolean }
   type PendingMedia = { kind:'media'; mediaKind:MediaKind; id:string; file:File; objectUrl:string; replyToId:string|null; busy:boolean }
   type PendingJob = PendingText | PendingMedia
   let outbox: Outbox<PendingJob>
 
-  app.innerHTML = `<main class="chat-page"><button id="back" class="chat-native-back" type="button" aria-label="Volver"></button><section class="chat-messages" id="messages"><div class="chat-loading">Cargando mensajes…</div></section><div id="replyPreview"></div><form class="chat-composer" id="composer"><button class="chat-attach" id="chatAttach" type="button" aria-label="Adjuntar" aria-expanded="false">＋</button><div class="chat-attach-menu" id="chatAttachMenu" hidden><button type="button" data-attach-kind="image"><span>📷</span>Foto</button><button type="button" data-attach-kind="video"><span>🎬</span>Video</button><button type="button" data-attach-kind="audio"><span>🎵</span>Audio</button></div><input id="chatAttachmentInput" type="file" hidden><input id="message" maxlength="2000" placeholder="Escribe algo…" autocomplete="off"><button class="chat-send" type="submit">Enviar</button></form></main>`
+  app.innerHTML = `<main class="chat-page"><button id="back" class="chat-native-back" type="button" aria-label="Volver"></button><section class="chat-messages" id="messages"><div class="chat-loading">Cargando mensajes…</div></section><div id="replyPreview"></div><form class="chat-composer" id="composer"><button class="chat-attach" id="chatAttach" type="button" aria-label="Adjuntar" aria-expanded="false">＋</button><div class="chat-attach-menu" id="chatAttachMenu" hidden><button type="button" data-attach-kind="image"><span>📷</span>Foto</button><button type="button" data-attach-kind="video"><span>🎬</span>Video</button><button type="button" data-attach-kind="audio"><span>🎵</span>Audio</button></div><input id="chatAttachmentInput" type="file" hidden><input id="message" maxlength="2000" placeholder="Escribe algo…" autocomplete="off"><button class="chat-voice" id="chatVoice" type="button" aria-label="Grabar mensaje de voz"><span aria-hidden="true">●</span></button><button class="chat-send" type="submit">Enviar</button><div class="chat-voice-recording" id="chatVoiceRecording" hidden><button type="button" class="chat-voice-cancel" data-voice-cancel>Cancelar</button><div class="chat-voice-live"><span class="chat-voice-dot"></span><span id="chatVoiceTime">0:00</span></div><button type="button" class="chat-voice-finish" data-voice-send>Enviar</button></div></form></main>`
 
   const page = app.querySelector<HTMLElement>('.chat-page')!
   const list = app.querySelector<HTMLElement>('#messages')!
@@ -132,6 +146,11 @@ export async function openChat(options: OpenChatOptions) {
   const attach = app.querySelector<HTMLButtonElement>('#chatAttach')!
   const attachMenu = app.querySelector<HTMLElement>('#chatAttachMenu')!
   const fileInput = app.querySelector<HTMLInputElement>('#chatAttachmentInput')!
+  const voiceButton = app.querySelector<HTMLButtonElement>('#chatVoice')!
+  const voiceRecording = app.querySelector<HTMLElement>('#chatVoiceRecording')!
+  const voiceTime = app.querySelector<HTMLElement>('#chatVoiceTime')!
+  const voiceCancel = app.querySelector<HTMLButtonElement>('[data-voice-cancel]')!
+  const voiceSend = app.querySelector<HTMLButtonElement>('[data-voice-send]')!
   const back = app.querySelector<HTMLButtonElement>('#back')!
 
   const isAtBottom = () => list.scrollHeight - list.scrollTop - list.clientHeight < 120
@@ -158,6 +177,53 @@ export async function openChat(options: OpenChatOptions) {
     if (video.ended) video.currentTime = 0
     if (video.paused) void video.play().catch(error => console.error('Chat video play failed', error))
     else video.pause()
+  }
+
+  const syncAudioUi = (audio:HTMLAudioElement) => {
+    const shell = audio.closest<HTMLElement>('.chat-audio')
+    if (!shell) return
+    const toggle = shell.querySelector<HTMLButtonElement>('.chat-audio-toggle')
+    const progress = shell.querySelector<HTMLElement>('.chat-audio-progress')
+    const clock = shell.querySelector<HTMLElement>('.chat-audio-time')
+    const duration = Number.isFinite(audio.duration) ? audio.duration : 0
+    if (toggle) toggle.textContent = audio.paused ? '▶' : '❚❚'
+    if (progress) progress.style.width = duration > 0 ? `${Math.min(100, Math.max(0, audio.currentTime / duration * 100))}%` : '0%'
+    if (clock) clock.textContent = mediaTime(audio.currentTime || duration)
+  }
+
+  const onAudioClick = (event:Event) => {
+    const target = event.target as HTMLElement
+    const shell = target.closest<HTMLElement>('.chat-audio')
+    const audio = shell?.querySelector<HTMLAudioElement>('.chat-audio-player')
+    if (!shell || !audio) return
+
+    if (target.closest('.chat-audio-toggle')) {
+      event.preventDefault()
+      event.stopPropagation()
+      if (audio.ended) audio.currentTime = 0
+      if (audio.paused) void audio.play().catch(error => console.error('Chat audio play failed', error))
+      else audio.pause()
+      return
+    }
+
+    const track = target.closest<HTMLElement>('[data-audio-seek]')
+    if (track && Number.isFinite(audio.duration) && audio.duration > 0) {
+      const rect = track.getBoundingClientRect()
+      const ratio = Math.min(1, Math.max(0, ((event as MouseEvent).clientX - rect.left) / rect.width))
+      audio.currentTime = ratio * audio.duration
+      syncAudioUi(audio)
+    }
+  }
+
+  const onAudioState = (event:Event) => {
+    const audio = event.target as HTMLAudioElement
+    if (!(audio instanceof HTMLAudioElement) || !audio.classList.contains('chat-audio-player')) return
+    if (event.type === 'play') {
+      list.querySelectorAll<HTMLAudioElement>('.chat-audio-player').forEach(other => {
+        if (other !== audio && !other.paused) other.pause()
+      })
+    }
+    syncAudioUi(audio)
   }
 
   const unbindViewport = bindChatViewport(page, list, input, () => stickToLatest, scrollLatest)
@@ -356,7 +422,7 @@ export async function openChat(options: OpenChatOptions) {
   const onSubmit = (event: SubmitEvent) => {
     event.preventDefault()
     const body = input.value.trim()
-    if (!body || !memberId) return
+    if (!body || !memberId || voiceSession) return
     const job:PendingText = { kind:'text', id:crypto.randomUUID(), body, replyToId:features?.getReplyToId() || null, busy:false }
     input.value = ''
     features?.clearReply()
@@ -371,7 +437,7 @@ export async function openChat(options: OpenChatOptions) {
     const previewHtml = job.mediaKind === 'video'
       ? `<div class="chat-attachment chat-video"><video class="chat-video-player" src="${esc(job.objectUrl)}" playsinline preload="metadata"></video></div>`
       : job.mediaKind === 'audio'
-        ? `<div class="chat-attachment chat-audio"><audio class="chat-audio-player" src="${esc(job.objectUrl)}" controls preload="metadata"></audio></div>`
+        ? audioPlayerHtml(job.objectUrl, job.file.name.startsWith('voz-') ? 'mensaje de voz' : 'audio')
         : `<div class="chat-attachment"><img src="${esc(job.objectUrl)}" alt="Foto" decoding="async"></div>`
     const label = job.mediaKind === 'video' ? 'Enviando video…' : job.mediaKind === 'audio' ? 'Enviando audio…' : 'Enviando foto…'
     list.insertAdjacentHTML('beforeend', `<article class="chat-bubble mine chat-pending" data-pending-id="${job.id}">${previewHtml}<small class="chat-meta" data-pending-state><span class="chat-spinner"></span> ${label}</small></article>`)
@@ -470,6 +536,7 @@ export async function openChat(options: OpenChatOptions) {
   }
 
   const onAttachClick = () => {
+    if (voiceSession) return
     const next = !attachMenu.hidden
     attachMenu.hidden = next
     attach.setAttribute('aria-expanded', next ? 'false' : 'true')
@@ -530,6 +597,104 @@ export async function openChat(options: OpenChatOptions) {
       }
       renderPendingMedia(job)
       void outbox.add(job)
+    }
+  }
+
+  const stopVoiceClock = () => {
+    if (voiceTimer !== null) window.clearInterval(voiceTimer)
+    voiceTimer = null
+  }
+
+  const setVoiceUi = (recording:boolean) => {
+    composer.classList.toggle('is-recording', recording)
+    voiceRecording.hidden = !recording
+    if (!recording) voiceTime.textContent = '0:00'
+    if (recording) {
+      closeAttachMenu()
+      input.blur()
+      stickToLatest = true
+      scheduleLatest()
+    }
+  }
+
+  const startVoiceMessage = async () => {
+    if (voiceBusy || voiceSession) return
+    if (!canRecordVoice()) {
+      notify('Micrófono no disponible', 'Este dispositivo o navegador no permite grabar mensajes de voz.')
+      return
+    }
+    voiceBusy = true
+    voiceButton.disabled = true
+    try {
+      const session = await beginVoiceRecording()
+      if (closed) {
+        await session.cancel()
+        return
+      }
+      voiceSession = session
+      setVoiceUi(true)
+      voiceTime.textContent = '0:00'
+      voiceTimer = window.setInterval(() => {
+        if (voiceSession) voiceTime.textContent = mediaTime((Date.now() - voiceSession.startedAt) / 1000)
+      }, 250)
+    } catch (error:any) {
+      console.error('Voice recording start failed', error)
+      const denied = error?.name === 'NotAllowedError' || error?.name === 'SecurityError'
+      notify(denied ? 'Permiso de micrófono' : 'No se pudo grabar', denied ? 'Permite el acceso al micrófono para enviar mensajes de voz.' : 'No fue posible iniciar el micrófono en este dispositivo.')
+    } finally {
+      voiceBusy = false
+      voiceButton.disabled = false
+    }
+  }
+
+  const cancelVoiceMessage = async () => {
+    if (voiceBusy) return
+    const session = voiceSession
+    voiceSession = null
+    stopVoiceClock()
+    setVoiceUi(false)
+    if (session) await session.cancel()
+  }
+
+  const sendVoiceMessage = async () => {
+    if (voiceBusy || !voiceSession) return
+    voiceBusy = true
+    voiceCancel.disabled = true
+    voiceSend.disabled = true
+    const session = voiceSession
+    voiceSession = null
+    stopVoiceClock()
+    try {
+      const recording = await session.stop()
+      setVoiceUi(false)
+      if (recording.durationMs < 450 || recording.file.size < 400) {
+        notify('Mensaje de voz muy corto', 'Graba un poco más antes de enviarlo.')
+        return
+      }
+      if (recording.file.size > CHAT_AUDIO_MAX_BYTES) {
+        notify('Mensaje de voz demasiado largo', 'El mensaje de voz supera el límite de 8 MB.')
+        return
+      }
+      const job:PendingMedia = {
+        kind:'media',
+        mediaKind:'audio',
+        id:crypto.randomUUID(),
+        file:recording.file,
+        objectUrl:URL.createObjectURL(recording.file),
+        replyToId:features?.getReplyToId() || null,
+        busy:false
+      }
+      features?.clearReply()
+      renderPendingMedia(job)
+      void outbox.add(job)
+    } catch (error) {
+      console.error('Voice recording stop failed', error)
+      setVoiceUi(false)
+      notify('No se pudo enviar', 'El mensaje de voz no pudo prepararse. Inténtalo otra vez.')
+    } finally {
+      voiceBusy = false
+      voiceCancel.disabled = false
+      voiceSend.disabled = false
     }
   }
 
@@ -621,15 +786,30 @@ export async function openChat(options: OpenChatOptions) {
   attach.addEventListener('click', onAttachClick)
   attachMenu.addEventListener('click', onAttachMenuClick)
   fileInput.addEventListener('change', onAttachment)
+  voiceButton.addEventListener('click', startVoiceMessage)
+  voiceCancel.addEventListener('click', cancelVoiceMessage)
+  voiceSend.addEventListener('click', sendVoiceMessage)
   list.addEventListener('click', onPendingClick)
   list.addEventListener('click', onImageClick)
   list.addEventListener('click', onVideoClick)
+  list.addEventListener('click', onAudioClick)
+  list.addEventListener('loadedmetadata', onAudioState, true)
+  list.addEventListener('timeupdate', onAudioState, true)
+  list.addEventListener('play', onAudioState, true)
+  list.addEventListener('pause', onAudioState, true)
+  list.addEventListener('ended', onAudioState, true)
   document.addEventListener('pointerdown', onDocumentPointer)
   window.addEventListener('online', onConnectivityReturn)
   document.addEventListener('visibilitychange', onVisibilityReturn)
 
   activeCleanup = () => {
     closed = true
+    stopVoiceClock()
+    if (voiceSession) {
+      const session = voiceSession
+      voiceSession = null
+      void session.cancel()
+    }
     window.removeEventListener('online', onConnectivityReturn)
     document.removeEventListener('visibilitychange', onVisibilityReturn)
     document.removeEventListener('pointerdown', onDocumentPointer)
@@ -643,9 +823,18 @@ export async function openChat(options: OpenChatOptions) {
     attach.removeEventListener('click', onAttachClick)
     attachMenu.removeEventListener('click', onAttachMenuClick)
     fileInput.removeEventListener('change', onAttachment)
+    voiceButton.removeEventListener('click', startVoiceMessage)
+    voiceCancel.removeEventListener('click', cancelVoiceMessage)
+    voiceSend.removeEventListener('click', sendVoiceMessage)
     list.removeEventListener('click', onPendingClick)
     list.removeEventListener('click', onImageClick)
     list.removeEventListener('click', onVideoClick)
+    list.removeEventListener('click', onAudioClick)
+    list.removeEventListener('loadedmetadata', onAudioState, true)
+    list.removeEventListener('timeupdate', onAudioState, true)
+    list.removeEventListener('play', onAudioState, true)
+    list.removeEventListener('pause', onAudioState, true)
+    list.removeEventListener('ended', onAudioState, true)
     closeMediaViewer()
     outbox.clear(job => { if (job.kind === 'media') URL.revokeObjectURL(job.objectUrl) })
     unbindViewport()
