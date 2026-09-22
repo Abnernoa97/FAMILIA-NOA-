@@ -274,20 +274,35 @@ export async function openChat(options: OpenChatOptions) {
       : '<button type="button" class="chat-retry" data-retry-text>Reintentar</button> · No enviado'
   }
 
+  const existingMessage = async (id:string) => {
+    const { data, error } = await supabase.from('messages').select(MESSAGE_FIELDS).eq('id', id).maybeSingle()
+    if (error) throw error
+    return data ? nameRow(data as RawChatRow) : null
+  }
+
+  const finishPendingText = async (job:PendingText, message:ChatMessage) => {
+    pendingTextElement(job.id)?.remove()
+    outbox.done(job.id)
+    if (!byId.has(message.id)) await appendMessage(message, true)
+    else scrollLatest()
+  }
+
   const sendTextJob = async (job:PendingText) => {
     setPendingTextState(job.id, 'sending')
-    const payload:Record<string,unknown> = { sender_id:memberId, body:job.body }
+    const payload:Record<string,unknown> = { id:job.id, sender_id:memberId, body:job.body }
     if (job.replyToId) payload.reply_to_id = job.replyToId
     try {
       const { data, error } = await supabase.from('messages').insert(payload).select(MESSAGE_FIELDS).single()
       if (error || !data) throw error || new Error('Message insert failed')
-      pendingTextElement(job.id)?.remove()
-      outbox.done(job.id)
       const message = nameRow(data as RawChatRow)
-      if(message.attachment_path) await signMedia(message.attachment_path)
-      if (!byId.has(message.id)) await appendMessage(message, true)
-      else scrollLatest()
+      await finishPendingText(job, message)
     } catch (error) {
+      try {
+        const existing = await existingMessage(job.id)
+        if (existing) { await finishPendingText(job, existing); return }
+      } catch (lookupError) {
+        console.error('Chat text reconciliation failed', lookupError)
+      }
       console.error('Chat text send failed', error)
       setPendingTextState(job.id, 'error')
       throw error
@@ -300,7 +315,7 @@ export async function openChat(options: OpenChatOptions) {
     if (!body || !memberId) return
     const job:PendingText = {
       kind:'text',
-      id:`pending-text-${crypto.randomUUID()}`,
+      id:crypto.randomUUID(),
       body,
       replyToId:features?.getReplyToId() || null,
       busy:false
@@ -335,13 +350,22 @@ export async function openChat(options: OpenChatOptions) {
     let path = ''
     try {
       const optimized = await optimizePhoto(job.file)
-      path = `chat/${memberId}/${crypto.randomUUID()}.${optimized.ext}`
+      const alreadySent = await existingMessage(job.id)
+      if (alreadySent) {
+        pendingElement(job.id)?.remove()
+        outbox.done(job.id)
+        URL.revokeObjectURL(job.objectUrl)
+        if (!byId.has(alreadySent.id)) await appendMessage(alreadySent, true)
+        return
+      }
+      path = `chat/${memberId}/${job.id}.${optimized.ext}`
+      await supabase.storage.from('family-photos').remove([path])
       const { error: uploadError } = await supabase.storage.from('family-photos').upload(path, optimized.blob, {
         contentType:optimized.type, cacheControl:'31536000', upsert:false
       })
       if (uploadError) throw uploadError
       const { data, error:insertError } = await supabase.from('messages').insert({
-        sender_id:memberId, body:'', attachment_path:path, attachment_type:optimized.type,
+        id:job.id, sender_id:memberId, body:'', attachment_path:path, attachment_type:optimized.type,
         attachment_name:optimized.name, attachment_size:optimized.blob.size, reply_to_id:job.replyToId
       }).select(MESSAGE_FIELDS).single()
       if (insertError || !data) {
@@ -382,7 +406,7 @@ export async function openChat(options: OpenChatOptions) {
       if (file.size > 15 * 1024 * 1024) { notify('Foto demasiado grande', 'La foto debe pesar menos de 15 MB.'); continue }
       const job: PendingPhoto = {
         kind:'photo',
-        id:`pending-${crypto.randomUUID()}`,
+        id:crypto.randomUUID(),
         file,
         objectUrl:URL.createObjectURL(file),
         replyToId:features?.getReplyToId() || null,
@@ -410,6 +434,53 @@ export async function openChat(options: OpenChatOptions) {
     }
   }
 
+  let synchronizing = false
+  const synchronizeLatest = async () => {
+    if (closed || synchronizing) return
+    synchronizing = true
+    try {
+      const { data, error } = await supabase.from('messages').select(MESSAGE_FIELDS).order('created_at', { ascending:false }).limit(100)
+      if (error) throw error
+      const canonical = ((data || []) as RawChatRow[]).reverse().map(nameRow)
+      await primeMedia(canonical.map(message => message.attachment_path))
+      await fetchMissingReplies(canonical)
+      for (const message of canonical) {
+        const current = byId.get(message.id)
+        if (!current) {
+          await appendMessage(message, false)
+          continue
+        }
+        if (
+          current.body !== message.body ||
+          current.edited_at !== message.edited_at ||
+          current.deleted_at !== message.deleted_at ||
+          current.attachment_path !== message.attachment_path
+        ) {
+          byId.set(message.id, message)
+          const index = all.findIndex(item => item.id === message.id)
+          if (index >= 0) all[index] = message
+          replaceMessageElement(message.id)
+        }
+      }
+    } catch (error) {
+      console.error('Chat synchronization failed', error)
+    } finally {
+      synchronizing = false
+    }
+  }
+
+  const onConnectivityReturn = () => {
+    if (!closed) {
+      outbox.retryAll()
+      void synchronizeLatest()
+    }
+  }
+  const onVisibilityReturn = () => {
+    if (document.visibilityState === 'visible') void synchronizeLatest()
+  }
+  window.addEventListener('online', onConnectivityReturn)
+  document.addEventListener('visibilitychange', onVisibilityReturn)
+
   coreChannel = supabase.channel(`familia-noa-chat-core-${memberId}`)
     .on('postgres_changes', { event:'INSERT', schema:'public', table:'messages' }, payload => {
       const row = payload.new as RawChatRow
@@ -426,7 +497,9 @@ export async function openChat(options: OpenChatOptions) {
       if (index >= 0) all[index] = next
       replaceMessageElement(row.id)
     })
-    .subscribe()
+    .subscribe(status => {
+      if (status === 'SUBSCRIBED') void synchronizeLatest()
+    })
 
   back.addEventListener('click', backView)
   list.addEventListener('scroll', onScroll, { passive:true })
@@ -438,6 +511,8 @@ export async function openChat(options: OpenChatOptions) {
 
   activeCleanup = () => {
     closed = true
+    window.removeEventListener('online', onConnectivityReturn)
+    document.removeEventListener('visibilitychange', onVisibilityReturn)
     features?.cleanup()
     features = null
     void coreChannel?.unsubscribe()
