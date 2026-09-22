@@ -1,6 +1,6 @@
 import { backView, currentView } from './navigation'
 
-type MediaItem = { src:string; alt?:string; type?:'image'|'video' }
+type MediaItem = { src:string; alt?:string; type?:'image'|'video'; poster?:string }
 
 let overlay:HTMLElement|null=null
 let items:MediaItem[]=[]
@@ -57,6 +57,7 @@ function resetViewerMedia(root:HTMLElement){
   const video=root.querySelector<HTMLVideoElement>('.family-media-video')!
   try{video.pause()}catch{}
   video.removeAttribute('src')
+  video.removeAttribute('poster')
   video.load()
   video.hidden=true
   image.hidden=true
@@ -72,6 +73,7 @@ function show(next:number){
 
   if(item.type==='video'){
     video.src=item.src
+    if(item.poster)video.poster=item.poster
     video.setAttribute('aria-label',item.alt||'Video')
     video.hidden=false
     pauseOtherMedia(video)
