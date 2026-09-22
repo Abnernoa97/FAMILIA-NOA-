@@ -3,7 +3,7 @@ import { supabase } from './supabase'
 import { clearIdentity, getAuthenticatedFamilyMember, getIdentity, setIdentity } from './core/identity'
 import { closeChat, openChat } from './chat-core'
 import { startHomeChatUnread, stopHomeChatUnread } from './chat-features'
-import { initNavigation, enterView, replaceView, type AppView } from './core/navigation'
+import { initNavigation, enterView, replaceView, backView, type AppView } from './core/navigation'
 import { closeMediaViewer, isMediaViewerOpen } from './core/media-viewer'
 
 type Member = { id: string; name: string; active: boolean; must_share_location: boolean }
@@ -12,6 +12,13 @@ type FamilySessionResponse = {
   profile?: { id:string; name:string }
   session?: { access_token:string; refresh_token:string }
   error?: string
+}
+type FamilyLocation = {
+  member_id:string
+  latitude:number
+  longitude:number
+  accuracy:number|null
+  updated_at:string
 }
 
 const FALLBACK = ['Mamá', 'Papá', 'Romel', 'Osniel', 'Abner']
@@ -28,7 +35,19 @@ const app = document.querySelector<HTMLDivElement>('#app')!
 document.title = 'FAMILIA NOA'
 
 const esc = (value: string) => value.replace(/[&<>"']/g, char => ({ '&':'&amp;', '<':'&lt;', '>':'&gt;', '"':'&quot;', "'":'&#039;' }[char] || char))
-const time = (value: string) => new Date(value).toLocaleTimeString('es-MX', { hour:'2-digit', minute:'2-digit' })
+
+function locationAge(value:string){
+  const ms=Date.now()-new Date(value).getTime()
+  if(!Number.isFinite(ms)||ms<0)return 'actualizada ahora'
+  const minutes=Math.floor(ms/60000)
+  if(minutes<1)return 'actualizada ahora'
+  if(minutes<60)return `hace ${minutes} min`
+  const hours=Math.floor(minutes/60)
+  if(hours<24)return `hace ${hours} h`
+  const days=Math.floor(hours/24)
+  if(days<7)return `hace ${days} día${days===1?'':'s'}`
+  return new Date(value).toLocaleDateString('es-MX',{day:'numeric',month:'short'})
+}
 
 async function loadMembers(force = false) {
   if (membersLoaded && !force) return
@@ -200,8 +219,8 @@ function renderHome() {
   document.querySelector('#navchat')!.addEventListener('click', () => openChatScreen())
   document.querySelector('#photos')!.addEventListener('click', () => void renderPhotos())
   document.querySelector('#navphotos')!.addEventListener('click', () => void renderPhotos())
-  document.querySelector('#location')!.addEventListener('click', renderLocation)
-  document.querySelector('#navlocation')!.addEventListener('click', renderLocation)
+  document.querySelector('#location')!.addEventListener('click', () => void renderLocation())
+  document.querySelector('#navlocation')!.addEventListener('click', () => void renderLocation())
   document.querySelector('#ok')!.addEventListener('click', setWellbeing)
   document.querySelector('#help')!.addEventListener('click', sendHelp)
 }
@@ -225,38 +244,105 @@ async function renderPhotos(push = true) {
   app.innerHTML = '<main class="page photo-page" data-photo-page><div class="loading">Cargando álbumes…</div></main>'
 }
 
-async function renderLocation() {
+async function renderLocation(push = true) {
+  if (push) enterView('location')
   stopHomeChatUnread()
   closeChat()
   const current = members.find(member => member.id === memberId)
   const mandatory = !!current?.must_share_location
-  app.innerHTML = `<main class="page"><header class="pagehead"><button id="back">‹</button><div><p class="eyebrow">FAMILIA NOA</p><h1>Ubicación</h1></div></header><section class="locationbox"><div class="pin">⌖</div><h2>Compartir ubicación</h2><p id="locationtext">${mandatory ? 'La ubicación es necesaria para este perfil.' : 'Comparte tu ubicación con la familia cuando quieras.'}</p><button class="primary" id="sharelocation">${mandatory ? 'Activar ubicación' : 'Actualizar ubicación'}</button></section><section class="family-locations" id="familylocations"><div class="loading">Cargando…</div></section></main>`
-  document.querySelector('#back')!.addEventListener('click', renderHome)
-  document.querySelector('#sharelocation')!.addEventListener('click', shareLocation)
+  app.innerHTML = `<main class="page location-page"><header class="pagehead"><button id="back" aria-label="Volver">‹</button><div><p class="eyebrow">FAMILIA NOA</p><h1>Ubicación</h1></div></header><section class="locationbox"><div class="pin">⌖</div><div><p class="eyebrow">TU UBICACIÓN</p><h2>${mandatory?'Mantener ubicación al día':'Compartir ubicación'}</h2><p id="locationtext">${mandatory?'Este perfil debe mantener su ubicación actualizada para la familia.':'Comparte tu ubicación con la familia cuando quieras.'}</p></div><button class="primary" id="sharelocation">Actualizar ubicación</button></section><section class="family-locations" id="familylocations"><div class="location-section-title"><b>Familia</b><span>Se actualiza en tiempo real</span></div><div class="loading">Cargando…</div></section></main>`
+  document.querySelector('#back')!.addEventListener('click', () => backView())
+  document.querySelector('#sharelocation')!.addEventListener('click', () => void shareLocation())
   await loadLocations()
 }
 
+function geolocationErrorText(error:unknown){
+  const code=Number((error as GeolocationPositionError | undefined)?.code||0)
+  if(code===1)return 'El permiso de ubicación está desactivado. Actívalo en los permisos de la app o del navegador.'
+  if(code===2)return 'No pudimos obtener tu ubicación en este momento. Comprueba GPS y conexión.'
+  if(code===3)return 'La ubicación tardó demasiado en responder. Inténtalo de nuevo.'
+  return 'No se pudo actualizar tu ubicación. Inténtalo de nuevo.'
+}
+
+function currentPosition(){
+  return new Promise<GeolocationPosition>((resolve,reject)=>{
+    navigator.geolocation.getCurrentPosition(resolve,reject,{enableHighAccuracy:true,timeout:20000,maximumAge:15000})
+  })
+}
+
 async function shareLocation() {
-  const text = document.querySelector('#locationtext')!
+  const text = document.querySelector<HTMLElement>('#locationtext')
+  const button = document.querySelector<HTMLButtonElement>('#sharelocation')
+  if (!text || !button) return
   if (!navigator.geolocation) {
     text.textContent = 'Este dispositivo no permite ubicación.'
     return
   }
-  text.textContent = 'Obteniendo ubicación…'
-  navigator.geolocation.getCurrentPosition(async position => {
-    if (memberId) await supabase.from('locations').upsert({ member_id:memberId, latitude:position.coords.latitude, longitude:position.coords.longitude, accuracy:position.coords.accuracy, updated_at:new Date().toISOString() })
-    text.textContent = `Ubicación actualizada · precisión aproximada ${Math.round(position.coords.accuracy)} m.`
+  if(!memberId){
+    text.textContent='No se pudo identificar tu perfil.'
+    return
+  }
+
+  button.disabled=true
+  button.textContent='Obteniendo ubicación…'
+  text.textContent='Buscando tu posición actual…'
+  try{
+    const position=await currentPosition()
+    const latitude=position.coords.latitude
+    const longitude=position.coords.longitude
+    const accuracy=position.coords.accuracy
+    if(!Number.isFinite(latitude)||!Number.isFinite(longitude)||latitude < -90||latitude > 90||longitude < -180||longitude > 180){
+      throw new Error('INVALID_LOCATION')
+    }
+    button.textContent='Guardando…'
+    const {error}=await supabase.from('locations').upsert({
+      member_id:memberId,
+      latitude,
+      longitude,
+      accuracy:Number.isFinite(accuracy)?accuracy:null,
+      updated_at:new Date().toISOString()
+    },{onConflict:'member_id'})
+    if(error)throw error
+    text.textContent=`Ubicación actualizada ahora${Number.isFinite(accuracy)?` · precisión aproximada ${Math.round(accuracy)} m`:''}.`
     await loadLocations()
-  }, () => {
-    text.textContent = 'Necesitamos permiso para acceder a tu ubicación.'
-  }, { enableHighAccuracy:true, timeout:15000 })
+  }catch(error){
+    console.error('Family location update failed',error)
+    text.textContent=geolocationErrorText(error)
+  }finally{
+    if(document.contains(button)){
+      button.disabled=false
+      button.textContent='Actualizar ubicación'
+    }
+  }
 }
 
 async function loadLocations() {
-  const element = document.querySelector('#familylocations')
+  const element = document.querySelector<HTMLElement>('#familylocations')
   if (!element) return
-  const { data } = await supabase.from('locations').select('member_id,latitude,longitude,accuracy,updated_at,family_members(name)').order('updated_at', { ascending:false })
-  element.innerHTML = (data || []).map((item:any) => `<div class="locationrow"><b>${esc(item.family_members?.name || 'Familia')}</b><small>Actualizado ${time(item.updated_at)} · ${Math.round(item.accuracy || 0)} m</small><a target="_blank" rel="noreferrer" href="https://www.google.com/maps?q=${item.latitude},${item.longitude}">Ver mapa ›</a></div>`).join('') || '<div class="empty">Aún no hay ubicaciones compartidas.</div>'
+  const { data,error } = await supabase.from('locations').select('member_id,latitude,longitude,accuracy,updated_at').order('updated_at', { ascending:false })
+  if(error){
+    console.error('Family locations load failed',error)
+    element.innerHTML='<div class="location-section-title"><b>Familia</b><span>Se actualiza en tiempo real</span></div><div class="empty">No se pudieron cargar las ubicaciones. Inténtalo de nuevo.</div>'
+    return
+  }
+
+  const rows=(data||[]) as FamilyLocation[]
+  const byMember=new Map(rows.map(row=>[row.member_id,row]))
+  const ordered=[...members].sort((a,b)=>a.id===memberId?-1:b.id===memberId?1:0)
+  const cards=ordered.map(member=>{
+    const item=byMember.get(member.id)
+    const mine=member.id===memberId
+    if(!item){
+      return `<div class="locationrow locationrow-empty"><div class="location-person"><span class="location-dot"></span><div><b>${esc(member.name)}${mine?' · tú':''}</b><small>${member.must_share_location?'Ubicación pendiente':'Aún no ha compartido ubicación'}</small></div></div></div>`
+    }
+    const ageMs=Date.now()-new Date(item.updated_at).getTime()
+    const stale=Number.isFinite(ageMs)&&ageMs>24*60*60*1000
+    const accuracy=Number.isFinite(item.accuracy)?` · ±${Math.round(item.accuracy as number)} m`:''
+    const href=`https://www.google.com/maps/search/?api=1&query=${encodeURIComponent(`${item.latitude},${item.longitude}`)}`
+    return `<div class="locationrow${stale?' stale':''}"><div class="location-person"><span class="location-dot"></span><div><b>${esc(member.name)}${mine?' · tú':''}</b><small>${locationAge(item.updated_at)}${accuracy}</small></div></div><a target="_blank" rel="noopener noreferrer" href="${href}">Ver mapa ›</a></div>`
+  }).join('')
+
+  element.innerHTML=`<div class="location-section-title"><b>Familia</b><span>Se actualiza en tiempo real</span></div>${cards||'<div class="empty">Aún no hay ubicaciones compartidas.</div>'}`
 }
 
 function sheet(title: string, text: string) {
@@ -295,5 +381,6 @@ initNavigation((view:AppView) => {
   if (isMediaViewerOpen()) closeMediaViewer()
   if (view === 'chat') { openChatScreen(false); return }
   if (view === 'photos' || view === 'album') { void renderPhotos(false); return }
+  if (view === 'location') { void renderLocation(false); return }
   if (view === 'home') renderHome()
 })
