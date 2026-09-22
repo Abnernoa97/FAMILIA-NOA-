@@ -104,6 +104,16 @@ export async function openChat(options: OpenChatOptions) {
     list.scrollTop = Math.max(0, list.scrollHeight - list.clientHeight)
   }
 
+  const settleLatestMedia = (message:ChatMessage) => {
+    if (!message.attachment_path || !stickToLatest) return
+    const bubble = elementFor(message.id)
+    const image = bubble?.querySelector<HTMLImageElement>('.chat-attachment img')
+    if (!image || image.complete) { requestAnimationFrame(scrollLatest); return }
+    image.addEventListener('load', () => {
+      if (stickToLatest) requestAnimationFrame(scrollLatest)
+    }, { once:true })
+  }
+
   const onImageClick = (event:Event) => {
     const button = (event.target as HTMLElement).closest<HTMLElement>('[data-chat-image]')
     const src = button?.dataset.chatImage
@@ -180,6 +190,7 @@ export async function openChat(options: OpenChatOptions) {
     list.insertAdjacentHTML('beforeend', renderMessage(message, true))
     const bubble = elementFor(message.id)
     if (bubble && features) features.onMessageInserted(message)
+    settleLatestMedia(message)
     if (forceBottom || stickToLatest || message.sender_id === memberId) {
       stickToLatest = true
       requestAnimationFrame(scrollLatest)
