@@ -41,7 +41,13 @@ function injectStyles(){
   .album-section-tabs{display:grid;grid-template-columns:repeat(3,1fr);gap:5px;padding:4px;margin:-4px 0 18px;border-radius:18px;background:#ece7de}
   .album-section-tab{height:40px;border:0;border-radius:14px;background:transparent;color:#777169;font:700 11px system-ui;cursor:pointer;transition:background .16s,color .16s,box-shadow .16s}
   .album-section-tab.active{background:#fff;color:#171716;box-shadow:0 3px 14px rgba(33,29,23,.07)}
-  .album-section-panel{display:grid;gap:10px}.album-section-panel[hidden]{display:none}
+  .album-section-panel{display:grid;gap:10px}.album-section-panel[hidden]{display:none!important}
+  .albums-page.album-archive-mode .album-actions,
+  .albums-page.album-archive-mode #memberAlbumStatus,
+  .albums-page.album-archive-mode .album-photo-grid,
+  .albums-page.album-archive-mode .album-selection-bar,
+  .albums-page.album-archive-mode > .album-empty-state{display:none!important}
+  .albums-page.album-archive-mode .album-count{display:none!important}
   .album-archive-head{display:flex;align-items:end;justify-content:space-between;gap:12px;margin:2px 1px 9px}.album-archive-head h2{margin:0;font:500 24px var(--display-font,Georgia,serif)}.album-archive-head span{font:700 9px system-ui;letter-spacing:.08em;color:#9a948b;text-transform:uppercase}
   .album-archive-empty{padding:38px 18px;border:1px dashed #d9d2c7;border-radius:20px;text-align:center;color:#837d74;font:12px/1.5 system-ui}.album-archive-empty b{display:block;margin-bottom:5px;color:#171716;font:500 20px var(--display-font,Georgia,serif)}
   .album-day{margin:12px 2px 4px;color:#969087;font:700 9px system-ui;letter-spacing:.09em;text-transform:uppercase}
@@ -79,13 +85,24 @@ function nativePhotoNodes(root:HTMLElement){
     root.querySelector<HTMLElement>('.album-actions'),
     root.querySelector<HTMLElement>('#memberAlbumStatus'),
     root.querySelector<HTMLElement>('.album-photo-grid'),
-    ...Array.from(root.querySelectorAll<HTMLElement>('.album-empty-state')),
+    ...Array.from(root.querySelectorAll<HTMLElement>(':scope > .album-empty-state')),
     root.querySelector<HTMLElement>('.album-selection-bar')
-  ].filter((node):node is HTMLElement=>!!node&&!node.closest('[data-album-archive]'))
+  ].filter((node):node is HTMLElement=>!!node)
 }
 
 function toggleNativePhotos(root:HTMLElement,show:boolean){
-  nativePhotoNodes(root).forEach(node=>{node.hidden=!show})
+  root.classList.toggle('album-archive-mode',!show)
+  nativePhotoNodes(root).forEach(node=>{
+    node.hidden=!show
+    if(show)node.style.removeProperty('display')
+    else node.style.setProperty('display','none','important')
+  })
+  const count=root.querySelector<HTMLElement>('.album-count')
+  if(count){
+    count.hidden=!show
+    if(show)count.style.removeProperty('display')
+    else count.style.setProperty('display','none','important')
+  }
 }
 
 function updateTabs(root:HTMLElement){
@@ -241,15 +258,19 @@ async function mount(root:HTMLElement){
 
 function resetSectionState(root:HTMLElement){
   updateTabs(root)
-  const count=root.querySelector<HTMLElement>('.album-count')
-  if(count&&activeSection==='photos')count.hidden=false
-  else if(count)count.hidden=true
 }
 
 function scan(){
   const root=currentAlbumRoot()
-  if(!root){mountedRoot=null;mountedMemberId='';activeSection='photos';return}
+  if(!root){
+    if(mountedRoot)mountedRoot.classList.remove('album-archive-mode')
+    mountedRoot=null
+    mountedMemberId=''
+    activeSection='photos'
+    return
+  }
   if(!root.querySelector('[data-album-tabs]'))void mount(root)
+  else updateTabs(root)
 }
 
 injectStyles()
