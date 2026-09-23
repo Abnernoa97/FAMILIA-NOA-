@@ -1,6 +1,7 @@
 @import url('https://fonts.googleapis.com/css2?family=DM+Sans:wght@400;500;600;700&family=Playfair+Display:wght@500;600&display=swap');
 :root{font-family:'DM Sans',sans-serif;color:#171716;background:#f5f2eb;font-synthesis:none}
 *{box-sizing:border-box}
+html,body,#app{max-width:100%;overflow-x:hidden}
 body{margin:0;background:#f5f2eb}
 button,input,select{font:inherit}
 button{border:0;cursor:pointer}
@@ -25,7 +26,8 @@ button{border:0;cursor:pointer}
 .top .eyebrow{margin-bottom:7px}
 .top h1{font:500 30px/1.1 'Playfair Display',serif;margin:0}
 .top h1 span{font-family:inherit}
-.avatar{width:44px;height:44px;border-radius:50%;background:#171716;color:#fff;font-weight:700}
+.avatar{width:44px;height:44px;flex:0 0 44px;border-radius:50%;background:#171716;color:#fff;font-weight:700;overflow:hidden;padding:0;display:grid;place-items:center}
+.avatar img{display:block;width:100%;height:100%;max-width:100%;max-height:100%;object-fit:cover;border-radius:inherit}
 .hero{background:#171716;color:#fff;border-radius:28px;padding:28px;margin-bottom:14px}
 .hero .eyebrow{opacity:.45}
 .hero h2{font:500 31px/1.08 'Playfair Display',serif;margin:0 0 12px}
@@ -93,6 +95,7 @@ nav .active{background:#171716;color:#fff}
 .biometric-access #biometricError{color:#9a3f32;font-size:13px;text-align:center;margin-top:8px;min-height:18px}
 .biometric-setup{display:block;width:100%;background:#fff;border:1px solid #ddd8ce;border-radius:16px;padding:13px 16px;margin:-12px 0 22px;text-align:center;font-size:13px;font-weight:600;color:#514e48}
 
+@media(max-width:760px){.profile-menu{background:var(--surface,#fff)!important;backdrop-filter:none!important;-webkit-backdrop-filter:none!important}.profile-drawer{width:100vw!important;max-width:none!important;box-shadow:none!important}}
 @media(max-width:620px){.photos-intro{grid-template-columns:1fr}.photo-upload{min-height:110px}.photo-grid{grid-template-columns:repeat(2,1fr)}}
 @media(max-width:480px){.pagehead{padding-left:14px;padding-right:14px}.photos-intro{padding-left:12px;padding-right:12px}.photo-grid{padding-left:12px;padding-right:12px}}
 @media(min-width:650px){.shell{padding-top:50px}.grid{grid-template-columns:repeat(3,1fr)}.hero{padding:38px}.hero h2{font-size:42px}.card{min-height:175px}.card:first-child{grid-column:span 2}}
