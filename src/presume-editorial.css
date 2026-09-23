@@ -1,0 +1,138 @@
+/* PRESUME — compact editorial shell */
+.presume-head{
+  padding:max(9px,env(safe-area-inset-top)) 2px 7px!important;
+  min-height:44px;
+}
+.presume-back,.presume-iconbtn{
+  width:34px!important;
+  height:34px!important;
+  background:transparent!important;
+  border:1px solid #e2ddd3!important;
+  font-size:23px!important;
+  font-weight:400!important;
+}
+.presume-brand b{
+  font-size:18px!important;
+  font-weight:600!important;
+  letter-spacing:.055em!important;
+}
+.presume-brand span{
+  font-size:7px!important;
+  font-weight:700!important;
+  letter-spacing:.22em!important;
+  color:#9b958b!important;
+  margin-top:1px!important;
+}
+.presume-head-spacer{width:34px!important}
+
+.pres-stories{
+  gap:14px!important;
+  padding:5px 7px 15px 2px!important;
+  scroll-padding-inline:2px 22px!important;
+}
+.pres-story,.pres-story-own{
+  flex:0 0 58px!important;
+  width:58px!important;
+  min-width:58px!important;
+  max-width:58px!important;
+}
+.pres-story-ring{
+  width:50px!important;
+  height:62px!important;
+  min-width:50px!important;
+  min-height:62px!important;
+  max-width:50px!important;
+  max-height:62px!important;
+  border-radius:18px!important;
+  padding:2px!important;
+  background:#ddd8cf!important;
+}
+.pres-story.has-story .pres-story-ring,.pres-story-own.has-story .pres-story-ring{
+  background:linear-gradient(145deg,#ef917d,#b27bc8,#e8bd73)!important;
+}
+.pres-story-ring-inner{
+  border-radius:16px!important;
+  padding:1px!important;
+}
+.pres-story-avatar,.pres-story-avatar img{
+  border-radius:14px!important;
+}
+.pres-story-avatar{
+  font-size:16px!important;
+  font-weight:700!important;
+}
+.pres-story small,.pres-story-own small{
+  width:58px!important;
+  max-width:58px!important;
+  font-size:9px!important;
+  font-weight:600!important;
+  margin-top:5px!important;
+  color:#4e4a44!important;
+}
+.pres-story-add{
+  right:0!important;
+  top:43px!important;
+  width:19px!important;
+  height:19px!important;
+  border-width:1.5px!important;
+  font-size:13px!important;
+  font-weight:600!important;
+}
+
+.pres-challenge{
+  border-radius:23px!important;
+  padding:18px 18px 16px!important;
+  margin-bottom:12px!important;
+}
+.pres-challenge .eyebrow{
+  margin:0 0 8px!important;
+  font-size:9px!important;
+  font-weight:700!important;
+  letter-spacing:.09em!important;
+  color:#a9a49c!important;
+}
+.pres-challenge h2{
+  margin:0 0 8px!important;
+  max-width:520px;
+  font-size:26px!important;
+  line-height:1.08!important;
+  font-weight:500!important;
+}
+.pres-challenge>p:not(.eyebrow){
+  margin:0 0 14px!important;
+  max-width:500px;
+  font-size:12px!important;
+  line-height:1.45!important;
+  color:#c7c2bb!important;
+}
+.pres-challenge-meta{
+  gap:6px!important;
+  margin-bottom:12px!important;
+}
+.pres-chip{
+  padding:5px 8px!important;
+  gap:3px!important;
+  font-size:9px!important;
+  font-weight:650!important;
+  background:rgba(255,255,255,.085)!important;
+}
+.pres-main{
+  min-height:44px!important;
+  border-radius:14px!important;
+  font-size:11px!important;
+  font-weight:800!important;
+  letter-spacing:.025em!important;
+}
+.pres-main.done{
+  background:#f4f1eb!important;
+  color:#171716!important;
+}
+.pres-reminder{display:none!important}
+
+@media(max-width:520px){
+  .presume-screen{padding-left:12px!important;padding-right:12px!important}
+  .presume-head{padding-bottom:6px!important}
+  .pres-stories{gap:13px!important;padding-bottom:14px!important}
+  .pres-challenge{padding:17px 16px 15px!important;border-radius:22px!important}
+  .pres-challenge h2{font-size:25px!important}
+}
