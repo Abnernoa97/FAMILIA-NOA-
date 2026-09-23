@@ -44,6 +44,7 @@ const loadAssistant = async () => {
   if (assistantLoaded || !document.querySelector('.shell')) return
   try {
     await import('./profile-assistant')
+    await import('./noa-minimal.css')
     assistantLoaded = true
   } catch (error) {
     assistantLoaded = false
