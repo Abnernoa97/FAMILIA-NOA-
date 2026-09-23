@@ -4,6 +4,7 @@ import { clearIdentity, getIdentity } from './core/identity'
 import { optimizeAvatar, optimizePhoto } from './core/media-pipeline'
 import { openMediaViewer } from './core/media-viewer'
 import { uploadPrivateMedia } from './core/resumable-storage'
+import { backView, currentView, enterView } from './core/navigation'
 
 const BUCKET='family-photos'
 const AVATAR_MAX_BYTES=8*1024*1024
@@ -63,6 +64,8 @@ const css=`
 @media(max-width:520px){.profile-drawer{padding-left:14px;padding-right:14px}.profile-detail{padding-left:14px;padding-right:14px}.profile-cover-preview,.profile-detail-cover{height:142px}}
 `
 
+let previousBodyOverflow=''
+
 function inject(){
   if(document.querySelector('#profile-css'))return
   const style=document.createElement('style')
@@ -72,9 +75,21 @@ function inject(){
 }
 
 function current(){return getIdentity()}
-function esc(value:string){return String(value||'').replace(/[&<>"']/g,char=>({'&':'&amp;','<':'&lt;','>':'&gt;','"':'&quot',"'":'&#039;'}[char]||char))}
+function esc(value:string){return String(value||'').replace(/[&<>"']/g,char=>({'&':'&amp;','<':'&lt;','>':'&gt;','"':'&quot;',"'":'&#039;'}[char]||char))}
 function avatarUrl(path:string|null|undefined){return path?mediaUrl(path):''}
 function setBusy(button:HTMLButtonElement,busy:boolean,text:string){button.disabled=busy;button.textContent=text}
+
+function clearProfileDetail(){document.querySelector('.profile-detail')?.remove()}
+function clearProfileScreen(){
+  clearProfileDetail()
+  document.querySelector('.profile-menu')?.remove()
+  document.body.style.overflow=previousBodyOverflow
+}
+function requestBack(expected:'profile'|'profile-detail'){
+  if(currentView()===expected)backView()
+  else if(expected==='profile-detail')clearProfileDetail()
+  else clearProfileScreen()
+}
 
 async function getProfile(id:string):Promise<ProfileRow>{
   const {data,error}=await supabase.from('family_profiles').select('member_id,avatar_path,bio,theme,updated_at,cover_path').eq('member_id',id).maybeSingle()
@@ -85,12 +100,7 @@ async function getProfile(id:string):Promise<ProfileRow>{
 }
 
 async function saveProfile(id:string,bio:string,theme:string){
-  const {error}=await supabase.from('family_profiles').upsert({
-    member_id:id,
-    bio:bio.slice(0,280),
-    theme:theme==='dark'?'dark':'light',
-    updated_at:new Date().toISOString()
-  })
+  const {error}=await supabase.from('family_profiles').upsert({member_id:id,bio:bio.slice(0,280),theme:theme==='dark'?'dark':'light',updated_at:new Date().toISOString()})
   if(error)throw error
 }
 
@@ -106,10 +116,7 @@ async function uploadAvatar(id:string,file:File){
   if(oldError){await supabase.storage.from(BUCKET).remove([path]);throw oldError}
   const {error:dbError}=await supabase.from('family_profiles').upsert({member_id:id,avatar_path:path,bio:old?.bio||'',theme:old?.theme||'light',cover_path:old?.cover_path||null,updated_at:new Date().toISOString()})
   if(dbError){await supabase.storage.from(BUCKET).remove([path]);forgetMedia(path);throw dbError}
-  if(previous?.avatar_path&&previous.avatar_path!==path){
-    const {error:removeError}=await supabase.storage.from(BUCKET).remove([previous.avatar_path])
-    if(!removeError)forgetMedia(previous.avatar_path)
-  }
+  if(previous?.avatar_path&&previous.avatar_path!==path){const {error}=await supabase.storage.from(BUCKET).remove([previous.avatar_path]);if(!error)forgetMedia(previous.avatar_path)}
   await signMedia(path)
   return path
 }
@@ -126,10 +133,7 @@ async function uploadCover(id:string,file:File){
   if(oldError){await supabase.storage.from(BUCKET).remove([path]);throw oldError}
   const {error:dbError}=await supabase.from('family_profiles').upsert({member_id:id,avatar_path:old?.avatar_path||null,bio:old?.bio||'',theme:old?.theme||'light',cover_path:path,updated_at:new Date().toISOString()})
   if(dbError){await supabase.storage.from(BUCKET).remove([path]);forgetMedia(path);throw dbError}
-  if(previous?.cover_path&&previous.cover_path!==path){
-    const {error:removeError}=await supabase.storage.from(BUCKET).remove([previous.cover_path])
-    if(!removeError)forgetMedia(previous.cover_path)
-  }
+  if(previous?.cover_path&&previous.cover_path!==path){const {error}=await supabase.storage.from(BUCKET).remove([previous.cover_path]);if(!error)forgetMedia(previous.cover_path)}
   await signMedia(path)
   return path
 }
@@ -146,10 +150,7 @@ function updateHomeAvatar(path:string|null|undefined){
 async function hydrateHomeAvatar(){
   const identity=current()
   if(!identity?.memberId||!document.querySelector('#change'))return
-  try{
-    const profile=await getProfile(identity.memberId)
-    updateHomeAvatar(profile.avatar_path)
-  }catch(error){console.error('Profile avatar hydration failed',error)}
+  try{const profile=await getProfile(identity.memberId);updateHomeAvatar(profile.avatar_path)}catch(error){console.error('Profile avatar hydration failed',error)}
 }
 
 function setProfileStatus(root:Element,message:string,error=false){
@@ -171,9 +172,10 @@ async function openSettings(){
   if(!identity?.memberId||document.querySelector('.profile-menu'))return
   const profile=await getProfile(identity.memberId)
   if(document.querySelector('.profile-menu'))return
+  enterView('profile')
   const photo=avatarUrl(profile.avatar_path)
   const cover=avatarUrl(profile.cover_path)
-  const previousOverflow=document.body.style.overflow
+  previousBodyOverflow=document.body.style.overflow
   const overlay=document.createElement('div')
   overlay.className='profile-menu'
   overlay.innerHTML=`<main class="profile-drawer" role="dialog" aria-modal="true" aria-label="Tu perfil"><div class="profile-topbar"><strong>Perfil</strong><button class="profile-close" type="button" aria-label="Cerrar">×</button></div><section class="profile-hero"><div class="profile-cover-preview" id="coverPreview"><button class="profile-cover-button" id="coverButton" type="button">${cover?'Cambiar portada':'Agregar portada'}</button></div><div class="profile-identity"><div class="profile-avatar-wrap"><img class="profile-avatar" id="myAvatar" ${photo?`src="${esc(photo)}"`:''} alt="${esc(identity.name)}" style="${photo?'':'display:none'}"><div class="profile-avatar-fallback" id="avatarFallback" style="${photo?'display:none':''}">${esc(identity.name.charAt(0))}</div><button type="button" class="profile-avatar-edit" id="avatarButton" aria-label="Cambiar foto">＋</button></div><div class="profile-name">${esc(identity.name)}</div><p class="profile-bio" id="bioPreview">${esc(profile.bio||'Tu espacio dentro de FAMILIA NOA.')}</p></div></section><input id="avatarFile" type="file" accept="image/*" hidden><input id="coverFile" type="file" accept="image/*" hidden><section class="profile-edit-card"><div class="profile-card-title"><b>Editar mi perfil</b><span>Solo tú</span></div><div class="profile-field"><label for="bio">Frase / biografía</label><textarea id="bio" maxlength="280" placeholder="Escribe algo para tu familia…">${esc(profile.bio||'')}</textarea><div class="profile-char-count"><span id="bioCount">${(profile.bio||'').length}</span>/280</div></div><div class="profile-actions"><button type="button" class="profile-button" id="saveProfile">Guardar cambios</button></div><div class="profile-status" id="profileStatus"></div></section><section class="profiles-section"><div class="profiles-section-head"><h3>Familia</h3><span>Perfiles</span></div><div class="profile-list" id="profileList"><div class="profile-status">Cargando perfiles…</div></div></section><div class="profile-switch"><button type="button" class="profile-button ghost" id="switchProfile">Cambiar perfil</button></div></main>`
@@ -181,12 +183,9 @@ async function openSettings(){
   document.body.style.overflow='hidden'
   if(cover)(overlay.querySelector<HTMLElement>('#coverPreview')!).style.backgroundImage=`url("${cover}")`
 
-  const close=()=>{overlay.remove();document.body.style.overflow=previousOverflow}
-  overlay.querySelector('.profile-close')!.addEventListener('click',close)
-
+  overlay.querySelector('.profile-close')!.addEventListener('click',()=>requestBack('profile'))
   const bio=overlay.querySelector<HTMLTextAreaElement>('#bio')!
   bio.addEventListener('input',()=>{overlay.querySelector('#bioCount')!.textContent=String(bio.value.length)})
-
   overlay.querySelector('#avatarButton')!.addEventListener('click',()=>overlay.querySelector<HTMLInputElement>('#avatarFile')!.click())
   overlay.querySelector('#coverButton')!.addEventListener('click',()=>overlay.querySelector<HTMLInputElement>('#coverFile')!.click())
 
@@ -196,22 +195,14 @@ async function openSettings(){
     input.value=''
     if(!file)return
     const button=overlay.querySelector<HTMLButtonElement>('#avatarButton')!
-    setBusy(button,true,'…')
-    setProfileStatus(overlay,'Preparando foto…')
+    setBusy(button,true,'…');setProfileStatus(overlay,'Preparando foto…')
     try{
       const path=await uploadAvatar(identity.memberId,file)
       const url=avatarUrl(path)
       const img=overlay.querySelector<HTMLImageElement>('#myAvatar')!
-      img.src=url
-      img.style.display='block'
-      ;(overlay.querySelector('#avatarFallback') as HTMLElement).style.display='none'
-      updateHomeAvatar(path)
-      setProfileStatus(overlay,'Foto actualizada ✓')
-      await renderProfileList(overlay.querySelector('#profileList')!)
-    }catch(error){
-      console.error('Profile avatar upload failed',error)
-      setProfileStatus(overlay,error instanceof Error?error.message:'No se pudo subir la foto.',true)
-    }finally{setBusy(button,false,'＋')}
+      img.src=url;img.style.display='block';(overlay.querySelector('#avatarFallback') as HTMLElement).style.display='none'
+      updateHomeAvatar(path);setProfileStatus(overlay,'Foto actualizada ✓');await renderProfileList(overlay.querySelector('#profileList')!)
+    }catch(error){console.error('Profile avatar upload failed',error);setProfileStatus(overlay,error instanceof Error?error.message:'No se pudo subir la foto.',true)}finally{setBusy(button,false,'＋')}
   })
 
   overlay.querySelector('#coverFile')!.addEventListener('change',async event=>{
@@ -220,36 +211,22 @@ async function openSettings(){
     input.value=''
     if(!file)return
     const button=overlay.querySelector<HTMLButtonElement>('#coverButton')!
-    setBusy(button,true,'Preparando…')
-    setProfileStatus(overlay,'Preparando portada…')
+    setBusy(button,true,'Preparando…');setProfileStatus(overlay,'Preparando portada…')
     try{
       const path=await uploadCover(identity.memberId,file)
       const url=avatarUrl(path)
       ;(overlay.querySelector<HTMLElement>('#coverPreview')!).style.backgroundImage=`url("${url}")`
-      setProfileStatus(overlay,'Portada actualizada ✓')
-      button.textContent='Cambiar portada'
-    }catch(error){
-      console.error('Profile cover upload failed',error)
-      setProfileStatus(overlay,error instanceof Error?error.message:'No se pudo subir la portada.',true)
-    }finally{
-      button.disabled=false
-      if(button.textContent==='Preparando…')button.textContent=cover?'Cambiar portada':'Agregar portada'
-    }
+      setProfileStatus(overlay,'Portada actualizada ✓');button.textContent='Cambiar portada'
+    }catch(error){console.error('Profile cover upload failed',error);setProfileStatus(overlay,error instanceof Error?error.message:'No se pudo subir la portada.',true)}finally{button.disabled=false;if(button.textContent==='Preparando…')button.textContent=cover?'Cambiar portada':'Agregar portada'}
   })
 
   overlay.querySelector('#saveProfile')!.addEventListener('click',async()=>{
     const button=overlay.querySelector<HTMLButtonElement>('#saveProfile')!
     if(button.disabled)return
-    setBusy(button,true,'Guardando…')
-    setProfileStatus(overlay,'')
-    try{
-      await saveProfile(identity.memberId,bio.value,profile.theme)
-      overlay.querySelector('#bioPreview')!.textContent=bio.value.trim()||'Tu espacio dentro de FAMILIA NOA.'
-      setProfileStatus(overlay,'Guardado ✓')
-    }catch(error){
-      console.error('Profile save failed',error)
-      setProfileStatus(overlay,error instanceof Error?error.message:'No se pudo guardar el perfil.',true)
-    }finally{setBusy(button,false,'Guardar cambios')}
+    setBusy(button,true,'Guardando…');setProfileStatus(overlay,'')
+    try{await saveProfile(identity.memberId,bio.value,profile.theme);overlay.querySelector('#bioPreview')!.textContent=bio.value.trim()||'Tu espacio dentro de FAMILIA NOA.';setProfileStatus(overlay,'Guardado ✓')}
+    catch(error){console.error('Profile save failed',error);setProfileStatus(overlay,error instanceof Error?error.message:'No se pudo guardar el perfil.',true)}
+    finally{setBusy(button,false,'Guardar cambios')}
   })
 
   overlay.querySelector('#switchProfile')!.addEventListener('click',()=>void switchProfile(overlay.querySelector<HTMLButtonElement>('#switchProfile')!))
@@ -272,10 +249,7 @@ async function renderProfileList(element:Element){
     const mine=member.id===identity?.memberId
     return `<button type="button" class="profile-list-item${mine?' mine':''}" data-profile-id="${esc(member.id)}"><span class="profile-list-avatar">${avatar?`<img src="${esc(avatar)}" alt="Foto de ${esc(member.name)}">`:esc(member.name.charAt(0))}</span><span class="profile-list-copy"><strong>${esc(member.name)}${mine?' · tú':''}</strong><span>${mine?'Así te ve la familia':'Ver perfil'}</span></span><span class="profile-list-arrow">›</span></button>`
   }).join('')
-  element.querySelectorAll<HTMLButtonElement>('[data-profile-id]').forEach(button=>button.addEventListener('click',()=>{
-    const member=rows.find(row=>row.id===button.dataset.profileId)
-    if(member)void openProfile(member.id,member.name)
-  }))
+  element.querySelectorAll<HTMLButtonElement>('[data-profile-id]').forEach(button=>button.addEventListener('click',()=>{const member=rows.find(row=>row.id===button.dataset.profileId);if(member)void openProfile(member.id,member.name)}))
 }
 
 async function openProfile(id:string,name:string){
@@ -284,19 +258,22 @@ async function openProfile(id:string,name:string){
     getProfile(id),
     supabase.from('photos').select('storage_path,created_at').eq('uploader_id',id).order('created_at',{ascending:false}).limit(18)
   ])
+  if(!document.querySelector('.profile-menu')||currentView()!=='profile')return
   if(photoResult.error)console.error('Profile gallery load failed',photoResult.error)
   const photos=(photoResult.data||[]) as PhotoRow[]
   await primeMedia(photos.map(photo=>photo.storage_path))
   const available=photos.map(photo=>({photo,src:avatarUrl(photo.storage_path)})).filter(item=>!!item.src)
   const cover=avatarUrl(profile.cover_path)
   const avatar=avatarUrl(profile.avatar_path)
+  enterView('profile-detail')
   const detail=document.createElement('div')
   detail.className='profile-detail'
   detail.innerHTML=`<div class="profile-detail-inner"><div class="profile-detail-top"><button class="profile-back" type="button" aria-label="Volver">‹</button><div><div class="eyebrow">FAMILIA NOA</div><b>${esc(name)}</b></div></div>${cover?`<img class="profile-detail-cover" src="${esc(cover)}" alt="Portada de ${esc(name)}">`:'<div class="profile-detail-cover"></div>'}<section class="profile-detail-identity"><img class="profile-avatar" ${avatar?`src="${esc(avatar)}"`:''} alt="${esc(name)}" style="${avatar?'':'display:none'}"><div class="profile-avatar-fallback" style="${avatar?'display:none':''}">${esc(name.charAt(0))}</div><div class="profile-detail-name">${esc(name)}</div><p class="profile-detail-bio">${esc(profile.bio||'Esta persona todavía no ha escrito su frase.')}</p></section><h3 class="profile-gallery-title">Momentos</h3><div class="profile-gallery">${available.length?available.map((item,index)=>`<button type="button" class="profile-gallery-item" data-gallery-index="${index}" aria-label="Abrir foto de ${esc(name)}"><img src="${esc(item.src)}" alt="Foto de ${esc(name)}" loading="lazy" decoding="async"></button>`).join(''):'<div class="profile-empty">Aún no ha compartido fotos.</div>'}</div></div>`
   document.body.appendChild(detail)
-  detail.querySelector('.profile-back')!.addEventListener('click',()=>detail.remove())
+  detail.querySelector('.profile-back')!.addEventListener('click',()=>requestBack('profile-detail'))
   detail.querySelectorAll<HTMLButtonElement>('[data-gallery-index]').forEach(button=>button.addEventListener('click',()=>{
     const index=Number(button.dataset.galleryIndex||0)
+    enterView('media')
     openMediaViewer(available.map(item=>({src:item.src,alt:`Foto de ${name}`})),index)
   }))
 }
@@ -306,19 +283,27 @@ inject()
 document.addEventListener('click',event=>{
   const target=event.target as Element|null
   if(!target?.closest('#change'))return
-  event.preventDefault()
-  event.stopPropagation()
-  event.stopImmediatePropagation()
+  event.preventDefault();event.stopPropagation();event.stopImmediatePropagation()
   void openSettings().catch(error=>console.error('Profile screen failed to open',error))
 },true)
+
+window.addEventListener('popstate',()=>{
+  const view=currentView()
+  if(view==='profile-detail')return
+  if(view==='profile'){clearProfileDetail();return}
+  clearProfileScreen()
+})
+
+window.addEventListener('keydown',event=>{
+  if(event.key!=='Escape')return
+  if(currentView()==='profile-detail')requestBack('profile-detail')
+  else if(currentView()==='profile')requestBack('profile')
+})
 
 let lastHomeAvatar:Element|null=null
 const homeObserver=new MutationObserver(()=>{
   const button=document.querySelector('#change')
-  if(button&&button!==lastHomeAvatar){
-    lastHomeAvatar=button
-    void hydrateHomeAvatar()
-  }
+  if(button&&button!==lastHomeAvatar){lastHomeAvatar=button;void hydrateHomeAvatar()}
 })
 homeObserver.observe(document.body,{childList:true,subtree:true})
 void hydrateHomeAvatar()
