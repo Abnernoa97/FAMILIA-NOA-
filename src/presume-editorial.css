@@ -106,28 +106,98 @@
   color:#c7c2bb!important;
 }
 .pres-challenge-meta{
-  gap:6px!important;
-  margin-bottom:12px!important;
+  gap:5px!important;
+  margin-bottom:11px!important;
 }
 .pres-chip{
-  padding:5px 8px!important;
-  gap:3px!important;
-  font-size:9px!important;
-  font-weight:650!important;
-  background:rgba(255,255,255,.085)!important;
+  min-height:0!important;
+  padding:4px 7px!important;
+  gap:2px!important;
+  border-radius:999px!important;
+  font-size:8.5px!important;
+  line-height:1.15!important;
+  font-weight:550!important;
+  letter-spacing:.01em!important;
+  color:#c8c3bc!important;
+  background:rgba(255,255,255,.06)!important;
 }
 .pres-main{
-  min-height:44px!important;
-  border-radius:14px!important;
-  font-size:11px!important;
-  font-weight:800!important;
-  letter-spacing:.025em!important;
+  width:auto!important;
+  min-width:136px!important;
+  min-height:39px!important;
+  height:39px!important;
+  padding:0 16px!important;
+  border-radius:999px!important;
+  font-size:10px!important;
+  font-weight:700!important;
+  letter-spacing:.015em!important;
+  display:inline-flex!important;
+  align-items:center!important;
+  justify-content:center!important;
 }
 .pres-main.done{
-  background:#f4f1eb!important;
+  background:#f2efe9!important;
   color:#171716!important;
 }
-.pres-reminder{display:none!important}
+.pres-reminder{
+  display:block!important;
+  width:auto!important;
+  margin:14px 0 0!important;
+  padding:0!important;
+  color:#8f8a82!important;
+  opacity:.82!important;
+  font-size:8.5px!important;
+  line-height:1.2!important;
+  font-weight:550!important;
+  letter-spacing:.015em!important;
+  text-decoration:none!important;
+}
+
+.pres-compose{
+  display:grid!important;
+  grid-template-columns:repeat(4,minmax(0,1fr))!important;
+  gap:7px!important;
+  margin:0 0 22px!important;
+}
+.pres-compose button{
+  min-width:0!important;
+  min-height:40px!important;
+  height:40px!important;
+  padding:0 9px!important;
+  border:1px solid #ded9d0!important;
+  border-radius:999px!important;
+  background:rgba(255,255,255,.68)!important;
+  color:#302e2a!important;
+  font-size:9.5px!important;
+  font-weight:600!important;
+  display:flex!important;
+  align-items:center!important;
+  justify-content:center!important;
+  gap:5px!important;
+  box-shadow:none!important;
+}
+.pres-compose button:active{background:#ebe6dd!important}
+.pres-compose i{
+  display:inline-flex!important;
+  align-items:center!important;
+  justify-content:center!important;
+  width:15px!important;
+  height:15px!important;
+  margin:0!important;
+  font-size:0!important;
+  line-height:1!important;
+}
+.pres-compose i svg{
+  display:block!important;
+  width:15px!important;
+  height:15px!important;
+  fill:none!important;
+  stroke:currentColor!important;
+  stroke-width:1.55!important;
+  stroke-linecap:round!important;
+  stroke-linejoin:round!important;
+}
+.pres-compose span{white-space:nowrap}
 
 @media(max-width:520px){
   .presume-screen{padding-left:12px!important;padding-right:12px!important}
@@ -135,4 +205,8 @@
   .pres-stories{gap:13px!important;padding-bottom:14px!important}
   .pres-challenge{padding:17px 16px 15px!important;border-radius:22px!important}
   .pres-challenge h2{font-size:25px!important}
+}
+@media(max-width:360px){
+  .pres-compose{gap:5px!important}
+  .pres-compose button{padding:0 6px!important;font-size:9px!important}
 }
