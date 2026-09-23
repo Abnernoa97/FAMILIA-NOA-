@@ -30,6 +30,19 @@ function alreadyExists(error:any){
   return status===409||message.includes('already exists')||message.includes('duplicate')||message.includes('resource already exists')
 }
 
+function delay(ms:number){return new Promise(resolve=>setTimeout(resolve,ms))}
+
+async function verifyObject(path:string){
+  let lastError:any=null
+  for(let attempt=0;attempt<5;attempt++){
+    const {data,error}=await supabase.storage.from(MEDIA_BUCKET).createSignedUrl(path,60)
+    if(!error&&data?.signedUrl)return
+    lastError=error
+    if(attempt<4)await delay(250*(attempt+1))
+  }
+  throw lastError||new Error('MEDIA_UPLOAD_NOT_PERSISTED')
+}
+
 async function authToken(){
   const {data:{session},error}=await supabase.auth.getSession()
   if(error)throw error
@@ -48,6 +61,7 @@ async function signedSdkUpload(path:string,file:Blob,options:UploadOptions,entry
     upsert:false
   })
   if(uploadError&&!alreadyExists(uploadError))throw uploadError
+  await verifyObject(path)
   emit(entry,file.size,file.size)
   return{data:{path},error:null}
 }
@@ -76,12 +90,12 @@ async function resumableUpload(path:string,file:Blob,options:UploadOptions,entry
       chunkSize:CHUNK_SIZE,
       onProgress:(uploaded,total)=>emit(entry,uploaded,total),
       onError:error=>finish(reject,error),
-      onSuccess:()=>{emit(entry,file.size,file.size);finish(resolve,{data:{path},error:null})}
+      onSuccess:()=>finish(resolve,{data:{path},error:null})
     })
-    void upload.findPreviousUploads().then(previous=>{
-      if(previous.length){try{upload.resumeFromPreviousUpload(previous[0])}catch{}}
-      upload.start()
-    }).catch(()=>upload.start())
+    // Do not reuse a previous TUS resource for a new UUID path. Camera captures often
+    // share the same browser filename and stale resume fingerprints can point at a
+    // different object. Retries inside this upload remain enabled.
+    upload.start()
   })
 }
 
@@ -93,6 +107,7 @@ async function standardUpload(path:string,file:Blob,options:UploadOptions,entry:
     upsert:false
   })
   if(error&&!alreadyExists(error))throw error
+  await verifyObject(path)
   emit(entry,file.size,file.size)
   return{data:{path},error:null}
 }
@@ -109,9 +124,13 @@ export function uploadPrivateMedia(path:string,file:Blob,options:UploadOptions={
   entry.promise=(async()=>{
     try{
       if(file.size<=RESUMABLE_THRESHOLD)return await standardUpload(path,file,options,entry)
-      try{return await resumableUpload(path,file,options,entry)}
-      catch(tusError){
-        console.warn('Resumable media upload failed; using Supabase signed upload fallback.',tusError)
+      try{
+        const result=await resumableUpload(path,file,options,entry)
+        await verifyObject(path)
+        emit(entry,file.size,file.size)
+        return result
+      }catch(tusError){
+        console.warn('Resumable media upload did not persist; using Supabase signed upload fallback.',tusError)
         return await signedSdkUpload(path,file,options,entry)
       }
     }finally{
