@@ -1,5 +1,6 @@
 let biometricLoaded = false
 let profileLoaded = false
+let presumeLoaded = false
 let albumsLoaded = false
 let locationLoaded = false
 
@@ -22,6 +23,17 @@ const loadProfile = async () => {
   } catch (error) {
     profileLoaded = false
     console.error('Profile enhancer failed to load', error)
+  }
+}
+
+const loadPresume = async () => {
+  if (presumeLoaded || !document.querySelector('.shell')) return
+  try {
+    await import('./presume-enhancer')
+    presumeLoaded = true
+  } catch (error) {
+    presumeLoaded = false
+    console.error('PRESUME enhancer failed to load', error)
   }
 }
 
@@ -58,9 +70,10 @@ let observer: MutationObserver | null = null
 function scan() {
   void loadBiometric()
   void loadProfile()
+  void loadPresume()
   void loadAlbums()
   void loadLocation()
-  if (biometricLoaded && profileLoaded && albumsLoaded && locationLoaded) {
+  if (biometricLoaded && profileLoaded && presumeLoaded && albumsLoaded && locationLoaded) {
     observer?.disconnect()
     observer = null
   }
