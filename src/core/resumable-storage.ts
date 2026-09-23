@@ -30,56 +30,41 @@ function alreadyExists(error:any){
   return status===409||message.includes('already exists')||message.includes('duplicate')||message.includes('resource already exists')
 }
 
-async function signedUpload(path:string){
+async function authToken(){
+  const {data:{session},error}=await supabase.auth.getSession()
+  if(error)throw error
+  if(!session?.access_token)throw new Error('MEDIA_AUTH_SESSION_MISSING')
+  return session.access_token
+}
+
+async function signedSdkUpload(path:string,file:Blob,options:UploadOptions,entry:ActiveUpload):Promise<UploadResult>{
   const api=supabase.storage.from(MEDIA_BUCKET)
+  emit(entry,0,file.size)
   const {data,error}=await api.createSignedUploadUrl(path,{upsert:false})
   if(error||!data?.token)throw error||new Error('MEDIA_SIGNED_UPLOAD_UNAVAILABLE')
-  return{api,data}
-}
-
-function xhrPut(url:string,path:string,file:Blob,options:UploadOptions,entry:ActiveUpload){
-  return new Promise<UploadResult>((resolve,reject)=>{
-    const xhr=new XMLHttpRequest()
-    const body=new FormData()
-    body.append('cacheControl',String(options.cacheControl||'31536000'))
-    body.append('',file)
-    xhr.open('PUT',url,true)
-    xhr.setRequestHeader('apikey',SUPABASE_PUBLISHABLE_KEY)
-    xhr.setRequestHeader('x-upsert','false')
-    xhr.upload.onprogress=event=>{if(event.lengthComputable)emit(entry,event.loaded,event.total)}
-    xhr.onerror=()=>reject(new Error('MEDIA_UPLOAD_NETWORK_ERROR'))
-    xhr.onabort=()=>reject(new Error('MEDIA_UPLOAD_ABORTED'))
-    xhr.onload=()=>{
-      if(xhr.status>=200&&xhr.status<300){emit(entry,file.size,file.size);resolve({data:{path},error:null});return}
-      if(xhr.status===409){emit(entry,file.size,file.size);resolve({data:{path},error:null});return}
-      reject(new Error(`MEDIA_SIGNED_UPLOAD_FAILED_${xhr.status}`))
-    }
-    xhr.send(body)
+  const {error:uploadError}=await api.uploadToSignedUrl(path,data.token,file,{
+    contentType:options.contentType||file.type||'application/octet-stream',
+    cacheControl:options.cacheControl||'31536000',
+    upsert:false
   })
-}
-
-async function signedProgressUpload(path:string,file:Blob,options:UploadOptions,entry:ActiveUpload){
-  const {data}=await signedUpload(path)
-  if(!data.signedUrl)throw new Error('MEDIA_SIGNED_UPLOAD_URL_UNAVAILABLE')
-  let directUrl=data.signedUrl
-  try{const url=new URL(data.signedUrl);url.hostname=STORAGE_HOST;directUrl=url.toString()}catch{}
-  try{return await xhrPut(directUrl,path,file,options,entry)}
-  catch(error){
-    if(directUrl===data.signedUrl)throw error
-    return xhrPut(data.signedUrl,path,file,options,entry)
-  }
+  if(uploadError&&!alreadyExists(uploadError))throw uploadError
+  emit(entry,file.size,file.size)
+  return{data:{path},error:null}
 }
 
 async function resumableUpload(path:string,file:Blob,options:UploadOptions,entry:ActiveUpload){
-  const {data}=await signedUpload(path)
-  const token=data.token
+  const accessToken=await authToken()
   return new Promise<UploadResult>((resolve,reject)=>{
     let settled=false
     const finish=(fn:(value:any)=>void,value:any)=>{if(settled)return;settled=true;fn(value)}
     const upload=new tus.Upload(file,{
       endpoint:TUS_ENDPOINT,
       retryDelays:[0,1000,3000,5000,10000,20000],
-      headers:{apikey:SUPABASE_PUBLISHABLE_KEY,'x-signature':token,'x-upsert':'false'},
+      headers:{
+        authorization:`Bearer ${accessToken}`,
+        apikey:SUPABASE_PUBLISHABLE_KEY,
+        'x-upsert':'false'
+      },
       uploadDataDuringCreation:true,
       removeFingerprintOnSuccess:true,
       metadata:{
@@ -126,8 +111,8 @@ export function uploadPrivateMedia(path:string,file:Blob,options:UploadOptions={
       if(file.size<=RESUMABLE_THRESHOLD)return await standardUpload(path,file,options,entry)
       try{return await resumableUpload(path,file,options,entry)}
       catch(tusError){
-        console.warn('Resumable media upload failed; using signed upload fallback.',tusError)
-        return await signedProgressUpload(path,file,options,entry)
+        console.warn('Resumable media upload failed; using Supabase signed upload fallback.',tusError)
+        return await signedSdkUpload(path,file,options,entry)
       }
     }finally{
       activeUploads.delete(path)
