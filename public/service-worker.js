@@ -1,4 +1,4 @@
-const CACHE = 'familia-noa-v32';
+const CACHE = 'familia-noa-v33';
 const BASE = new URL(self.registration.scope).pathname;
 const STATIC = [
   BASE,
@@ -70,11 +70,13 @@ self.addEventListener('notificationclick', event => {
     });
 
     if (existing) {
-      await existing.focus();
-      if (payload.type === 'presume') {
-        existing.postMessage({ type:'PRESUME_OPEN_CAMERA', slot:payload.slot || 'morning' });
-      }
-      return;
+      try {
+        const navigated = typeof existing.navigate === 'function'
+          ? await existing.navigate(targetUrl)
+          : existing;
+        await (navigated || existing).focus();
+        return;
+      } catch {}
     }
 
     await self.clients.openWindow(targetUrl);
