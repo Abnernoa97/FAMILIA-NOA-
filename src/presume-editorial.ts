@@ -65,11 +65,12 @@ function compactChallenge(){
     if(main.textContent!==next)main.textContent=next
   }
 
-  const reminder=challenge.querySelector<HTMLButtonElement>('.pres-reminder')
+  const reminder=root.querySelector<HTMLButtonElement>('.pres-reminder')
   if(reminder){
     const active=reminder.textContent?.toLowerCase().includes('activados')
     const next=active?'Recordatorios activados':'Activar recordatorios'
     if(reminder.textContent!==next)reminder.textContent=next
+    if(reminder.parentElement===challenge)challenge.insertAdjacentElement('afterend',reminder)
   }
 
   decorateQuickActions(root)
