@@ -76,6 +76,7 @@ const loadPresume = async () => {
     await import('./presume-enhancer')
     await import('./presume-management')
     await import('./presume-memory-guard')
+    await import('./presume-challenge-push')
     await import('./presume-editorial.css')
     await import('./presume-editorial')
     presumeLoaded = true
