@@ -8,26 +8,21 @@ type Member={id:string;name:string}
 type ChatRow={
   id:string
   sender_id:string
-  body:string
   created_at:string
-  deleted_at:string|null
   attachment_path:string|null
   attachment_type:string|null
-  attachment_name:string|null
 }
 type PostRow={
   id:string
   member_id:string
-  media_type:'image'|'video'|'text'|'audio'
+  media_type:'image'
   media_path:string|null
-  body:string
   prompt_slot:'morning'|'afternoon'|null
-  prompt_date:string|null
   created_at:string
 }
 
-const CHAT_LIMIT=120
-const POST_LIMIT=120
+const CHAT_LIMIT=160
+const POST_LIMIT=160
 let activeSection:Section='photos'
 let mountedMemberId=''
 let mountedRoot:HTMLElement|null=null
@@ -49,13 +44,17 @@ function injectStyles(){
   .album-section-panel{display:grid;gap:10px}.album-section-panel[hidden]{display:none}
   .album-archive-head{display:flex;align-items:end;justify-content:space-between;gap:12px;margin:2px 1px 9px}.album-archive-head h2{margin:0;font:500 24px var(--display-font,Georgia,serif)}.album-archive-head span{font:700 9px system-ui;letter-spacing:.08em;color:#9a948b;text-transform:uppercase}
   .album-archive-empty{padding:38px 18px;border:1px dashed #d9d2c7;border-radius:20px;text-align:center;color:#837d74;font:12px/1.5 system-ui}.album-archive-empty b{display:block;margin-bottom:5px;color:#171716;font:500 20px var(--display-font,Georgia,serif)}
-  .album-day{margin:10px 2px 0;color:#969087;font:700 9px system-ui;letter-spacing:.09em;text-transform:uppercase}
-  .album-chat-item,.album-presume-item{overflow:hidden;border:1px solid #e4ded4;border-radius:19px;background:#fff;box-shadow:0 4px 18px rgba(22,19,15,.03)}
-  .album-chat-copy{padding:12px 13px 11px}.album-chat-copy p{margin:0;color:#2b2926;font:13px/1.45 system-ui;white-space:pre-wrap}.album-chat-copy small,.album-presume-meta{display:block;margin-top:7px;color:#9a948b;font:9px system-ui}
-  .album-archive-media{display:block;width:100%;border:0;padding:0;background:#ece7de;color:#171716;cursor:pointer;text-align:left;overflow:hidden}.album-archive-media img{display:block;width:100%;max-height:420px;object-fit:cover}.album-video-card{min-height:120px;display:grid;place-items:center;background:#1b1b1a;color:#fff;font:700 11px system-ui;letter-spacing:.08em}.album-video-card span{width:48px;height:48px;border-radius:50%;background:#fff;color:#171716;display:grid;place-items:center;font-size:18px;margin-bottom:7px}.album-audio{padding:12px 13px;background:#f2eee7}.album-audio audio{display:block;width:100%;height:38px}
-  .album-presume-body{padding:13px}.album-presume-body p{margin:0;font:500 18px/1.3 var(--display-font,Georgia,serif);white-space:pre-wrap}.album-presume-text{padding:30px 20px;background:linear-gradient(145deg,#f3dbc7,#ddd6f0);font:500 23px/1.22 var(--display-font,Georgia,serif);text-align:center;white-space:pre-wrap}.album-presume-slot{display:inline-flex;margin-bottom:8px;padding:5px 7px;border-radius:999px;background:#f1ede6;color:#777169;font:700 8px system-ui;letter-spacing:.08em;text-transform:uppercase}
+  .album-day{margin:12px 2px 4px;color:#969087;font:700 9px system-ui;letter-spacing:.09em;text-transform:uppercase}
+  .album-media-grid{display:grid;grid-template-columns:repeat(3,minmax(0,1fr));gap:5px}
+  .album-media-item{position:relative;display:block;width:100%;aspect-ratio:1;border:0;padding:0;border-radius:12px;overflow:hidden;background:#e9e4dc;cursor:pointer}
+  .album-media-item img{display:block;width:100%;height:100%;object-fit:cover}
+  .album-media-item.video{background:#171716;color:#fff}
+  .album-media-video{position:absolute;inset:0;display:grid;place-items:center;background:linear-gradient(145deg,#282826,#111)}
+  .album-media-video span{width:36px;height:36px;border-radius:50%;background:rgba(255,255,255,.94);color:#171716;display:grid;place-items:center;font-size:14px;padding-left:2px}
+  .album-media-badge{position:absolute;left:7px;bottom:7px;padding:4px 6px;border-radius:999px;background:rgba(17,17,16,.66);color:#fff;font:700 7px system-ui;letter-spacing:.06em;text-transform:uppercase;backdrop-filter:blur(6px)}
+  .album-media-time{position:absolute;right:7px;bottom:7px;padding:4px 6px;border-radius:999px;background:rgba(17,17,16,.66);color:#fff;font:600 7px system-ui;backdrop-filter:blur(6px)}
   .album-archive-loading{padding:34px;text-align:center;color:#908a82;font:11px system-ui}
-  @media(max-width:430px){.album-section-tabs{margin-top:-6px}.album-section-tab{height:38px;font-size:10px}.album-chat-copy p{font-size:12px}.album-presume-body p{font-size:17px}}
+  @media(max-width:430px){.album-section-tabs{margin-top:-6px}.album-section-tab{height:38px;font-size:10px}.album-media-grid{gap:4px}}
   `
   document.head.appendChild(style)
 }
@@ -96,32 +95,39 @@ function updateTabs(root:HTMLElement){
   toggleNativePhotos(root,activeSection==='photos')
 }
 
-function dayBlocks<T extends {created_at:string}>(items:T[],render:(item:T)=>string){
-  let day=''
-  return items.map(item=>{
-    const next=fmtDay(item.created_at)
-    const heading=next===day?'':`<div class="album-day">${esc(next)}</div>`
-    day=next
-    return `${heading}${render(item)}`
-  }).join('')
+function groupedMedia<T extends {created_at:string}>(items:T[],render:(item:T)=>string){
+  const groups=new Map<string,T[]>()
+  items.forEach(item=>{
+    const day=fmtDay(item.created_at)
+    const list=groups.get(day)||[]
+    list.push(item)
+    groups.set(day,list)
+  })
+  return [...groups.entries()].map(([day,rows])=>`<div class="album-day">${esc(day)}</div><div class="album-media-grid">${rows.map(render).join('')}</div>`).join('')
 }
 
 async function loadChat(memberId:string){
   const {data,error}=await supabase.from('messages')
-    .select('id,sender_id,body,created_at,deleted_at,attachment_path,attachment_type,attachment_name')
+    .select('id,sender_id,created_at,attachment_path,attachment_type')
     .eq('sender_id',memberId)
+    .not('attachment_path','is',null)
     .order('created_at',{ascending:false})
     .limit(CHAT_LIMIT)
   if(error)throw error
-  const rows=(data||[]) as ChatRow[]
+  const rows=((data||[]) as ChatRow[]).filter(row=>{
+    const type=row.attachment_type||''
+    return !!row.attachment_path&&(type.startsWith('image/')||type.startsWith('video/'))
+  })
   await primeMedia(rows.map(row=>row.attachment_path))
   return rows
 }
 
 async function loadPresume(memberId:string){
   const {data,error}=await supabase.from('social_posts')
-    .select('id,member_id,media_type,media_path,body,prompt_slot,prompt_date,created_at')
+    .select('id,member_id,media_type,media_path,prompt_slot,created_at')
     .eq('member_id',memberId)
+    .eq('media_type','image')
+    .not('media_path','is',null)
     .order('created_at',{ascending:false})
     .limit(POST_LIMIT)
   if(error)throw error
@@ -130,37 +136,21 @@ async function loadPresume(memberId:string){
   return rows
 }
 
-function chatMedia(row:ChatRow){
-  if(!row.attachment_path)return''
-  const path=row.attachment_path
+function renderChatMedia(row:ChatRow){
+  const path=row.attachment_path||''
   const type=row.attachment_type||''
+  if(type.startsWith('image/')){
+    const src=mediaUrl(path)
+    return src?`<button type="button" class="album-media-item" data-archive-media="image" data-media-path="${esc(path)}" aria-label="Abrir foto del chat"><img src="${esc(src)}" alt="Foto del chat" loading="lazy" decoding="async"><span class="album-media-time">${esc(fmtTime(row.created_at))}</span></button>`:`<div class="album-media-item"><div class="album-archive-loading">Foto privada</div></div>`
+  }
+  return `<button type="button" class="album-media-item video" data-archive-media="video" data-media-path="${esc(path)}" aria-label="Abrir video del chat"><div class="album-media-video"><span>▶</span></div><span class="album-media-badge">Video</span><span class="album-media-time">${esc(fmtTime(row.created_at))}</span></button>`
+}
+
+function renderPresumeMedia(row:PostRow){
+  const path=row.media_path||''
   const src=mediaUrl(path)
-  if(type.startsWith('image/'))return src?`<button type="button" class="album-archive-media" data-archive-media="image" data-media-path="${esc(path)}"><img src="${esc(src)}" alt="Foto del chat" loading="lazy" decoding="async"></button>`:'<div class="album-archive-loading">Foto privada</div>'
-  if(type.startsWith('video/'))return `<button type="button" class="album-archive-media album-video-card" data-archive-media="video" data-media-path="${esc(path)}"><div><span>▶</span>VIDEO DEL CHAT</div></button>`
-  if(type.startsWith('audio/'))return src?`<div class="album-audio"><audio controls preload="none" src="${esc(src)}"></audio></div>`:'<div class="album-archive-loading">Audio privado</div>'
-  return''
-}
-
-function renderChatRow(row:ChatRow){
-  const body=row.deleted_at?'Mensaje eliminado':row.body
-  return `<article class="album-chat-item">${chatMedia(row)}<div class="album-chat-copy">${body?`<p>${esc(body)}</p>`:''}<small>${esc(fmtTime(row.created_at))}${row.attachment_name?` · ${esc(row.attachment_name)}`:''}</small></div></article>`
-}
-
-function presumeMedia(row:PostRow){
-  if(row.media_type==='text')return `<div class="album-presume-text">${esc(row.body||'Momento')}</div>`
-  if(!row.media_path)return''
-  const path=row.media_path
-  const src=mediaUrl(path)
-  if(row.media_type==='image')return src?`<button type="button" class="album-archive-media" data-archive-media="image" data-media-path="${esc(path)}"><img src="${esc(src)}" alt="PRESUME" loading="lazy" decoding="async"></button>`:'<div class="album-archive-loading">Foto privada</div>'
-  if(row.media_type==='video')return `<button type="button" class="album-archive-media album-video-card" data-archive-media="video" data-media-path="${esc(path)}"><div><span>▶</span>VIDEO PRESUME</div></button>`
-  if(row.media_type==='audio')return src?`<div class="album-audio"><audio controls preload="none" src="${esc(src)}"></audio></div>`:'<div class="album-archive-loading">Audio privado</div>'
-  return''
-}
-
-function renderPresumeRow(row:PostRow){
   const slot=row.prompt_slot==='morning'?'Mañana':row.prompt_slot==='afternoon'?'Tarde':'PRESUME'
-  const media=presumeMedia(row)
-  return `<article class="album-presume-item">${media}<div class="album-presume-body"><span class="album-presume-slot">${esc(slot)}</span>${row.media_type!=='text'&&row.body?`<p>${esc(row.body)}</p>`:''}<small class="album-presume-meta">${esc(fmtTime(row.created_at))}</small></div></article>`
+  return src?`<button type="button" class="album-media-item" data-archive-media="image" data-media-path="${esc(path)}" aria-label="Abrir foto de PRESUME"><img src="${esc(src)}" alt="PRESUME" loading="lazy" decoding="async"><span class="album-media-badge">${esc(slot)}</span><span class="album-media-time">${esc(fmtTime(row.created_at))}</span></button>`:`<div class="album-media-item"><div class="album-archive-loading">Foto privada</div></div>`
 }
 
 async function openArchiveMedia(path:string,type:'image'|'video'){
@@ -181,11 +171,11 @@ async function renderArchive(root:HTMLElement,member:Member){
     if(activeSection==='chat'){
       const rows=await loadChat(member.id)
       if(!panel.isConnected||mountedMemberId!==member.id||activeSection!=='chat')return
-      panel.innerHTML=`<div class="album-archive-head"><h2>Chat de ${esc(member.name)}</h2><span>${rows.length} guardado${rows.length===1?'':'s'}</span></div>${rows.length?dayBlocks(rows,renderChatRow):'<div class="album-archive-empty"><b>Sin mensajes todavía</b><span>Los mensajes que escriba esta persona aparecerán aquí automáticamente.</span></div>'}`
+      panel.innerHTML=`<div class="album-archive-head"><h2>Chat de ${esc(member.name)}</h2><span>${rows.length} archivo${rows.length===1?'':'s'}</span></div>${rows.length?groupedMedia(rows,renderChatMedia):'<div class="album-archive-empty"><b>Sin fotos o videos todavía</b><span>Las fotos y videos que esta persona envíe al chat aparecerán aquí automáticamente.</span></div>'}`
     }else if(activeSection==='presume'){
       const rows=await loadPresume(member.id)
       if(!panel.isConnected||mountedMemberId!==member.id||activeSection!=='presume')return
-      panel.innerHTML=`<div class="album-archive-head"><h2>PRESUME de ${esc(member.name)}</h2><span>${rows.length} momento${rows.length===1?'':'s'}</span></div>${rows.length?dayBlocks(rows,renderPresumeRow):'<div class="album-archive-empty"><b>Sin PRESUME todavía</b><span>Sus próximos momentos quedarán organizados aquí.</span></div>'}`
+      panel.innerHTML=`<div class="album-archive-head"><h2>PRESUME de ${esc(member.name)}</h2><span>${rows.length} foto${rows.length===1?'':'s'}</span></div>${rows.length?groupedMedia(rows,renderPresumeMedia):'<div class="album-archive-empty"><b>Sin fotos de PRESUME todavía</b><span>Las imágenes que esta persona publique en PRESUME quedarán aquí.</span></div>'}`
     }else return
     panel.querySelectorAll<HTMLElement>('[data-archive-media]').forEach(button=>button.addEventListener('click',()=>{
       const path=button.dataset.mediaPath||''
