@@ -24,13 +24,11 @@ function emit(entry:ActiveUpload,uploaded:number,total:number){
   })
 }
 
-function alreadyExists(error:any){
-  const message=String(error?.message||error||'').toLowerCase()
-  const status=Number(error?.statusCode||error?.status||0)
-  return status===409||message.includes('already exists')||message.includes('duplicate')||message.includes('resource already exists')
-}
-
 function delay(ms:number){return new Promise(resolve=>setTimeout(resolve,ms))}
+
+function encodedObjectPath(path:string){
+  return path.split('/').map(segment=>encodeURIComponent(segment)).join('/')
+}
 
 async function verifyObject(path:string){
   let lastError:any=null
@@ -50,17 +48,33 @@ async function authToken(){
   return session.access_token
 }
 
-async function signedSdkUpload(path:string,file:Blob,options:UploadOptions,entry:ActiveUpload):Promise<UploadResult>{
-  const api=supabase.storage.from(MEDIA_BUCKET)
+async function rawBinaryUpload(path:string,file:Blob,options:UploadOptions,entry:ActiveUpload):Promise<UploadResult>{
+  const accessToken=await authToken()
+  const url=`${SUPABASE_URL}/storage/v1/object/${encodeURIComponent(MEDIA_BUCKET)}/${encodedObjectPath(path)}`
   emit(entry,0,file.size)
-  const {data,error}=await api.createSignedUploadUrl(path,{upsert:false})
-  if(error||!data?.token)throw error||new Error('MEDIA_SIGNED_UPLOAD_UNAVAILABLE')
-  const {error:uploadError}=await api.uploadToSignedUrl(path,data.token,file,{
-    contentType:options.contentType||file.type||'application/octet-stream',
-    cacheControl:options.cacheControl||'31536000',
-    upsert:false
+
+  await new Promise<void>((resolve,reject)=>{
+    const xhr=new XMLHttpRequest()
+    xhr.open('POST',url,true)
+    xhr.setRequestHeader('Authorization',`Bearer ${accessToken}`)
+    xhr.setRequestHeader('apikey',SUPABASE_PUBLISHABLE_KEY)
+    xhr.setRequestHeader('Content-Type',options.contentType||file.type||'application/octet-stream')
+    xhr.setRequestHeader('cache-control',options.cacheControl||'31536000')
+    xhr.upload.onprogress=event=>{if(event.lengthComputable)emit(entry,event.loaded,event.total)}
+    xhr.onerror=()=>reject(new Error('MEDIA_UPLOAD_NETWORK_ERROR'))
+    xhr.onabort=()=>reject(new Error('MEDIA_UPLOAD_ABORTED'))
+    xhr.onload=()=>{
+      if(xhr.status>=200&&xhr.status<300){resolve();return}
+      let message=`MEDIA_UPLOAD_FAILED_${xhr.status}`
+      try{
+        const parsed=JSON.parse(xhr.responseText||'{}')
+        message=String(parsed?.message||parsed?.error||parsed?.code||message)
+      }catch{}
+      reject(new Error(message))
+    }
+    xhr.send(file)
   })
-  if(uploadError&&!alreadyExists(uploadError))throw uploadError
+
   await verifyObject(path)
   emit(entry,file.size,file.size)
   return{data:{path},error:null}
@@ -76,8 +90,7 @@ async function resumableUpload(path:string,file:Blob,options:UploadOptions,entry
       retryDelays:[0,1000,3000,5000,10000,20000],
       headers:{
         authorization:`Bearer ${accessToken}`,
-        apikey:SUPABASE_PUBLISHABLE_KEY,
-        'x-upsert':'false'
+        apikey:SUPABASE_PUBLISHABLE_KEY
       },
       uploadDataDuringCreation:true,
       removeFingerprintOnSuccess:true,
@@ -92,24 +105,10 @@ async function resumableUpload(path:string,file:Blob,options:UploadOptions,entry
       onError:error=>finish(reject,error),
       onSuccess:()=>finish(resolve,{data:{path},error:null})
     })
-    // Do not reuse a previous TUS resource for a new UUID path. Camera captures often
-    // share the same browser filename and stale resume fingerprints can point at a
-    // different object. Retries inside this upload remain enabled.
+    // Every media item gets a fresh UUID path. Do not resume a previous browser
+    // fingerprint because camera captures often reuse the same local filename.
     upload.start()
   })
-}
-
-async function standardUpload(path:string,file:Blob,options:UploadOptions,entry:ActiveUpload):Promise<UploadResult>{
-  emit(entry,0,file.size)
-  const {error}=await supabase.storage.from(MEDIA_BUCKET).upload(path,file,{
-    contentType:options.contentType||file.type||'application/octet-stream',
-    cacheControl:options.cacheControl||'31536000',
-    upsert:false
-  })
-  if(error&&!alreadyExists(error))throw error
-  await verifyObject(path)
-  emit(entry,file.size,file.size)
-  return{data:{path},error:null}
 }
 
 export function uploadPrivateMedia(path:string,file:Blob,options:UploadOptions={}):Promise<UploadResult>{
@@ -123,15 +122,15 @@ export function uploadPrivateMedia(path:string,file:Blob,options:UploadOptions={
   if(options.onProgress)entry.listeners.add(options.onProgress)
   entry.promise=(async()=>{
     try{
-      if(file.size<=RESUMABLE_THRESHOLD)return await standardUpload(path,file,options,entry)
+      if(file.size<=RESUMABLE_THRESHOLD)return await rawBinaryUpload(path,file,options,entry)
       try{
         const result=await resumableUpload(path,file,options,entry)
         await verifyObject(path)
         emit(entry,file.size,file.size)
         return result
       }catch(tusError){
-        console.warn('Resumable media upload did not persist; using Supabase signed upload fallback.',tusError)
-        return await signedSdkUpload(path,file,options,entry)
+        console.warn('Resumable media upload failed; using raw binary fallback.',tusError)
+        return await rawBinaryUpload(path,file,options,entry)
       }
     }finally{
       activeUploads.delete(path)
