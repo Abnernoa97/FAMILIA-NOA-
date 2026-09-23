@@ -80,57 +80,68 @@
 }
 
 .pres-challenge{
-  border-radius:23px!important;
-  padding:18px 18px 16px!important;
-  margin-bottom:12px!important;
+  display:grid!important;
+  grid-template-columns:minmax(0,1fr) auto!important;
+  align-items:center!important;
+  column-gap:9px!important;
+  border-radius:20px!important;
+  padding:14px 15px 13px!important;
+  margin-bottom:0!important;
 }
 .pres-challenge .eyebrow{
-  margin:0 0 8px!important;
-  font-size:9px!important;
+  grid-column:1/-1;
+  margin:0 0 6px!important;
+  font-size:8px!important;
+  line-height:1.1!important;
   font-weight:700!important;
   letter-spacing:.09em!important;
-  color:#a9a49c!important;
+  color:#9f9a92!important;
 }
 .pres-challenge h2{
-  margin:0 0 8px!important;
-  max-width:520px;
-  font-size:26px!important;
-  line-height:1.08!important;
+  grid-column:1/-1;
+  margin:0 0 6px!important;
+  max-width:500px;
+  font-size:22px!important;
+  line-height:1.02!important;
   font-weight:500!important;
 }
 .pres-challenge>p:not(.eyebrow){
-  margin:0 0 14px!important;
+  grid-column:1/-1;
+  margin:0 0 10px!important;
   max-width:500px;
-  font-size:12px!important;
-  line-height:1.45!important;
-  color:#c7c2bb!important;
+  font-size:10.5px!important;
+  line-height:1.32!important;
+  color:#bbb6af!important;
 }
 .pres-challenge-meta{
-  gap:5px!important;
-  margin-bottom:11px!important;
+  grid-column:1/2;
+  gap:4px!important;
+  margin:0!important;
+  align-items:center!important;
 }
 .pres-chip{
   min-height:0!important;
-  padding:4px 7px!important;
+  padding:4px 6px!important;
   gap:2px!important;
   border-radius:999px!important;
-  font-size:8.5px!important;
-  line-height:1.15!important;
-  font-weight:550!important;
-  letter-spacing:.01em!important;
-  color:#c8c3bc!important;
-  background:rgba(255,255,255,.06)!important;
+  font-size:8px!important;
+  line-height:1.1!important;
+  font-weight:520!important;
+  letter-spacing:.005em!important;
+  color:#b9b4ad!important;
+  background:rgba(255,255,255,.055)!important;
 }
 .pres-main{
+  grid-column:2/3;
   width:auto!important;
-  min-width:136px!important;
-  min-height:39px!important;
-  height:39px!important;
-  padding:0 16px!important;
+  min-width:118px!important;
+  min-height:34px!important;
+  height:34px!important;
+  padding:0 13px!important;
   border-radius:999px!important;
-  font-size:10px!important;
+  font-size:9.5px!important;
   font-weight:700!important;
-  letter-spacing:.015em!important;
+  letter-spacing:.01em!important;
   display:inline-flex!important;
   align-items:center!important;
   justify-content:center!important;
@@ -141,15 +152,18 @@
 }
 .pres-reminder{
   display:block!important;
-  width:auto!important;
-  margin:14px 0 0!important;
+  width:max-content!important;
+  max-width:100%!important;
+  margin:8px 4px 13px!important;
   padding:0!important;
-  color:#8f8a82!important;
-  opacity:.82!important;
-  font-size:8.5px!important;
+  border:0!important;
+  background:transparent!important;
+  color:#9c968e!important;
+  opacity:.74!important;
+  font-size:8px!important;
   line-height:1.2!important;
-  font-weight:550!important;
-  letter-spacing:.015em!important;
+  font-weight:500!important;
+  letter-spacing:.01em!important;
   text-decoration:none!important;
 }
 
@@ -203,10 +217,14 @@
   .presume-screen{padding-left:12px!important;padding-right:12px!important}
   .presume-head{padding-bottom:6px!important}
   .pres-stories{gap:13px!important;padding-bottom:14px!important}
-  .pres-challenge{padding:17px 16px 15px!important;border-radius:22px!important}
-  .pres-challenge h2{font-size:25px!important}
+  .pres-challenge{padding:13px 14px 12px!important;border-radius:19px!important}
+  .pres-challenge h2{font-size:22px!important}
+  .pres-main{min-width:112px!important;padding:0 12px!important}
 }
 @media(max-width:360px){
+  .pres-challenge{column-gap:6px!important}
+  .pres-chip{padding:3px 5px!important;font-size:7.5px!important}
+  .pres-main{min-width:104px!important;padding:0 10px!important;font-size:9px!important}
   .pres-compose{gap:5px!important}
   .pres-compose button{padding:0 6px!important;font-size:9px!important}
 }
