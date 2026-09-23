@@ -41,7 +41,7 @@ const loadProfile = async () => {
 }
 
 const loadAssistant = async () => {
-  if (assistantLoaded || !profileLoaded || !document.querySelector('.shell')) return
+  if (assistantLoaded || !document.querySelector('.shell')) return
   try {
     await import('./profile-assistant')
     assistantLoaded = true
@@ -120,7 +120,7 @@ let observer: MutationObserver | null = null
 function scan() {
   void loadBiometric()
   void loadPresence()
-  void loadProfile().then(()=>void loadAssistant())
+  void loadProfile()
   void loadAssistant()
   void loadPresume()
   void loadAlbums()
