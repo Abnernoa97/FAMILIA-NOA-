@@ -1,6 +1,7 @@
 let biometricLoaded = false
 let profileLoaded = false
 let presumeLoaded = false
+let presumeLoading = false
 let albumsLoaded = false
 let locationLoaded = false
 
@@ -27,13 +28,34 @@ const loadProfile = async () => {
 }
 
 const loadPresume = async () => {
-  if (presumeLoaded || !document.querySelector('.shell')) return
+  if (presumeLoaded || presumeLoading || !document.querySelector('.shell')) return
+  presumeLoading = true
+
+  const NativeMutationObserver = window.MutationObserver
+  class PresumeSafeMutationObserver extends NativeMutationObserver {
+    constructor(callback: MutationCallback) {
+      super((mutations, observer) => {
+        const hasMeaningfulMutation = mutations.some(mutation => {
+          const target = mutation.target instanceof Element
+            ? mutation.target
+            : mutation.target.parentElement
+          return !target?.closest?.('#ok')
+        })
+        if (hasMeaningfulMutation) callback(mutations, observer)
+      })
+    }
+  }
+
   try {
+    ;(window as any).MutationObserver = PresumeSafeMutationObserver
     await import('./presume-enhancer')
     presumeLoaded = true
   } catch (error) {
     presumeLoaded = false
     console.error('PRESUME enhancer failed to load', error)
+  } finally {
+    ;(window as any).MutationObserver = NativeMutationObserver
+    presumeLoading = false
   }
 }
 
