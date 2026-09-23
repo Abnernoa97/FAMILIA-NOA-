@@ -1,4 +1,4 @@
-const CACHE = 'familia-noa-v31';
+const CACHE = 'familia-noa-v32';
 const BASE = new URL(self.registration.scope).pathname;
 const STATIC = [
   BASE,
@@ -29,6 +29,55 @@ self.addEventListener('activate', event => {
         .map(key => caches.delete(key))
     );
     await self.clients.claim();
+  })());
+});
+
+self.addEventListener('push', event => {
+  event.waitUntil((async () => {
+    let payload = {};
+    try { payload = event.data?.json?.() || {}; }
+    catch {
+      try { payload = JSON.parse(event.data?.text?.() || '{}'); }
+      catch { payload = {}; }
+    }
+
+    const title = payload.title || 'FAMILIA NOA';
+    const body = payload.message || payload.body || 'Tienes una nueva actualización.';
+    const tag = payload.tag || 'familia-noa';
+
+    await self.registration.showNotification(title, {
+      body,
+      tag,
+      renotify: true,
+      icon: BASE + 'icons/icon-192.svg',
+      badge: BASE + 'icons/icon-192.svg',
+      vibrate: [180, 80, 180],
+      data: payload
+    });
+  })());
+});
+
+self.addEventListener('notificationclick', event => {
+  event.notification.close();
+  const payload = event.notification.data || {};
+  const targetUrl = new URL(payload.url || '?presume=camera', self.registration.scope).href;
+
+  event.waitUntil((async () => {
+    const windows = await self.clients.matchAll({ type:'window', includeUncontrolled:true });
+    const existing = windows.find(client => {
+      try { return new URL(client.url).origin === self.location.origin; }
+      catch { return false; }
+    });
+
+    if (existing) {
+      await existing.focus();
+      if (payload.type === 'presume') {
+        existing.postMessage({ type:'PRESUME_OPEN_CAMERA', slot:payload.slot || 'morning' });
+      }
+      return;
+    }
+
+    await self.clients.openWindow(targetUrl);
   })());
 });
 
