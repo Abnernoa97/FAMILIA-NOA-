@@ -1,4 +1,4 @@
-const CACHE = 'familia-noa-v14';
+const CACHE = 'familia-noa-v15';
 const BASE = new URL(self.registration.scope).pathname;
 const STATIC = [
   BASE,
@@ -37,8 +37,6 @@ self.addEventListener('fetch', event => {
 
   const url = new URL(event.request.url);
 
-  // Supabase and any other external API must go directly to the network.
-  // The worker only manages files served by the current app host.
   if (url.origin !== self.location.origin) return;
 
   const isNavigation = event.request.mode === 'navigate';
