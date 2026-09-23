@@ -1,9 +1,9 @@
 import { supabase } from './supabase'
 import { mediaUrl, primeMedia, signMedia, forgetMedia } from './core/private-media'
 import { getIdentity } from './core/identity'
+import { optimizeAvatar } from './core/media-pipeline'
 
 const BUCKET='family-photos'
-let profileRealtime: ReturnType<typeof supabase.channel> | null = null
 const css=`
 .profile-menu{position:fixed;inset:0;z-index:1000;background:rgba(0,0,0,.48);display:flex;justify-content:flex-end}
 .profile-drawer{width:min(92vw,430px);height:100%;background:var(--surface,#fff);color:var(--ink,#171716);padding:28px 22px calc(28px + env(safe-area-inset-bottom));overflow:auto;box-shadow:-20px 0 60px rgba(0,0,0,.18)}
@@ -13,15 +13,35 @@ const css=`
 
 function inject(){if(document.querySelector('#profile-css'))return;const s=document.createElement('style');s.id='profile-css';s.textContent=css;document.head.appendChild(s)}
 function current(){return getIdentity()}
-function esc(v:string){return v.replace(/[&<>\\\"']/g,c=>({'&':'&amp;','<':'&lt;','>':'&gt;','\\\"':'&quot;',"'":'&#039;'}[c]!))}
+function memberIdOf(value:any){return String(value?.memberId||value?.id||'')}
+function esc(v:string){return v.replace(/[&<>"']/g,c=>({'&':'&amp;','<':'&lt;','>':'&gt;','"':'&quot;',"'":'&#039;'}[c]||c))}
 function avatarUrl(path:string|null){return mediaUrl(path)}
 async function getProfile(id:string){if(!id)return null;const {data}=await supabase.from('family_profiles').select('member_id,avatar_path,bio,theme,updated_at,cover_path').eq('member_id',id).maybeSingle();const profile=data||{member_id:id,avatar_path:null,bio:'',theme:'light',cover_path:null};await primeMedia([profile.avatar_path,profile.cover_path]);return profile}
 function applyTheme(theme:string){const t=theme==='dark'?'dark':'light';document.documentElement.classList.toggle('dark-mode',t==='dark');document.documentElement.classList.toggle('light-mode',t==='light');localStorage.setItem('familia-noa-theme',t)}
 function setBusy(button:HTMLButtonElement,busy:boolean,text:string){button.disabled=busy;button.textContent=text}
 
-async function saveProfile(p:any,bio:string,theme:string){const {error}=await supabase.from('family_profiles').upsert({member_id:p.id,bio:bio.slice(0,280),theme,updated_at:new Date().toISOString()});if(error)throw error;applyTheme(theme)}
-async function uploadAvatar(p:any,file:File){if(!file.type.startsWith('image/'))throw new Error('Selecciona una imagen.');if(file.size>8*1024*1024)throw new Error('La foto debe pesar menos de 8 MB.');const {data:previous}=await supabase.from('family_profiles').select('avatar_path').eq('member_id',p.id).maybeSingle();const path=`profile-avatars/${p.id}-${Date.now()}.jpg`;const {error}=await supabase.storage.from(BUCKET).upload(path,file,{contentType:file.type||'image/jpeg',upsert:false});if(error)throw error;const {data:old}=await supabase.from('family_profiles').select('bio,theme,cover_path').eq('member_id',p.id).maybeSingle();const {error:dbError}=await supabase.from('family_profiles').upsert({member_id:p.id,avatar_path:path,bio:old?.bio||'',theme:old?.theme||'light',cover_path:old?.cover_path||null,updated_at:new Date().toISOString()});if(dbError)throw dbError;if(previous?.avatar_path&&previous.avatar_path!==path){await supabase.storage.from(BUCKET).remove([previous.avatar_path]);forgetMedia(previous.avatar_path)}await signMedia(path);return path}
-async function uploadCover(p:any,file:File){if(!file.type.startsWith('image/'))throw new Error('Selecciona una imagen.');if(file.size>10*1024*1024)throw new Error('La portada debe pesar menos de 10 MB.');const {data:previous}=await supabase.from('family_profiles').select('cover_path').eq('member_id',p.id).maybeSingle();const path=`profile-covers/${p.id}-${Date.now()}.jpg`;const {error}=await supabase.storage.from(BUCKET).upload(path,file,{contentType:file.type||'image/jpeg',upsert:false});if(error)throw error;const {data:old}=await supabase.from('family_profiles').select('avatar_path,bio,theme').eq('member_id',p.id).maybeSingle();const {error:dbError}=await supabase.from('family_profiles').upsert({member_id:p.id,avatar_path:old?.avatar_path||null,bio:old?.bio||'',theme:old?.theme||'light',cover_path:path,updated_at:new Date().toISOString()});if(dbError)throw dbError;if(previous?.cover_path&&previous.cover_path!==path){await supabase.storage.from(BUCKET).remove([previous.cover_path]);forgetMedia(previous.cover_path)}await signMedia(path);return path}
+async function saveProfile(p:any,bio:string,theme:string){const id=memberIdOf(p);if(!id)throw new Error('No se pudo identificar tu perfil.');const {error}=await supabase.from('family_profiles').upsert({member_id:id,bio:bio.slice(0,280),theme,updated_at:new Date().toISOString()});if(error)throw error;applyTheme(theme)}
+
+async function uploadAvatar(p:any,file:File){
+  if(!file.type.startsWith('image/'))throw new Error('Selecciona una imagen.')
+  if(file.size>8*1024*1024)throw new Error('La foto debe pesar menos de 8 MB.')
+  const id=memberIdOf(p)
+  if(!id)throw new Error('No se pudo identificar tu perfil.')
+  let prepared
+  try{prepared=await optimizeAvatar(file,256,.78)}catch{throw new Error('No se pudo optimizar esta foto. Prueba con JPG, PNG o WebP.')}
+  const {data:previous}=await supabase.from('family_profiles').select('avatar_path').eq('member_id',id).maybeSingle()
+  const path=`profile-avatars/${id}-${Date.now()}.jpg`
+  const {error}=await supabase.storage.from(BUCKET).upload(path,prepared.blob,{contentType:prepared.type,cacheControl:'31536000',upsert:false})
+  if(error)throw error
+  const {data:old}=await supabase.from('family_profiles').select('bio,theme,cover_path').eq('member_id',id).maybeSingle()
+  const {error:dbError}=await supabase.from('family_profiles').upsert({member_id:id,avatar_path:path,bio:old?.bio||'',theme:old?.theme||'light',cover_path:old?.cover_path||null,updated_at:new Date().toISOString()})
+  if(dbError){await supabase.storage.from(BUCKET).remove([path]);forgetMedia(path);throw dbError}
+  if(previous?.avatar_path&&previous.avatar_path!==path){await supabase.storage.from(BUCKET).remove([previous.avatar_path]);forgetMedia(previous.avatar_path)}
+  await signMedia(path)
+  return path
+}
+
+async function uploadCover(p:any,file:File){if(!file.type.startsWith('image/'))throw new Error('Selecciona una imagen.');if(file.size>10*1024*1024)throw new Error('La portada debe pesar menos de 10 MB.');const id=memberIdOf(p);if(!id)throw new Error('No se pudo identificar tu perfil.');const {data:previous}=await supabase.from('family_profiles').select('cover_path').eq('member_id',id).maybeSingle();const path=`profile-covers/${id}-${Date.now()}.jpg`;const {error}=await supabase.storage.from(BUCKET).upload(path,file,{contentType:file.type||'image/jpeg',upsert:false});if(error)throw error;const {data:old}=await supabase.from('family_profiles').select('avatar_path,bio,theme').eq('member_id',id).maybeSingle();const {error:dbError}=await supabase.from('family_profiles').upsert({member_id:id,avatar_path:old?.avatar_path||null,bio:old?.bio||'',theme:old?.theme||'light',cover_path:path,updated_at:new Date().toISOString()});if(dbError){await supabase.storage.from(BUCKET).remove([path]);throw dbError}if(previous?.cover_path&&previous.cover_path!==path){await supabase.storage.from(BUCKET).remove([previous.cover_path]);forgetMedia(previous.cover_path)}await signMedia(path);return path}
 
 function updateHomeAvatar(path:string|null){const button=document.querySelector<HTMLButtonElement>('#change');if(!button)return;const url=avatarUrl(path);button.innerHTML=url?`<img src="${url}" alt="Foto de perfil">`:esc(current()?.name?.charAt(0)||'F')}
 
@@ -33,7 +53,7 @@ async function openSettings(){const p=current();if(!p||document.querySelector('.
   overlay.querySelector('#darkTheme')!.addEventListener('click',()=>{theme='dark';applyTheme(theme);overlay.querySelector('#darkTheme')!.classList.add('active');overlay.querySelector('#lightTheme')!.classList.remove('active')})
   overlay.querySelector('#coverButton')!.addEventListener('click',()=>overlay.querySelector<HTMLInputElement>('#coverFile')!.click())
   overlay.querySelector('#coverFile')!.addEventListener('change',async e=>{const file=(e.target as HTMLInputElement).files?.[0];if(!file)return;const button=overlay.querySelector<HTMLButtonElement>('#coverButton')!;setBusy(button,true,'Subiendo…');try{const path=await uploadCover(p,file);const url=avatarUrl(path);const preview=overlay.querySelector<HTMLElement>('#coverPreview')!;preview.style.backgroundImage=`url('${url}')`;button.textContent='Cambiar portada'}catch(err){alert(err instanceof Error?err.message:'No se pudo subir la portada.');button.textContent=cover?'Cambiar portada':'Agregar portada'}finally{button.disabled=false}})
-  overlay.querySelector('#avatarFile')!.addEventListener('change',async e=>{const file=(e.target as HTMLInputElement).files?.[0];if(!file)return;const button=overlay.querySelector<HTMLButtonElement>('#saveProfile')!;setBusy(button,true,'Subiendo foto…');try{const path=await uploadAvatar(p,file);const img=overlay.querySelector<HTMLImageElement>('#myAvatar')!;img.src=avatarUrl(path);img.style.display='block';(overlay.querySelector('#avatarFallback') as HTMLElement).style.display='none';updateHomeAvatar(path)}catch(err){alert(err instanceof Error?err.message:'No se pudo subir la foto.')}finally{setBusy(button,false,'Guardar perfil')}})
+  overlay.querySelector('#avatarFile')!.addEventListener('change',async e=>{const file=(e.target as HTMLInputElement).files?.[0];if(!file)return;const button=overlay.querySelector<HTMLButtonElement>('#saveProfile')!;setBusy(button,true,'Preparando foto…');try{const path=await uploadAvatar(p,file);const img=overlay.querySelector<HTMLImageElement>('#myAvatar')!;img.src=avatarUrl(path);img.style.display='block';(overlay.querySelector('#avatarFallback') as HTMLElement).style.display='none';updateHomeAvatar(path)}catch(err){alert(err instanceof Error?err.message:'No se pudo subir la foto.')}finally{setBusy(button,false,'Guardar perfil')}})
   overlay.querySelector('#saveProfile')!.addEventListener('click',async()=>{const button=overlay.querySelector<HTMLButtonElement>('#saveProfile')!;if(button.disabled)return;setBusy(button,true,'Guardando…');try{const bio=(overlay.querySelector<HTMLTextAreaElement>('#bio')!).value;await saveProfile(p,bio,theme);overlay.querySelector('#bioPreview')!.textContent=bio;alert('Perfil guardado.')}catch(err){alert(err instanceof Error?err.message:'No se pudo guardar el perfil.')}finally{setBusy(button,false,'Guardar perfil')}})
   await renderProfileList(overlay.querySelector('#profileList')!)
 }
