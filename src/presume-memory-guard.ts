@@ -42,7 +42,7 @@ function restoreMedia(){
   }
 
   if(document.hidden)return
-  if(document.querySelector('.pres-modal')){
+  if(document.querySelector('.pres-modal,.pres-live-camera')){
     clearRestoreTimer()
     restoreTimer=window.setTimeout(restoreMedia,250)
     return
@@ -75,6 +75,8 @@ document.addEventListener('change',event=>{
   if(target?.matches('[data-camera-input],[data-video-input]'))scheduleRestore()
 },true)
 
+document.addEventListener('presume:capture-start',unloadMedia)
+document.addEventListener('presume:capture-end',scheduleRestore)
 window.addEventListener('focus',scheduleRestore)
 document.addEventListener('visibilitychange',()=>{if(!document.hidden)scheduleRestore()})
 
