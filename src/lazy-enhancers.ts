@@ -49,6 +49,7 @@ const loadPresume = async () => {
   try {
     ;(window as any).MutationObserver = PresumeSafeMutationObserver
     await import('./presume-enhancer')
+    await import('./presume-management')
     presumeLoaded = true
   } catch (error) {
     presumeLoaded = false
