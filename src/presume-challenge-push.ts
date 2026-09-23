@@ -84,9 +84,11 @@ async function ensurePushSubscription(interactive:boolean){
 
 function syncReminderUi(){
   const enabled=localStorage.getItem(PUSH_KEY)==='1'&&typeof Notification!=='undefined'&&Notification.permission==='granted'
+  const label=enabled?'Recordatorios activados':'Activar recordatorios'
+  const state=enabled?'1':'0'
   document.querySelectorAll<HTMLButtonElement>('.presume-screen [data-reminders]').forEach(button=>{
-    button.textContent=enabled?'Recordatorios activados':'Activar recordatorios'
-    button.dataset.realPush=enabled?'1':'0'
+    if(button.textContent!==label)button.textContent=label
+    if(button.dataset.realPush!==state)button.dataset.realPush=state
   })
 }
 
