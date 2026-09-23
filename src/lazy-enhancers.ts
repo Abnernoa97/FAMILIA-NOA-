@@ -92,6 +92,7 @@ const loadAlbums = async () => {
   if (albumsLoaded || !document.querySelector('.photo-page')) return
   try {
     await import('./albums-enhancer')
+    await import('./album-sections')
     albumsLoaded = true
     const root = document.querySelector<HTMLElement>('[data-photo-page]')
     if (root && !root.classList.contains('albums-page')) {
