@@ -1,5 +1,7 @@
 let biometricLoaded = false
 let profileLoaded = false
+let assistantLoaded = false
+let presenceLoaded = false
 let presumeLoaded = false
 let presumeLoading = false
 let albumsLoaded = false
@@ -16,6 +18,17 @@ const loadBiometric = async () => {
   }
 }
 
+const loadPresence = async () => {
+  if (presenceLoaded || !document.querySelector('.shell')) return
+  try {
+    await import('./presence-enhancer')
+    presenceLoaded = true
+  } catch (error) {
+    presenceLoaded = false
+    console.error('Presence enhancer failed to load', error)
+  }
+}
+
 const loadProfile = async () => {
   if (profileLoaded || !document.querySelector('.shell')) return
   try {
@@ -24,6 +37,17 @@ const loadProfile = async () => {
   } catch (error) {
     profileLoaded = false
     console.error('Profile enhancer failed to load', error)
+  }
+}
+
+const loadAssistant = async () => {
+  if (assistantLoaded || !profileLoaded || !document.querySelector('.shell')) return
+  try {
+    await import('./profile-assistant')
+    assistantLoaded = true
+  } catch (error) {
+    assistantLoaded = false
+    console.error('NOA assistant failed to load', error)
   }
 }
 
@@ -95,11 +119,13 @@ let observer: MutationObserver | null = null
 
 function scan() {
   void loadBiometric()
-  void loadProfile()
+  void loadPresence()
+  void loadProfile().then(()=>void loadAssistant())
+  void loadAssistant()
   void loadPresume()
   void loadAlbums()
   void loadLocation()
-  if (biometricLoaded && profileLoaded && presumeLoaded && albumsLoaded && locationLoaded) {
+  if (biometricLoaded && profileLoaded && assistantLoaded && presenceLoaded && presumeLoaded && albumsLoaded && locationLoaded) {
     observer?.disconnect()
     observer = null
   }
