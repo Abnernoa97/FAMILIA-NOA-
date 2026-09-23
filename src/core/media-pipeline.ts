@@ -38,6 +38,35 @@ async function decode(file:File):Promise<{source:CanvasImageSource;width:number;
   return{source:image,width:image.naturalWidth,height:image.naturalHeight,dispose:()=>URL.revokeObjectURL(url)}
 }
 
+export async function optimizeAvatar(file:File,maxSide=256,quality=.78):Promise<OptimizedPhoto>{
+  if(file.type==='image/gif')throw new Error('GIF_NOT_SUPPORTED')
+  try{
+    const decoded=await decode(file)
+    const crop=Math.min(decoded.width,decoded.height)
+    const side=Math.max(1,Math.min(maxSide,crop))
+    const sx=Math.max(0,(decoded.width-crop)/2)
+    const sy=Math.max(0,(decoded.height-crop)/2)
+    const canvas=document.createElement('canvas')
+    canvas.width=side
+    canvas.height=side
+    const ctx=canvas.getContext('2d',{alpha:false})
+    if(!ctx){decoded.dispose();throw new Error('Canvas unavailable')}
+    ctx.fillStyle='#fff'
+    ctx.fillRect(0,0,side,side)
+    ctx.drawImage(decoded.source,sx,sy,crop,crop,0,0,side,side)
+    decoded.dispose()
+    const blob=await new Promise<Blob>((resolve,reject)=>canvas.toBlob(value=>value?resolve(value):reject(new Error('Compression failed')),'image/jpeg',quality))
+    const base=file.name.replace(/\.[^.]+$/,'')||'avatar'
+    return{blob,type:'image/jpeg',name:`${base}.jpg`,ext:'jpg',width:side,height:side}
+  }catch(error){
+    if((file.type==='image/jpeg'||file.type==='image/webp')&&file.size<=350*1024){
+      const ext=file.type==='image/webp'?'webp':'jpg'
+      return{blob:file,type:file.type,name:file.name||`avatar.${ext}`,ext,width:0,height:0}
+    }
+    throw error
+  }
+}
+
 export async function optimizePhoto(file:File,maxSide=1200,quality=.78):Promise<OptimizedPhoto>{
   if(file.type==='image/gif')throw new Error('GIF_NOT_SUPPORTED')
 
