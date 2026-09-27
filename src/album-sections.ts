@@ -29,7 +29,7 @@ let mountedRoot:HTMLElement|null=null
 let channel:ReturnType<typeof supabase.channel>|null=null
 let refreshTimer:number|null=null
 
-const esc=(value:string)=>String(value||'').replace(/[&<>"']/g,char=>({'&':'&amp;','<':'&lt;','>':'&gt;','"':'&quot;',"'":'&#039;'}[char]||char))
+const esc=(value:string)=>String(value||'').replace(/[&<>"']/g,char=>({'&':'&amp;','<':'&lt;','>':'&gt;','"':'&quot',"'":'&#039;'}[char]||char))
 const fmtDay=(value:string)=>new Date(value).toLocaleDateString('es-MX',{day:'numeric',month:'long',year:'numeric'})
 const fmtTime=(value:string)=>new Date(value).toLocaleTimeString('es-MX',{hour:'2-digit',minute:'2-digit'})
 
@@ -127,6 +127,7 @@ async function loadChat(memberId:string){
   const {data,error}=await supabase.from('messages')
     .select('id,sender_id,created_at,attachment_path,attachment_type')
     .eq('sender_id',memberId)
+    .is('deleted_at',null)
     .not('attachment_path','is',null)
     .order('created_at',{ascending:false})
     .limit(CHAT_LIMIT)
