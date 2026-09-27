@@ -107,6 +107,7 @@ async function openFromPush(slot:Slot){
   if(!document.querySelector('.presume-screen'))document.querySelector<HTMLButtonElement>('#ok')?.click()
   const root=await waitForPresume()
   if(!root||await challengeCompleted(slot))return
+  document.dispatchEvent(new CustomEvent('presume:capture-start'))
   document.dispatchEvent(new CustomEvent('presume:open-challenge-camera',{detail:{slot}}))
 }
 
