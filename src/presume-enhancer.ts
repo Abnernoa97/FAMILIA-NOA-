@@ -6,13 +6,14 @@ import { uploadPrivateMedia } from './core/resumable-storage'
 
 const BUCKET='family-photos'
 const VIEW_KEY='familiaNoaView'
-const REMINDER_KEY='familia-noa-presume-reminders'
 const REACTIONS=['❤️','😂','🥹','🔥','👏'] as const
 const STORY_MS=6000
 
+type Slot='morning'|'afternoon'
+type CaptureMode='challenge'|'free'
 type Member={id:string;name:string}
 type Profile={member_id:string;avatar_path:string|null}
-type Post={id:string;member_id:string;media_type:'image'|'video'|'text'|'audio';media_path:string|null;body:string;prompt_slot:'morning'|'afternoon'|null;prompt_date:string|null;expires_at:string;created_at:string}
+type Post={id:string;member_id:string;media_type:'image'|'video'|'text'|'audio';media_path:string|null;body:string;is_prompt_response:boolean;prompt_slot:Slot|null;prompt_date:string|null;expires_at:string;created_at:string}
 type Reaction={post_id:string;member_id:string;emoji:string}
 type Comment={id:string;post_id:string;member_id:string;body:string;voice_path:string|null;created_at:string}
 type SocialData={members:Member[];profiles:Map<string,Profile>;posts:Post[];reactions:Reaction[];comments:Comment[];memories:Post[]}
@@ -21,10 +22,10 @@ let overlay:HTMLElement|null=null
 let storyOverlay:HTMLElement|null=null
 let channel:ReturnType<typeof supabase.channel>|null=null
 let reloadTimer:number|null=null
-let reminderTimer:number|null=null
-let reminderFollowups:number[]=[]
 let storyTimer:number|null=null
 let storyResumeVideo=false
+let pendingCapture:CaptureMode='free'
+let pendingChallengeSlot:Slot|null=null
 let data:SocialData={members:[],profiles:new Map(),posts:[],reactions:[],comments:[],memories:[]}
 
 const css=`
@@ -47,7 +48,7 @@ function profileFor(id:string){return data.profiles.get(id)}
 function memberFor(id:string){return data.members.find(member=>member.id===id)}
 function avatarFor(id:string){return mediaUrl(profileFor(id)?.avatar_path)||''}
 function localDateKey(date=new Date()){return `${date.getFullYear()}-${String(date.getMonth()+1).padStart(2,'0')}-${String(date.getDate()).padStart(2,'0')}`}
-function slotNow():'morning'|'afternoon'{return new Date().getHours()<14?'morning':'afternoon'}
+function slotNow():Slot{return new Date().getHours()<14?'morning':'afternoon'}
 function age(value:string){const ms=Date.now()-new Date(value).getTime();if(ms<60000)return'ahora';const m=Math.floor(ms/60000);if(m<60)return`hace ${m} min`;const h=Math.floor(m/60);if(h<24)return`hace ${h} h`;return`hace ${Math.floor(h/24)} d`}
 function promptText(slot=slotNow()){
   const morning=['Presume dónde amaneciste.','Primera foto del día. Sin preparar.','¿Qué tienes enfrente ahora mismo?','Enséñanos cómo empieza tu día.']
@@ -57,22 +58,23 @@ function promptText(slot=slotNow()){
 }
 function rawView(){return String(history.state?.[VIEW_KEY]||'home')}
 function pushView(view:string){if(rawView()===view)return;history.pushState({...(history.state||{}),[VIEW_KEY]:view},'',location.href)}
-function currentPending(){const me=identity()?.memberId;if(!me)return false;const day=localDateKey(),slot=slotNow();return !data.posts.some(post=>post.member_id===me&&post.prompt_date===day&&post.prompt_slot===slot)}
+function challengePosts(){return data.posts.filter(post=>post.is_prompt_response)}
+function currentPending(){const me=identity()?.memberId;if(!me)return false;const day=localDateKey(),slot=slotNow();return !challengePosts().some(post=>post.member_id===me&&post.prompt_date===day&&post.prompt_slot===slot)}
 function activePosts(){const now=Date.now();return data.posts.filter(post=>new Date(post.expires_at).getTime()>now)}
-function postDay(post:Post){return post.prompt_date||localDateKey(new Date(post.created_at))}
-function familyStreak(){const days=new Set(data.posts.map(post=>postDay(post)));let count=0;const cursor=new Date();for(let i=0;i<45;i++){const key=localDateKey(cursor);if(days.has(key)){count++;cursor.setDate(cursor.getDate()-1);continue}if(i===0){cursor.setDate(cursor.getDate()-1);continue}break}return count}
-function participationToday(){const today=localDateKey();return new Set(data.posts.filter(post=>postDay(post)===today).map(post=>post.member_id)).size}
+function familyStreak(){const days=new Set(challengePosts().map(post=>post.prompt_date).filter((day):day is string=>!!day));let count=0;const cursor=new Date();for(let i=0;i<45;i++){const key=localDateKey(cursor);if(days.has(key)){count++;cursor.setDate(cursor.getDate()-1);continue}if(i===0){cursor.setDate(cursor.getDate()-1);continue}break}return count}
+function participationToday(){const today=localDateKey();return new Set(challengePosts().filter(post=>post.prompt_date===today).map(post=>post.member_id)).size}
 function currentSlotLabel(){return slotNow()==='morning'?'MAÑANA':'TARDE'}
 
 async function loadData(){
-  const since=new Date(Date.now()-35*24*60*60*1000).toISOString()
+  const since=new Date(Date.now()-46*24*60*60*1000).toISOString()
   const lastYear=new Date();lastYear.setFullYear(lastYear.getFullYear()-1);lastYear.setHours(0,0,0,0)
   const memoryStart=new Date(lastYear),memoryEnd=new Date(lastYear);memoryEnd.setDate(memoryEnd.getDate()+1)
+  const fields='id,member_id,media_type,media_path,body,is_prompt_response,prompt_slot,prompt_date,expires_at,created_at'
   const [membersRes,profilesRes,postsRes,memRes]=await Promise.all([
     supabase.from('family_members').select('id,name').eq('active',true).order('created_at'),
     supabase.from('family_profiles').select('member_id,avatar_path'),
-    supabase.from('social_posts').select('id,member_id,media_type,media_path,body,prompt_slot,prompt_date,expires_at,created_at').gte('created_at',since).order('created_at',{ascending:false}),
-    supabase.from('social_posts').select('id,member_id,media_type,media_path,body,prompt_slot,prompt_date,expires_at,created_at').gte('created_at',memoryStart.toISOString()).lt('created_at',memoryEnd.toISOString()).order('created_at',{ascending:false}).limit(12)
+    supabase.from('social_posts').select(fields).gte('created_at',since).order('created_at',{ascending:false}),
+    supabase.from('social_posts').select(fields).gte('created_at',memoryStart.toISOString()).lt('created_at',memoryEnd.toISOString()).order('created_at',{ascending:false}).limit(12)
   ])
   if(membersRes.error)throw membersRes.error
   if(profilesRes.error)throw profilesRes.error
@@ -110,7 +112,7 @@ function reactionSummary(postId:string){const counts=new Map<string,number>();fo
 function commentMarkup(comment:Comment){const member=memberFor(comment.member_id),voice=mediaUrl(comment.voice_path);return `<div class="pres-comment">${avatarMarkup(comment.member_id,'pres-comment-avatar')}<div class="pres-comment-body"><b>${esc(member?.name||'Familia')}</b>${comment.body?`<p>${esc(comment.body)}</p>`:''}${voice?`<audio src="${esc(voice)}" controls preload="metadata"></audio>`:''}</div></div>`}
 function postMarkup(post:Post){
   const me=identity()?.memberId,member=memberFor(post.member_id),mine=me===post.member_id,myReaction=reactionsFor(post.id).find(r=>r.member_id===me)?.emoji,comments=commentsFor(post.id)
-  return `<article class="pres-post" data-post="${esc(post.id)}"><div class="pres-post-head">${avatarMarkup(post.member_id)}<div class="pres-post-who"><b>${esc(member?.name||'Familia')}${mine?' · tú':''}</b><span>${age(post.created_at)}</span></div>${post.prompt_slot?`<span class="pres-post-slot">${post.prompt_slot==='morning'?'mañana':'tarde'}</span>`:''}</div><div class="pres-post-media" data-react-target="${esc(post.id)}">${mediaMarkup(post)}</div>${post.body&&post.media_type!=='text'?`<div class="pres-caption">${esc(post.body)}</div>`:''}<div class="pres-actions"><button class="pres-action ${myReaction?'mine':''}" data-reactions="${esc(post.id)}">${myReaction||'♡'} Reaccionar</button><button class="pres-action" data-comments="${esc(post.id)}">💬 ${comments.length||'Responder'}</button></div>${reactionSummary(post.id)?`<div class="pres-reaction-summary">${reactionSummary(post.id)}</div>`:''}<div class="pres-reaction-bar" data-reaction-bar="${esc(post.id)}" hidden>${REACTIONS.map(e=>`<button data-react="${esc(post.id)}" data-emoji="${e}">${e}</button>`).join('')}</div><div class="pres-comments" data-comments-panel="${esc(post.id)}" hidden>${comments.map(commentMarkup).join('')}<form class="pres-comment-form" data-comment-form="${esc(post.id)}"><input maxlength="500" placeholder="Responder a la familia…"><button type="button" data-voice-comment="${esc(post.id)}" aria-label="Responder con voz">🎙</button><button type="submit" aria-label="Enviar">➤</button></form></div></article>`
+  return `<article class="pres-post" data-post="${esc(post.id)}"><div class="pres-post-head">${avatarMarkup(post.member_id)}<div class="pres-post-who"><b>${esc(member?.name||'Familia')}${mine?' · tú':''}</b><span>${age(post.created_at)}</span></div>${post.is_prompt_response&&post.prompt_slot?`<span class="pres-post-slot">${post.prompt_slot==='morning'?'mañana':'tarde'}</span>`:''}</div><div class="pres-post-media" data-react-target="${esc(post.id)}">${mediaMarkup(post)}</div>${post.body&&post.media_type!=='text'?`<div class="pres-caption">${esc(post.body)}</div>`:''}<div class="pres-actions"><button class="pres-action ${myReaction?'mine':''}" data-reactions="${esc(post.id)}">${myReaction||'♡'} Reaccionar</button><button class="pres-action" data-comments="${esc(post.id)}">💬 ${comments.length||'Responder'}</button></div>${reactionSummary(post.id)?`<div class="pres-reaction-summary">${reactionSummary(post.id)}</div>`:''}<div class="pres-reaction-bar" data-reaction-bar="${esc(post.id)}" hidden>${REACTIONS.map(e=>`<button data-react="${esc(post.id)}" data-emoji="${e}">${e}</button>`).join('')}</div><div class="pres-comments" data-comments-panel="${esc(post.id)}" hidden>${comments.map(commentMarkup).join('')}<form class="pres-comment-form" data-comment-form="${esc(post.id)}"><input maxlength="500" placeholder="Responder a la familia…"><button type="button" data-voice-comment="${esc(post.id)}" aria-label="Responder con voz">🎙</button><button type="submit" aria-label="Enviar">➤</button></form></div></article>`
 }
 function storiesMarkup(){
   const latest=new Map<string,Post>();activePosts().forEach(post=>{if(!latest.has(post.member_id))latest.set(post.member_id,post)})
@@ -126,8 +128,9 @@ function memoriesMarkup(){return data.memories.map(post=>`<div class="pres-memor
 function render(){
   if(!overlay)return
   const pending=currentPending(),participants=participationToday(),streak=familyStreak(),active=activePosts()
-  overlay.innerHTML=`<div class="presume-inner"><header class="presume-head"><button class="presume-back" aria-label="Volver">‹</button><div class="presume-brand"><b>PRESUME</b><span>FAMILIA NOA</span></div><div class="presume-head-spacer"></div></header><section class="pres-stories">${storiesMarkup()}</section><section class="pres-challenge"><p class="eyebrow">${currentSlotLabel()} · FOTO DEL MOMENTO</p><h2>${esc(promptText())}</h2><p>${pending?'Sin preparar demasiado. La familia quiere ver tu momento real.':'Ya presumiste este momento. Ahora mira qué está haciendo la familia.'}</p><div class="pres-challenge-meta"><span class="pres-chip">${participants} de ${data.members.length} pasaron por aquí hoy ♡</span>${streak?`<span class="pres-chip">${streak} día${streak===1?'':'s'} compartiendo</span>`:''}</div><button class="pres-main ${pending?'':'done'}" ${pending?'data-camera':'data-scroll-feed'}>${pending?'PRESUME AHORA 📸':'YA PRESUMISTE ✓ · MIRA A LA FAMILIA'}</button><button class="pres-reminder" data-reminders>${localStorage.getItem(REMINDER_KEY)==='1'?'Recordatorios activados':'Activar recordatorios suaves'}</button></section><div class="pres-compose"><button data-camera><i>📷</i>Foto</button><button data-video><i>🎥</i>Video</button><button data-text><i>✎</i>Texto</button><button data-voice><i>🎙</i>Voz</button></div>${data.memories.length?`<div class="pres-section-head"><h3>Recuerdos</h3><span>Hace 1 año</span></div><section class="pres-memory-strip">${memoriesMarkup()}</section>`:''}<div class="pres-section-head" data-feed-head><h3>Hoy en familia</h3><span>24 horas</span></div><section class="pres-feed">${active.length?active.map(postMarkup).join(''):'<div class="pres-empty">Todavía está tranquilo por aquí.<br>La primera foto cambia todo 📸</div>'}</section><input type="file" accept="image/*" capture="environment" data-camera-input hidden><input type="file" accept="video/*" capture="environment" data-video-input hidden></div>`
+  overlay.innerHTML=`<div class="presume-inner"><header class="presume-head"><button class="presume-back" aria-label="Volver">‹</button><div class="presume-brand"><b>PRESUME</b><span>FAMILIA NOA</span></div><div class="presume-head-spacer"></div></header><section class="pres-stories">${storiesMarkup()}</section><section class="pres-challenge"><p class="eyebrow">${currentSlotLabel()} · FOTO DEL MOMENTO</p><h2>${esc(promptText())}</h2><p>${pending?'Sin preparar demasiado. La familia quiere ver tu momento real.':'Ya presumiste este momento. Ahora mira qué está haciendo la familia.'}</p><div class="pres-challenge-meta"><span class="pres-chip">${participants} de ${data.members.length} pasaron por aquí hoy ♡</span>${streak?`<span class="pres-chip">${streak} día${streak===1?'':'s'} compartiendo</span>`:''}</div><button class="pres-main ${pending?'':'done'}" ${pending?'data-camera':'data-scroll-feed'}>${pending?'PRESUME AHORA 📸':'YA PRESUMISTE ✓ · MIRA A LA FAMILIA'}</button><button class="pres-reminder" data-reminders>Activar recordatorios</button></section><div class="pres-compose"><button data-camera><i>📷</i>Foto</button><button data-video><i>🎥</i>Video</button><button data-text><i>✎</i>Texto</button><button data-voice><i>🎙</i>Voz</button></div>${data.memories.length?`<div class="pres-section-head"><h3>Recuerdos</h3><span>Hace 1 año</span></div><section class="pres-memory-strip">${memoriesMarkup()}</section>`:''}<div class="pres-section-head" data-feed-head><h3>Hoy en familia</h3><span>24 horas</span></div><section class="pres-feed">${active.length?active.map(postMarkup).join(''):'<div class="pres-empty">Todavía está tranquilo por aquí.<br>La primera foto cambia todo 📸</div>'}</section><input type="file" accept="image/*" capture="environment" data-camera-input hidden><input type="file" accept="video/*" capture="environment" data-video-input hidden></div>`
   bind()
+  document.dispatchEvent(new CustomEvent('presume:rendered'))
 }
 
 async function open(push=true){
@@ -135,7 +138,7 @@ async function open(push=true){
   if(push)pushView('presume')
   overlay=document.createElement('main');overlay.className='presume-screen';document.body.appendChild(overlay)
   overlay.innerHTML='<div class="presume-inner"><div class="pres-empty" style="margin-top:30vh">Preparando PRESUME…</div></div>'
-  try{await loadData();render();startRealtime();if(currentPending())navigator.vibrate?.([80,50,80]);scheduleReminder()}
+  try{await loadData();render();startRealtime();if(currentPending())navigator.vibrate?.([80,50,80])}
   catch(error){console.error('PRESUME load failed',error);if(overlay)overlay.innerHTML='<div class="presume-inner"><div class="pres-empty" style="margin-top:30vh">No pudimos abrir PRESUME. Inténtalo otra vez.</div></div>'}
 }
 function close(){closeStory();overlay?.remove();overlay=null;channel?.unsubscribe();channel=null;if(reloadTimer){clearTimeout(reloadTimer);reloadTimer=null}}
@@ -145,37 +148,39 @@ function startRealtime(){channel?.unsubscribe();channel=supabase.channel('famili
 
 function cameraInput(){return overlay?.querySelector<HTMLInputElement>('[data-camera-input]')||null}
 function videoInput(){return overlay?.querySelector<HTMLInputElement>('[data-video-input]')||null}
-function reopenCapture(type:'image'|'video'){window.setTimeout(()=>{const input=type==='image'?cameraInput():videoInput();input?.click()},50)}
-function showPublishSheet(file:File,type:'image'|'video'){
+function reopenCapture(type:'image'|'video',mode:CaptureMode,slot:Slot|null){window.setTimeout(()=>{pendingCapture=mode;pendingChallengeSlot=slot;const input=type==='image'?cameraInput():videoInput();input?.click()},50)}
+function showPublishSheet(file:File,type:'image'|'video',mode:CaptureMode,challengeSlot:Slot|null=null){
   if(!overlay)return
   const url=URL.createObjectURL(file),modal=document.createElement('div');modal.className='pres-modal'
-  modal.innerHTML=`<div class="pres-sheet"><div class="pres-sheet-head"><b>${type==='image'?'¿La publicamos?':'¿Compartimos este video?'}</b><button class="pres-sheet-close" aria-label="Cerrar">×</button></div><div class="pres-preview">${type==='image'?`<img src="${url}" alt="Vista previa">`:`<video src="${url}" controls playsinline></video>`}</div><div class="pres-preview-actions"><button class="pres-retake">Repetir</button><button class="pres-publish">Publicar</button></div></div>`
+  modal.innerHTML=`<div class="pres-sheet"><div class="pres-sheet-head"><b>${mode==='challenge'?'Tu PRESUME':type==='image'?'¿La publicamos?':'¿Compartimos este video?'}</b><button class="pres-sheet-close" aria-label="Cerrar">×</button></div><div class="pres-preview">${type==='image'?`<img src="${url}" alt="Vista previa">`:`<video src="${url}" controls playsinline></video>`}</div><div class="pres-preview-actions"><button class="pres-retake">Repetir</button><button class="pres-publish">Publicar</button></div></div>`
   document.body.appendChild(modal)
   let cleaned=false
   const cleanup=()=>{if(cleaned)return;cleaned=true;URL.revokeObjectURL(url);modal.remove()}
   modal.querySelector('.pres-sheet-close')!.addEventListener('click',cleanup)
-  modal.querySelector<HTMLButtonElement>('.pres-retake')!.addEventListener('click',()=>{cleanup();reopenCapture(type)})
+  modal.querySelector<HTMLButtonElement>('.pres-retake')!.addEventListener('click',()=>{cleanup();reopenCapture(type,mode,challengeSlot)})
   modal.querySelector<HTMLButtonElement>('.pres-publish')!.addEventListener('click',async()=>{
     const publish=modal.querySelector<HTMLButtonElement>('.pres-publish')!,retake=modal.querySelector<HTMLButtonElement>('.pres-retake')!;publish.disabled=true;retake.disabled=true;publish.textContent='Publicando…'
-    try{await publishMedia(file,type,'');cleanup();await loadData();render();overlay?.querySelector('[data-feed-head]')?.scrollIntoView({behavior:'smooth',block:'start'})}
+    try{await publishMedia(file,type,'',mode,challengeSlot);cleanup();await loadData();render();overlay?.querySelector('[data-feed-head]')?.scrollIntoView({behavior:'smooth',block:'start'})}
     catch(error){console.error('PRESUME publish failed',error);publish.disabled=false;retake.disabled=false;publish.textContent=error instanceof Error?error.message:'No se pudo publicar'}
   })
 }
-async function publishMedia(file:File,type:'image'|'video',body:string){
+async function publishMedia(file:File,type:'image'|'video',body:string,mode:CaptureMode,challengeSlot:Slot|null){
   const me=identity()?.memberId;if(!me)throw new Error('Sesión no disponible')
+  if(mode==='challenge'&&type!=='image')throw new Error('El reto PRESUME requiere una foto')
   let blob:Blob,contentType:string,ext:string
   if(type==='image'){const prepared=await optimizePhoto(file,1600,.82);blob=prepared.blob;contentType=prepared.type;ext=prepared.ext}
   else{if(file.size>CHAT_VIDEO_MAX_BYTES)throw new Error(`Máximo ${mediaLimitMb(CHAT_VIDEO_MAX_BYTES)} MB`);const prepared=prepareVideo(file);blob=prepared.blob;contentType=prepared.type;ext=prepared.ext}
   const path=`social/${me}/posts/${crypto.randomUUID()}.${ext}`
   await uploadPrivateMedia(path,blob,{contentType,cacheControl:'31536000'})
-  const {error}=await supabase.from('social_posts').insert({member_id:me,media_type:type,media_path:path,body:body.slice(0,500),prompt_slot:slotNow(),prompt_date:localDateKey(),expires_at:new Date(Date.now()+24*60*60*1000).toISOString()})
-  if(error){await supabase.storage.from(BUCKET).remove([path]);forgetMedia(path);throw error}
+  const isChallenge=mode==='challenge',slot=challengeSlot||slotNow()
+  const {error}=await supabase.from('social_posts').insert({member_id:me,media_type:type,media_path:path,body:body.slice(0,500),is_prompt_response:isChallenge,prompt_slot:isChallenge?slot:null,prompt_date:isChallenge?localDateKey():null,expires_at:new Date(Date.now()+24*60*60*1000).toISOString()})
+  if(error){await supabase.storage.from(BUCKET).remove([path]);forgetMedia(path);if(error.code==='23505'&&isChallenge)throw new Error('Ya compartiste este momento');throw error}
   await signMedia(path)
 }
 function showTextSheet(){
   const modal=document.createElement('div');modal.className='pres-modal';modal.innerHTML='<div class="pres-sheet"><div class="pres-sheet-head"><b>Di algo ahora</b><button class="pres-sheet-close">×</button></div><textarea maxlength="500" style="min-height:180px" placeholder="¿Qué estás pensando? ¿Dónde estás? ¿Qué te hizo reír?"></textarea><button class="pres-publish" style="width:100%;margin-top:9px">Compartir</button></div>';document.body.appendChild(modal)
   modal.querySelector('.pres-sheet-close')!.addEventListener('click',()=>modal.remove())
-  modal.querySelector<HTMLButtonElement>('.pres-publish')!.addEventListener('click',async()=>{const button=modal.querySelector<HTMLButtonElement>('.pres-publish')!,body=modal.querySelector<HTMLTextAreaElement>('textarea')!.value.trim();if(!body)return;button.disabled=true;button.textContent='Compartiendo…';try{const me=identity()?.memberId;if(!me)throw new Error('Sesión no disponible');const {error}=await supabase.from('social_posts').insert({member_id:me,media_type:'text',body:body.slice(0,500),prompt_slot:slotNow(),prompt_date:localDateKey(),expires_at:new Date(Date.now()+24*60*60*1000).toISOString()});if(error)throw error;modal.remove();await loadData();render()}catch{button.disabled=false;button.textContent='No se pudo compartir'}})
+  modal.querySelector<HTMLButtonElement>('.pres-publish')!.addEventListener('click',async()=>{const button=modal.querySelector<HTMLButtonElement>('.pres-publish')!,body=modal.querySelector<HTMLTextAreaElement>('textarea')!.value.trim();if(!body)return;button.disabled=true;button.textContent='Compartiendo…';try{const me=identity()?.memberId;if(!me)throw new Error('Sesión no disponible');const {error}=await supabase.from('social_posts').insert({member_id:me,media_type:'text',body:body.slice(0,500),is_prompt_response:false,prompt_slot:null,prompt_date:null,expires_at:new Date(Date.now()+24*60*60*1000).toISOString()});if(error)throw error;modal.remove();await loadData();render()}catch{button.disabled=false;button.textContent='No se pudo compartir'}})
 }
 async function startVoicePost(){
   if(!navigator.mediaDevices?.getUserMedia||typeof MediaRecorder==='undefined'){alert('La grabación de voz no está disponible en este dispositivo.');return}
@@ -186,7 +191,7 @@ async function startVoicePost(){
   try{stream=await navigator.mediaDevices.getUserMedia({audio:true});recorder=new MediaRecorder(stream);recorder.ondataavailable=e=>{if(e.data.size)chunks.push(e.data)};recorder.start();modal.querySelector<HTMLButtonElement>('.pres-publish')!.addEventListener('click',()=>{if(recorder?.state==='recording')recorder.stop()});recorder.onstop=async()=>{stopAll();if(!modal.isConnected)return;const blob=new Blob(chunks,{type:recorder?.mimeType||'audio/webm'});if(blob.size>CHAT_AUDIO_MAX_BYTES){modal.querySelector('.pres-record p')!.textContent=`La nota supera ${mediaLimitMb(CHAT_AUDIO_MAX_BYTES)} MB.`;return}const button=modal.querySelector<HTMLButtonElement>('.pres-publish')!;button.disabled=true;button.textContent='Compartiendo…';try{await publishAudioPost(blob);modal.remove();await loadData();render()}catch(error){console.error(error);button.disabled=false;button.textContent='No se pudo compartir'}}
   }catch(error){console.error('Voice permission failed',error);stopAll();modal.querySelector('.pres-record p')!.textContent='No se pudo acceder al micrófono.'}
 }
-async function publishAudioPost(blob:Blob){const me=identity()?.memberId;if(!me)throw new Error('Sesión no disponible');const file=new File([blob],'presume-voz',{type:blob.type||'audio/webm'}),prepared=prepareAudio(file),path=`social/${me}/posts/${crypto.randomUUID()}.${prepared.ext}`;await uploadPrivateMedia(path,prepared.blob,{contentType:prepared.type,cacheControl:'31536000'});const {error}=await supabase.from('social_posts').insert({member_id:me,media_type:'audio',media_path:path,body:'',prompt_slot:slotNow(),prompt_date:localDateKey(),expires_at:new Date(Date.now()+24*60*60*1000).toISOString()});if(error){await supabase.storage.from(BUCKET).remove([path]);forgetMedia(path);throw error};await signMedia(path)}
+async function publishAudioPost(blob:Blob){const me=identity()?.memberId;if(!me)throw new Error('Sesión no disponible');const file=new File([blob],'presume-voz',{type:blob.type||'audio/webm'}),prepared=prepareAudio(file),path=`social/${me}/posts/${crypto.randomUUID()}.${prepared.ext}`;await uploadPrivateMedia(path,prepared.blob,{contentType:prepared.type,cacheControl:'31536000'});const {error}=await supabase.from('social_posts').insert({member_id:me,media_type:'audio',media_path:path,body:'',is_prompt_response:false,prompt_slot:null,prompt_date:null,expires_at:new Date(Date.now()+24*60*60*1000).toISOString()});if(error){await supabase.storage.from(BUCKET).remove([path]);forgetMedia(path);throw error};await signMedia(path)}
 
 async function setReaction(postId:string,emoji:string){const me=identity()?.memberId;if(!me)return;const existing=data.reactions.find(r=>r.post_id===postId&&r.member_id===me);if(existing?.emoji===emoji){const {error}=await supabase.from('social_reactions').delete().eq('post_id',postId).eq('member_id',me);if(error)throw error}else{const {error}=await supabase.from('social_reactions').upsert({post_id:postId,member_id:me,emoji},{onConflict:'post_id,member_id'});if(error)throw error}await loadData();render()}
 function heartBurst(target:Element){const burst=document.createElement('div');burst.className='pres-heart-pop';burst.textContent='❤️';target.appendChild(burst);setTimeout(()=>burst.remove(),650)}
@@ -228,14 +233,13 @@ function bind(){
   if(!overlay)return
   overlay.querySelector('.presume-back')?.addEventListener('click',back)
   const cam=cameraInput()!,vid=videoInput()!
-  overlay.querySelectorAll('[data-camera]').forEach(button=>button.addEventListener('click',event=>{event.stopPropagation();cam.click()}))
-  overlay.querySelector('[data-video]')?.addEventListener('click',()=>vid.click())
+  overlay.querySelectorAll<HTMLElement>('[data-camera]').forEach(button=>button.addEventListener('click',event=>{event.stopPropagation();pendingCapture=button.classList.contains('pres-main')?'challenge':'free';pendingChallengeSlot=null;cam.click()}))
+  overlay.querySelector('[data-video]')?.addEventListener('click',()=>{pendingCapture='free';pendingChallengeSlot=null;vid.click()})
   overlay.querySelector('[data-text]')?.addEventListener('click',showTextSheet)
   overlay.querySelector('[data-voice]')?.addEventListener('click',()=>void startVoicePost())
-  overlay.querySelector('[data-reminders]')?.addEventListener('click',()=>void enableReminders())
   overlay.querySelector('[data-scroll-feed]')?.addEventListener('click',()=>overlay?.querySelector('[data-feed-head]')?.scrollIntoView({behavior:'smooth',block:'start'}))
-  cam.addEventListener('change',()=>{const file=cam.files?.[0];cam.value='';if(file)showPublishSheet(file,'image')})
-  vid.addEventListener('change',()=>{const file=vid.files?.[0];vid.value='';if(file)showPublishSheet(file,'video')})
+  cam.addEventListener('change',()=>{const file=cam.files?.[0],mode=pendingCapture,slot=pendingChallengeSlot;cam.value='';pendingCapture='free';pendingChallengeSlot=null;if(file)showPublishSheet(file,'image',mode,slot)})
+  vid.addEventListener('change',()=>{const file=vid.files?.[0];vid.value='';pendingCapture='free';pendingChallengeSlot=null;if(file)showPublishSheet(file,'video','free',null)})
   overlay.querySelectorAll<HTMLElement>('[data-story-member]').forEach(button=>button.addEventListener('click',()=>openStory(button.dataset.storyMember||'')))
   overlay.querySelectorAll<HTMLElement>('[data-reactions]').forEach(button=>button.addEventListener('click',()=>{const bar=overlay?.querySelector<HTMLElement>(`[data-reaction-bar="${CSS.escape(button.dataset.reactions||'')}"]`);if(bar)bar.hidden=!bar.hidden}))
   overlay.querySelectorAll<HTMLButtonElement>('[data-react]').forEach(button=>button.addEventListener('click',()=>void setReaction(button.dataset.react||'',button.dataset.emoji||'❤️').catch(error=>console.error(error))))
@@ -251,19 +255,20 @@ function bind(){
   overlay.querySelectorAll<HTMLMediaElement>('video,audio').forEach(media=>media.addEventListener('play',()=>overlay?.querySelectorAll<HTMLMediaElement>('video,audio').forEach(other=>{if(other!==media&&!other.paused)other.pause()})))
 }
 
-async function enableReminders(){if(!('Notification'in window))return;const permission=Notification.permission==='granted'?'granted':await Notification.requestPermission();if(permission==='granted'){localStorage.setItem(REMINDER_KEY,'1');scheduleReminder();render()}}
-function clearReminderTimers(){if(reminderTimer){clearTimeout(reminderTimer);reminderTimer=null}reminderFollowups.forEach(id=>clearTimeout(id));reminderFollowups=[]}
-function scheduleReminder(){clearReminderTimers();if(localStorage.getItem(REMINDER_KEY)!=='1'||!('Notification'in window)||Notification.permission!=='granted')return;const now=new Date(),targets=[new Date(now),new Date(now)];targets[0].setHours(9,0,0,0);targets[1].setHours(17,0,0,0);let next=targets.find(target=>target.getTime()>now.getTime());if(!next){next=new Date(now);next.setDate(next.getDate()+1);next.setHours(9,0,0,0)}reminderTimer=window.setTimeout(()=>void fireReminder(0),Math.min(next.getTime()-now.getTime(),2147483000))}
-async function fireReminder(attempt:number){try{await loadData();if(!currentPending()){scheduleReminder();return}const registration=await navigator.serviceWorker?.ready;await registration?.showNotification('PRESUME 📸',{body:promptText(),tag:`presume-${localDateKey()}-${slotNow()}`,renotify:true});navigator.vibrate?.([180,80,180]);if(attempt<2){const id=window.setTimeout(()=>void fireReminder(attempt+1),20*60*1000);reminderFollowups.push(id)}else scheduleReminder()}catch(error){console.error('PRESUME reminder failed',error);scheduleReminder()}}
-
 function hydrateHome(){
   const button=document.querySelector<HTMLButtonElement>('#ok');if(!button)return
-  button.classList.add('presumecard');const title=button.querySelector('b'),small=button.querySelector('small'),icon=button.querySelector('i');if(title)title.textContent='Presume';if(small)small.textContent='Foto del momento';if(icon)icon.textContent='◉'
-  if(currentPending()&&!button.querySelector('.presume-home-dot'))button.insertAdjacentHTML('beforeend','<span class="presume-home-dot" aria-hidden="true"></span>')
-  if(!currentPending())button.querySelector('.presume-home-dot')?.remove()
+  if(!button.classList.contains('presumecard'))button.classList.add('presumecard')
+  const title=button.querySelector('b'),small=button.querySelector('small'),icon=button.querySelector('i')
+  if(title&&title.textContent!=='Presume')title.textContent='Presume'
+  if(small&&small.textContent!=='Foto del momento')small.textContent='Foto del momento'
+  if(icon&&icon.textContent!=='◉')icon.textContent='◉'
+  const pending=currentPending(),dot=button.querySelector('.presume-home-dot')
+  if(pending&&!dot)button.insertAdjacentHTML('beforeend','<span class="presume-home-dot" aria-hidden="true"></span>')
+  if(!pending&&dot)dot.remove()
 }
 
 inject()
 document.addEventListener('click',event=>{const target=event.target as Element|null;if(!target?.closest('#ok'))return;event.preventDefault();event.stopPropagation();event.stopImmediatePropagation();void open(true)},true)
+document.addEventListener('presume:open-challenge-camera',event=>{const detail=(event as CustomEvent<{slot?:Slot}>).detail;pendingCapture='challenge';pendingChallengeSlot=detail?.slot==='afternoon'?'afternoon':detail?.slot==='morning'?'morning':null;cameraInput()?.click()})
 window.addEventListener('popstate',()=>{const view=rawView();if(view==='presume-story'){if(!storyOverlay&&overlay){const first=activePosts()[0];if(first)openStory(first.member_id,false)}return}closeStory();if(view==='presume'){if(!overlay)void open(false);return}close()})
-const observer=new MutationObserver(()=>hydrateHome());observer.observe(document.body,{childList:true,subtree:true});hydrateHome();scheduleReminder()
+const observer=new MutationObserver(()=>hydrateHome());observer.observe(document.body,{childList:true,subtree:true});hydrateHome()
