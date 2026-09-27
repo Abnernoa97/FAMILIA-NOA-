@@ -1,4 +1,4 @@
-const CACHE = 'familia-noa-v37';
+const CACHE = 'familia-noa-v38';
 const BASE = new URL(self.registration.scope).pathname;
 const STATIC = [
   BASE,
