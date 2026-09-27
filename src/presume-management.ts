@@ -2,7 +2,6 @@ import { supabase } from './supabase'
 import { getIdentity } from './core/identity'
 import { forgetMedia } from './core/private-media'
 
-const BUCKET='family-photos'
 let ownIds=new Set<string>()
 let refreshTimer:number|null=null
 let channel:ReturnType<typeof supabase.channel>|null=null
@@ -50,24 +49,17 @@ async function deletePost(postId:string,button:HTMLButtonElement){
   if(!window.confirm('¿Eliminar este momento de PRESUME?'))return
   button.disabled=true
 
-  const {data:post,error:postError}=await supabase.from('social_posts').select('media_path').eq('id',postId).eq('member_id',me).maybeSingle()
-  if(postError){button.disabled=false;console.error('PRESUME delete lookup failed',postError);return}
-
-  const {data:comments}=await supabase.from('social_comments').select('member_id,voice_path').eq('post_id',postId)
-  const ownCommentMedia=(comments||[]).filter((row:any)=>row.member_id===me&&row.voice_path).map((row:any)=>String(row.voice_path))
-
-  const {error}=await supabase.from('social_posts').delete().eq('id',postId).eq('member_id',me)
-  if(error){button.disabled=false;console.error('PRESUME delete failed',error);return}
-
-  const mediaPaths=[post?.media_path,...ownCommentMedia].filter((path):path is string=>!!path)
-  if(mediaPaths.length){
-    const {error:storageError}=await supabase.storage.from(BUCKET).remove(mediaPaths)
-    if(storageError)console.warn('PRESUME media cleanup failed',storageError)
-    else mediaPaths.forEach(forgetMedia)
+  try{
+    const {data,error}=await supabase.functions.invoke('delete-presume-post',{body:{post_id:postId}})
+    if(error||data?.error)throw error||new Error(String(data?.error||'PRESUME_DELETE_FAILED'))
+    const paths=Array.isArray(data?.deleted_paths)?data.deleted_paths.filter((path:unknown):path is string=>typeof path==='string'):[]
+    paths.forEach(forgetMedia)
+    ownIds.delete(postId)
+    document.querySelector<HTMLElement>(`.pres-post[data-post="${CSS.escape(postId)}"]`)?.remove()
+  }catch(error){
+    button.disabled=false
+    console.error('PRESUME delete failed',error)
   }
-
-  ownIds.delete(postId)
-  document.querySelector<HTMLElement>(`.pres-post[data-post="${CSS.escape(postId)}"]`)?.remove()
 }
 
 document.addEventListener('click',event=>{
@@ -77,6 +69,8 @@ document.addEventListener('click',event=>{
   const postId=button.dataset.deletePost||''
   void deletePost(postId,button)
 })
+
+document.addEventListener('presume:rendered',()=>{void loadOwnIds().then(decorate)})
 
 const observer=new MutationObserver(mutations=>{
   if(mutations.some(mutation=>{
@@ -94,4 +88,4 @@ if(me){
     .subscribe()
 }
 
-window.addEventListener('beforeunload',()=>{channel?.unsubscribe()},{once:true})
+window.addEventListener('beforeunload',()=>{channel?.unsubscribe();observer.disconnect();if(refreshTimer)clearTimeout(refreshTimer)},{once:true})
