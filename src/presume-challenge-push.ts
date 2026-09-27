@@ -1,8 +1,9 @@
 import { supabase } from './supabase'
-import { getIdentity } from './core/identity'
+import { getIdentity, onIdentityChange } from './core/identity'
 
 const VAPID_PUBLIC_KEY='BETJT7Qq8P4dQkWe2_ciubkX_MU1dzg747gfYh2EjrAKGROXQnWFRg1gehFf8YubuzyEzIg-iMGhBgEWOjAYL8c'
 const PUSH_KEY='familia-noa-presume-web-push'
+const PUSH_MEMBER_KEY='familia-noa-presume-push-member'
 const LEGACY_REMINDER_KEY='familia-noa-presume-reminders'
 
 type Slot='morning'|'afternoon'
@@ -25,7 +26,12 @@ function isStandalone(){return window.matchMedia?.('(display-mode: standalone)')
 function hasPush(){return 'serviceWorker'in navigator&&'Notification'in window&&'PushManager'in window}
 
 function syncReminderUi(){
-  const enabled=localStorage.getItem(PUSH_KEY)==='1'&&typeof Notification!=='undefined'&&Notification.permission==='granted'
+  const memberId=getIdentity()?.memberId||''
+  const enabled=localStorage.getItem(PUSH_KEY)==='1'
+    &&localStorage.getItem(PUSH_MEMBER_KEY)===memberId
+    &&!!memberId
+    &&typeof Notification!=='undefined'
+    &&Notification.permission==='granted'
   const label=enabled?'Recordatorios activados':'Activar recordatorios'
   const state=enabled?'1':'0'
   document.querySelectorAll<HTMLButtonElement>('.presume-screen [data-reminders]').forEach(button=>{
@@ -35,12 +41,14 @@ function syncReminderUi(){
 }
 
 async function ensurePushSubscription(interactive:boolean){
-  if(!hasPush())return false
+  const memberId=getIdentity()?.memberId
+  if(!memberId||!hasPush())return false
   if(isIOS()&&!isStandalone())return false
   let permission=Notification.permission
   if(permission==='default'&&interactive)permission=await Notification.requestPermission()
   if(permission!=='granted'){
     localStorage.removeItem(PUSH_KEY)
+    localStorage.removeItem(PUSH_MEMBER_KEY)
     syncReminderUi()
     return false
   }
@@ -70,6 +78,7 @@ async function ensurePushSubscription(interactive:boolean){
   if(error)throw error
 
   localStorage.setItem(PUSH_KEY,'1')
+  localStorage.setItem(PUSH_MEMBER_KEY,memberId)
   syncReminderUi()
   return true
 }
@@ -152,6 +161,14 @@ window.addEventListener('online',()=>{
   if(typeof Notification!=='undefined'&&Notification.permission==='granted')void ensurePushSubscription(false).catch(()=>{})
 })
 
+const stopIdentityWatch=onIdentityChange(identity=>{
+  syncReminderUi()
+  if(identity?.memberId&&typeof Notification!=='undefined'&&Notification.permission==='granted'){
+    void ensurePushSubscription(false).catch(error=>console.error('PRESUME push profile rebind failed',error))
+  }
+})
+
 syncReminderUi()
 if(typeof Notification!=='undefined'&&Notification.permission==='granted')void ensurePushSubscription(false).catch(()=>{})
 window.setTimeout(cleanPushQuery,0)
+window.addEventListener('beforeunload',stopIdentityWatch,{once:true})
