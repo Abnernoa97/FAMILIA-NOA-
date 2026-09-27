@@ -70,15 +70,7 @@ document.addEventListener('click',event=>{
   void deletePost(postId,button)
 })
 
-document.addEventListener('presume:rendered',()=>{void loadOwnIds().then(decorate)})
-
-const observer=new MutationObserver(mutations=>{
-  if(mutations.some(mutation=>{
-    const target=mutation.target instanceof Element?mutation.target:mutation.target.parentElement
-    return !!target?.closest('.presume-screen')||[...mutation.addedNodes].some(node=>node instanceof Element&&node.matches?.('.presume-screen,.presume-screen *'))
-  }))scheduleRefresh()
-})
-observer.observe(document.body,{childList:true,subtree:true})
+document.addEventListener('presume:rendered',scheduleRefresh)
 
 void loadOwnIds().then(decorate)
 const me=getIdentity()?.memberId
@@ -88,4 +80,4 @@ if(me){
     .subscribe()
 }
 
-window.addEventListener('beforeunload',()=>{channel?.unsubscribe();observer.disconnect();if(refreshTimer)clearTimeout(refreshTimer)},{once:true})
+window.addEventListener('beforeunload',()=>{channel?.unsubscribe();if(refreshTimer)clearTimeout(refreshTimer)},{once:true})
