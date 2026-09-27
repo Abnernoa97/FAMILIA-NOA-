@@ -29,7 +29,7 @@ let mountedRoot:HTMLElement|null=null
 let channel:ReturnType<typeof supabase.channel>|null=null
 let refreshTimer:number|null=null
 
-const esc=(value:string)=>String(value||'').replace(/[&<>"']/g,char=>({'&':'&amp;','<':'&lt;','>':'&gt;','"':'&quot',"'":'&#039;'}[char]||char))
+const esc=(value:string)=>String(value||'').replace(/[&<>"']/g,char=>({'&':'&amp;','<':'&lt;','>':'&gt;','"':'&quot;',"'":'&#039;'}[char]||char))
 const fmtDay=(value:string)=>new Date(value).toLocaleDateString('es-MX',{day:'numeric',month:'long',year:'numeric'})
 const fmtTime=(value:string)=>new Date(value).toLocaleTimeString('es-MX',{hour:'2-digit',minute:'2-digit'})
 
