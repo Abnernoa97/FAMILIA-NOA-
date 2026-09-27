@@ -33,6 +33,7 @@ const loadProfile = async () => {
   if (profileLoaded || !document.querySelector('.shell')) return
   try {
     await import('./profile-enhancer')
+    await import('./profile-featured-media')
     profileLoaded = true
   } catch (error) {
     profileLoaded = false
