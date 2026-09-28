@@ -2,17 +2,23 @@ import { supabase } from '../supabase'
 import { isVideoStoragePath, videoPosterPath } from './video-poster'
 
 const BUCKET = 'family-photos'
-const TTL_SECONDS = 60 * 60
-const CACHE_SKEW_MS = 60 * 1000
+const TTL_SECONDS = 15 * 60
+const CACHE_SKEW_MS = 30 * 1000
 const SIGN_TIMEOUT_MS = 3500
 const MISSING_TTL_MS = 30 * 60 * 1000
-const PERSIST_KEY = 'familia-noa-private-media-cache-v1'
+const PERSIST_KEY = 'familia-noa-private-media-cache-v2'
+const LEGACY_PERSIST_KEYS = ['familia-noa-private-media-cache-v1']
 const PERSIST_LIMIT = 120
 const cache = new Map<string,{url:string;expires:number}>()
 const missingCache = new Map<string,number>()
 let persistTimer:number|null=null
 
+function clearLegacyPersistentCaches(){
+  try{LEGACY_PERSIST_KEYS.forEach(key=>localStorage.removeItem(key))}catch{}
+}
+
 function restorePersistentCache(){
+  clearLegacyPersistentCaches()
   try{
     const raw=localStorage.getItem(PERSIST_KEY)
     if(!raw)return
@@ -152,7 +158,10 @@ export function clearPrivateMediaCache(){
   cache.clear()
   missingCache.clear()
   if(persistTimer!==null){window.clearTimeout(persistTimer);persistTimer=null}
-  try{localStorage.removeItem(PERSIST_KEY)}catch{}
+  try{
+    localStorage.removeItem(PERSIST_KEY)
+    LEGACY_PERSIST_KEYS.forEach(key=>localStorage.removeItem(key))
+  }catch{}
 }
 
 function chatMessageId(path:string){
