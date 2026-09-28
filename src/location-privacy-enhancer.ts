@@ -41,6 +41,11 @@ function staleNames(page:HTMLElement){
   )
 }
 
+function chipName(chip:HTMLElement){
+  const textNode=[...chip.childNodes].reverse().find(node=>node.nodeType===Node.TEXT_NODE)
+  return (textNode?.textContent||'').trim()
+}
+
 function decorateStaleState(page:HTMLElement){
   page.querySelectorAll<HTMLElement>('.locationrow.stale small').forEach(small=>{
     if(small.dataset.staleLabel==='1')return
@@ -61,8 +66,7 @@ function decorateStaleState(page:HTMLElement){
   })
 
   page.querySelectorAll<HTMLElement>('.family-map-chip').forEach(chip=>{
-    const name=(chip.textContent||'').trim()
-    chip.classList.toggle('location-stale',stale.has(name))
+    chip.classList.toggle('location-stale',stale.has(chipName(chip)))
   })
 }
 
