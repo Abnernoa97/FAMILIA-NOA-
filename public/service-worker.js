@@ -1,4 +1,4 @@
-const CACHE = 'familia-noa-v58';
+const CACHE = 'familia-noa-v59';
 const BASE = new URL(self.registration.scope).pathname;
 const STATIC = [
   BASE,
@@ -23,98 +23,61 @@ self.addEventListener('install', event => {
 self.addEventListener('activate', event => {
   event.waitUntil((async () => {
     const keys = await caches.keys();
-    await Promise.all(
-      keys
-        .filter(key => key.startsWith('familia-noa-v') && key !== CACHE)
-        .map(key => caches.delete(key))
-    );
+    await Promise.all(keys.filter(key => key.startsWith('familia-noa-v') && key !== CACHE).map(key => caches.delete(key)));
     await self.clients.claim();
   })());
 });
 
 self.addEventListener('push', event => {
-  event.waitUntil((async () => {
-    let payload = {};
-    try { payload = event.data?.json?.() || {}; }
-    catch {
-      try { payload = JSON.parse(event.data?.text?.() || '{}'); }
-      catch { payload = {}; }
-    }
-
-    const emergency = payload.type === 'family-emergency';
-    const title = payload.title || 'FAMILIA NOA';
-    const body = payload.message || payload.body || 'Tienes una nueva actualización.';
-    const tag = payload.tag || 'familia-noa';
-
-    const options = {
-      body,
-      tag,
-      renotify: true,
-      icon: BASE + 'icons/icon-192.svg',
-      badge: BASE + 'icons/icon-192.svg',
-      vibrate: emergency ? [700, 180, 700, 180, 1000] : [180, 80, 180],
-      requireInteraction: emergency,
-      silent: false,
-      data: payload
-    };
-
-    if (emergency) {
-      options.actions = [{ action:'open-emergency', title:'ABRIR EMERGENCIA' }];
-    }
-
-    await self.registration.showNotification(title, options);
-  })());
+  let data = {};
+  try { data = event.data ? event.data.json() : {}; } catch { data = { body:event.data?.text() || '' }; }
+  const title = data.title || 'FAMILIA NOA';
+  const options = {
+    body: data.body || 'Tienes una actualización de tu familia.',
+    icon: BASE + 'icons/icon-192.svg',
+    badge: BASE + 'icons/icon-192.svg',
+    tag: data.tag || 'familia-noa',
+    renotify: true,
+    data: { url:data.url || BASE }
+  };
+  event.waitUntil(self.registration.showNotification(title, options));
 });
 
 self.addEventListener('notificationclick', event => {
   event.notification.close();
-  const payload = event.notification.data || {};
-  const targetUrl = new URL(payload.url || '?presume=camera', self.registration.scope).href;
-
+  const target = new URL(event.notification.data?.url || BASE, self.location.origin).href;
   event.waitUntil((async () => {
     const windows = await self.clients.matchAll({ type:'window', includeUncontrolled:true });
-    const existing = windows.find(client => {
-      try { return new URL(client.url).origin === self.location.origin; }
-      catch { return false; }
-    });
-
-    if (existing) {
-      try {
-        const navigated = typeof existing.navigate === 'function'
-          ? await existing.navigate(targetUrl)
-          : existing;
-        await (navigated || existing).focus();
+    for (const client of windows) {
+      if ('focus' in client) {
+        await client.focus();
+        if ('navigate' in client) await client.navigate(target);
         return;
-      } catch {}
+      }
     }
-
-    await self.clients.openWindow(targetUrl);
+    if (self.clients.openWindow) await self.clients.openWindow(target);
   })());
 });
 
 self.addEventListener('fetch', event => {
-  if (event.request.method !== 'GET') return;
-
-  const url = new URL(event.request.url);
-
+  const request = event.request;
+  if (request.method !== 'GET') return;
+  const url = new URL(request.url);
   if (url.origin !== self.location.origin) return;
 
-  const isNavigation = event.request.mode === 'navigate';
-  const isCode = ['script', 'style', 'worker'].includes(event.request.destination);
-
-  if (isNavigation || isCode) {
+  const isCode = /\.(?:js|mjs|css|html)(?:$|\?)/i.test(url.pathname) || request.mode === 'navigate';
+  if (isCode) {
     event.respondWith((async () => {
       try {
-        const fresh = await fetch(event.request, { cache:'no-store' });
-        if (fresh.ok) {
-          const cache = await caches.open(CACHE);
-          await cache.put(event.request, fresh.clone());
-        }
-        return fresh;
+        return await fetch(request, { cache:'no-store' });
       } catch {
-        return (await caches.match(event.request)) ||
-          (isNavigation ? await caches.match(BASE) : undefined) ||
-          Response.error();
+        const cached = await caches.match(request);
+        if (cached) return cached;
+        if (request.mode === 'navigate') {
+          const shell = await caches.match(BASE);
+          if (shell) return shell;
+        }
+        throw new Error('Offline');
       }
     })());
     return;
@@ -122,14 +85,16 @@ self.addEventListener('fetch', event => {
 
   event.respondWith((async () => {
     try {
-      const response = await fetch(event.request);
+      const response = await fetch(request);
       if (response.ok) {
         const cache = await caches.open(CACHE);
-        await cache.put(event.request, response.clone());
+        cache.put(request, response.clone()).catch(() => {});
       }
       return response;
     } catch {
-      return (await caches.match(event.request)) || Response.error();
+      const cached = await caches.match(request);
+      if (cached) return cached;
+      throw new Error('Offline');
     }
   })());
 });
