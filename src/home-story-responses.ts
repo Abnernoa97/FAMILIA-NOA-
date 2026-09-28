@@ -7,6 +7,7 @@ import { uploadPrivateMedia } from './core/resumable-storage'
 const BUCKET='family-photos'
 const MAX_TEXT=280
 const MAX_VOICE_MS=30_000
+const RESPONSE_PAGE_SIZE=500
 
 type Member={id:string;name:string}
 type StoryRef={id:string;media_path:string;expires_at:string}
@@ -39,7 +40,7 @@ let recordingStoryId=''
 let activeAudio:HTMLAudioElement|null=null
 let activeAudioButton:HTMLButtonElement|null=null
 
-const esc=(value:string)=>String(value||'').replace(/[&<>"']/g,char=>({'&':'&amp;','<':'&lt;','>':'&gt;','"':'&quot;',"'":'&#039;'}[char]||char))
+const esc=(value:string)=>String(value||'').replace(/[&<>\"']/g,char=>({'&':'&amp;','<':'&lt;','>':'&gt;','\"':'&quot;',"'":'&#039;'}[char]||char))
 const me=()=>getIdentity()?.memberId||''
 const nameFor=(id:string)=>members.get(id)?.name||'Familia'
 
@@ -91,14 +92,22 @@ async function resolveStory(path:string):Promise<StoryRef|null>{
 }
 
 async function loadResponses(storyId:string){
-  const {data,error}=await supabase
-    .from('family_story_responses')
-    .select('id,story_id,member_id,kind,body,media_path,created_at')
-    .eq('story_id',storyId)
-    .order('created_at',{ascending:true})
-    .limit(80)
-  if(error)throw error
-  responses=(data||[]) as StoryResponse[]
+  const all:StoryResponse[]=[]
+  let from=0
+  while(true){
+    const {data,error}=await supabase
+      .from('family_story_responses')
+      .select('id,story_id,member_id,kind,body,media_path,created_at')
+      .eq('story_id',storyId)
+      .order('created_at',{ascending:true})
+      .range(from,from+RESPONSE_PAGE_SIZE-1)
+    if(error)throw error
+    const page=(data||[]) as StoryResponse[]
+    all.push(...page)
+    if(page.length<RESPONSE_PAGE_SIZE)break
+    from+=RESPONSE_PAGE_SIZE
+  }
+  responses=all
 }
 
 function heartSummary(){
@@ -111,20 +120,23 @@ function heartSummary(){
 }
 
 function responseFeed(){
-  const visible=responses.filter(item=>item.kind!=='heart').slice(-4)
+  const visible=responses.filter(item=>item.kind!=='heart')
   const items=visible.map(item=>{
     const name=esc(nameFor(item.member_id))
     if(item.kind==='text')return `<div class="story-public-bubble"><b>${name}</b><span>${esc(item.body||'')}</span></div>`
     return `<button class="story-public-bubble story-public-voice" data-story-public-audio="${esc(item.id)}"><b>${name}</b><span>▶ Nota de voz</span></button>`
   }).join('')
-  return `<div class="story-public-feed">${heartSummary()}${items}</div>`
+  return `<div class="story-public-feed" data-story-public-feed>${heartSummary()}${items}</div>`
 }
 
 function renderLayer(){
   const viewer=currentViewer()
   if(!viewer||!currentStoryId)return
   const old=viewer.querySelector<HTMLElement>('.story-public-layer')
+  const oldFeed=old?.querySelector<HTMLElement>('[data-story-public-feed]')||null
   const draft=old?.querySelector<HTMLInputElement>('[data-story-public-input]')?.value||''
+  const previousScrollTop=oldFeed?.scrollTop||0
+  const wasNearBottom=!oldFeed||(oldFeed.scrollHeight-oldFeed.scrollTop-oldFeed.clientHeight<28)
   const ownHeart=responses.find(item=>item.kind==='heart'&&item.member_id===me())
   const recording=!!recorder&&recordingStoryId===currentStoryId
   const elapsed=recording?Math.min(MAX_VOICE_MS,Date.now()-recorderStartedAt):0
@@ -135,6 +147,12 @@ function renderLayer(){
   layer.innerHTML=`${responseFeed()}<div class="story-public-composer"><button class="story-public-heart ${ownHeart?'active':''}" data-story-public-heart aria-label="${ownHeart?'Quitar corazón':'Reaccionar con corazón'}">♥</button><div class="story-public-text"><input data-story-public-input maxlength="${MAX_TEXT}" value="${esc(draft)}" placeholder="Responder públicamente…" aria-label="Responder a la historia"><button data-story-public-send aria-label="Enviar respuesta">↑</button></div><button class="story-public-mic ${recording?'recording':''}" data-story-public-mic aria-label="${recording?'Detener grabación':'Responder con voz'}">${recording?`■ ${seconds}s`:'🎙'}</button></div>`
   if(!old)viewer.appendChild(layer)
   bindLayer(layer)
+  const feed=layer.querySelector<HTMLElement>('[data-story-public-feed]')
+  requestAnimationFrame(()=>{
+    if(!feed)return
+    if(wasNearBottom)feed.scrollTop=feed.scrollHeight
+    else feed.scrollTop=Math.min(previousScrollTop,Math.max(0,feed.scrollHeight-feed.clientHeight))
+  })
 }
 
 function bindLayer(layer:HTMLElement){
@@ -142,6 +160,7 @@ function bindLayer(layer:HTMLElement){
   const send=layer.querySelector<HTMLButtonElement>('[data-story-public-send]')
   const heart=layer.querySelector<HTMLButtonElement>('[data-story-public-heart]')
   const mic=layer.querySelector<HTMLButtonElement>('[data-story-public-mic]')
+  const feed=layer.querySelector<HTMLElement>('[data-story-public-feed]')
 
   input?.addEventListener('focus',pauseStory)
   input?.addEventListener('blur',()=>window.setTimeout(resumeStory,120))
@@ -151,6 +170,9 @@ function bindLayer(layer:HTMLElement){
       void sendText(input,send)
     }
   })
+  feed?.addEventListener('pointerdown',pauseStory)
+  feed?.addEventListener('pointerup',()=>window.setTimeout(resumeStory,100))
+  feed?.addEventListener('pointercancel',()=>window.setTimeout(resumeStory,100))
   send?.addEventListener('click',()=>void sendText(input,send))
   heart?.addEventListener('click',()=>void toggleHeart(heart))
   mic?.addEventListener('click',()=>void toggleRecording(mic))
