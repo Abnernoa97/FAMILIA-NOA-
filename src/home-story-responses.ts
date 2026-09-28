@@ -123,8 +123,10 @@ function responseFeed(){
   const visible=responses.filter(item=>item.kind!=='heart')
   const items=visible.map(item=>{
     const name=esc(nameFor(item.member_id))
-    if(item.kind==='text')return `<div class="story-public-bubble"><b>${name}</b><span>${esc(item.body||'')}</span></div>`
-    return `<button class="story-public-bubble story-public-voice" data-story-public-audio="${esc(item.id)}"><b>${name}</b><span>▶ Nota de voz</span></button>`
+    const mine=item.member_id===me()
+    const remove=mine?`<button class="story-public-delete" data-story-public-delete="${esc(item.id)}" aria-label="Eliminar tu respuesta">×</button>`:''
+    if(item.kind==='text')return `<div class="story-public-row"><div class="story-public-bubble"><b>${name}</b><span>${esc(item.body||'')}</span></div>${remove}</div>`
+    return `<div class="story-public-row"><button class="story-public-bubble story-public-voice" data-story-public-audio="${esc(item.id)}"><b>${name}</b><span>▶ Nota de voz</span></button>${remove}</div>`
   }).join('')
   return `<div class="story-public-feed" data-story-public-feed>${heartSummary()}${items}</div>`
 }
@@ -179,6 +181,12 @@ function bindLayer(layer:HTMLElement){
   layer.querySelectorAll<HTMLButtonElement>('[data-story-public-audio]').forEach(button=>{
     button.addEventListener('click',()=>void playVoice(button.dataset.storyPublicAudio||'',button))
   })
+  layer.querySelectorAll<HTMLButtonElement>('[data-story-public-delete]').forEach(button=>{
+    button.addEventListener('click',event=>{
+      event.stopPropagation()
+      void deleteOwnResponse(button.dataset.storyPublicDelete||'',button)
+    })
+  })
 }
 
 async function sendText(input:HTMLInputElement|null,button:HTMLButtonElement|null){
@@ -222,6 +230,38 @@ async function toggleHeart(button:HTMLButtonElement){
     console.error('Public story heart failed',error)
   }finally{
     button.disabled=false
+    resumeStory()
+  }
+}
+
+async function deleteOwnResponse(responseId:string,button:HTMLButtonElement){
+  const memberId=me()
+  const response=responses.find(item=>item.id===responseId)
+  if(!memberId||!response||response.member_id!==memberId||response.kind==='heart')return
+  pauseStory()
+  button.disabled=true
+  const label=button.textContent||'×'
+  button.textContent='…'
+  try{
+    if(activeAudioButton?.dataset.storyPublicAudio===response.id)stopActiveAudio()
+    const {error}=await supabase
+      .from('family_story_responses')
+      .delete()
+      .eq('id',response.id)
+      .eq('member_id',memberId)
+    if(error)throw error
+    responses=responses.filter(item=>item.id!==response.id)
+    renderLayer()
+    if(response.media_path){
+      forgetMedia(response.media_path)
+      const {error:storageError}=await supabase.storage.from(BUCKET).remove([response.media_path])
+      if(storageError)console.warn('Deleted story response left an orphaned audio object',storageError)
+    }
+  }catch(error){
+    console.error('Own story response delete failed',error)
+    button.disabled=false
+    button.textContent=label
+  }finally{
     resumeStory()
   }
 }
