@@ -50,11 +50,12 @@ class EmergencyActivity : Activity() {
         }
     }
 
+    @Suppress("DEPRECATION")
     override fun onStart() {
         super.onStart()
         val filter = IntentFilter("com.familianoa.emergency.RESOLVED")
-        if (Build.VERSION.SDK_INT >= 33) registerReceiver(resolvedReceiver, filter, RECEIVER_NOT_EXPORTED)
-        else @Suppress("DEPRECATION") registerReceiver(resolvedReceiver, filter)
+        if (Build.VERSION.SDK_INT >= 33) registerReceiver(resolvedReceiver, filter, Context.RECEIVER_NOT_EXPORTED)
+        else registerReceiver(resolvedReceiver, filter)
     }
 
     override fun onStop() {
