@@ -1,4 +1,4 @@
-const CACHE = 'familia-noa-v61';
+const CACHE = 'familia-noa-v62';
 const BASE = new URL(self.registration.scope).pathname;
 const STATIC = [
   BASE,
@@ -32,13 +32,14 @@ self.addEventListener('push', event => {
   let data = {};
   try { data = event.data ? event.data.json() : {}; } catch { data = { body:event.data?.text() || '' }; }
   const title = data.title || 'FAMILIA NOA';
+  const body = data.body || data.message || 'Tienes una actualización de tu familia.';
   const options = {
-    body: data.body || 'Tienes una actualización de tu familia.',
+    body,
     icon: BASE + 'icons/icon-192.svg',
     badge: BASE + 'icons/icon-192.svg',
     tag: data.tag || 'familia-noa',
     renotify: true,
-    data: { url:data.url || BASE }
+    data: { ...data, url:data.url || BASE }
   };
   event.waitUntil(self.registration.showNotification(title, options));
 });
@@ -49,9 +50,11 @@ self.addEventListener('notificationclick', event => {
   event.waitUntil((async () => {
     const windows = await self.clients.matchAll({ type:'window', includeUncontrolled:true });
     for (const client of windows) {
+      if ('navigate' in client) {
+        try { await client.navigate(target); } catch {}
+      }
       if ('focus' in client) {
         await client.focus();
-        if ('navigate' in client) await client.navigate(target);
         return;
       }
     }
