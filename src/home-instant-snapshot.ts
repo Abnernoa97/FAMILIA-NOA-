@@ -1,16 +1,17 @@
 import './home-stories.css'
 import { getIdentity } from './core/identity'
 
-const KEY='familia-noa-home-instant-v1'
+const KEY='familia-noa-home-instant-v2'
 const MAX_AGE=10*60*1000
-const AVATAR_SETTLE_MS=1500
+const SETTLE_MS=1500
 
 type HomeSnapshot={
-  v:1
+  v:2
   memberId:string
   savedAt:number
   railHtml:string
   avatarHtml:string
+  unreadCount:number
 }
 
 let captureTimer:number|null=null
@@ -23,14 +24,30 @@ function readSnapshot():HomeSnapshot|null{
     const raw=localStorage.getItem(KEY)
     if(!raw)return null
     const value=JSON.parse(raw) as Partial<HomeSnapshot>
-    if(value.v!==1||!value.memberId||!Number.isFinite(value.savedAt))return null
+    if(value.v!==2||!value.memberId||!Number.isFinite(value.savedAt))return null
     if(Date.now()-Number(value.savedAt)>MAX_AGE){localStorage.removeItem(KEY);return null}
-    return value as HomeSnapshot
+    return {...value,unreadCount:Math.max(0,Number(value.unreadCount)||0)} as HomeSnapshot
   }catch{return null}
 }
 
 function writeSnapshot(snapshot:HomeSnapshot){
   try{localStorage.setItem(KEY,JSON.stringify(snapshot))}catch{}
+}
+
+function paintUnread(shell:HTMLElement,count:number){
+  shell.querySelectorAll('.chat-unread-badge').forEach(node=>node.remove())
+  if(count<=0)return
+  const text=count>99?'99+':String(count)
+  shell.querySelector('#chat b')?.insertAdjacentHTML('beforeend',`<span class="chat-unread-badge">${text}</span>`)
+  shell.querySelector('#navchat')?.insertAdjacentHTML('beforeend',`<span class="chat-unread-badge">${text}</span>`)
+}
+
+function domUnread(shell:HTMLElement){
+  const text=shell.querySelector<HTMLElement>('.chat-unread-badge')?.textContent?.trim()||''
+  if(!text)return 0
+  if(text==='99+')return 100
+  const count=Number(text)
+  return Number.isFinite(count)&&count>0?count:0
 }
 
 function restore(){
@@ -41,9 +58,15 @@ function restore(){
   const snapshot=readSnapshot()
   if(!snapshot||snapshot.memberId!==identity.memberId)return
 
+  if(!restoreAt)restoreAt=Date.now()
+
   const avatar=shell.querySelector<HTMLButtonElement>('#change')
   if(avatar&&snapshot.avatarHtml&&avatar.innerHTML!==snapshot.avatarHtml){
     avatar.innerHTML=snapshot.avatarHtml
+  }
+
+  if(snapshot.unreadCount>0&&!shell.querySelector('.chat-unread-badge')){
+    paintUnread(shell,snapshot.unreadCount)
   }
 
   if(snapshot.railHtml&&!shell.querySelector('.family-story-home')){
@@ -54,7 +77,6 @@ function restore(){
       rail.dataset.instantSnapshot='1'
       top.insertAdjacentElement('afterend',rail)
       shell.classList.add('has-home-stories')
-      restoreAt=Date.now()
     }
   }
 }
@@ -68,31 +90,41 @@ function capture(){
   const liveRail=shell.querySelector<HTMLElement>('.family-story-home:not([data-instant-snapshot])')
   const avatar=shell.querySelector<HTMLButtonElement>('#change')
   const previous=readSnapshot()
+  const settling=restoreAt>0&&Date.now()-restoreAt<SETTLE_MS
   let avatarHtml=avatar?.innerHTML||''
+  let unreadCount=domUnread(shell)
 
-  // Do not let the initial one-letter placeholder overwrite a useful cached avatar
-  // while the fresh profile request is still settling.
+  // Keep useful warm data while the first fresh requests are still settling.
   if(
     avatar&&
     !avatar.querySelector('img')&&
     previous?.memberId===identity.memberId&&
     /<img\b/i.test(previous.avatarHtml||'')&&
-    restoreAt>0&&Date.now()-restoreAt<AVATAR_SETTLE_MS
+    settling
   ){
     avatarHtml=previous.avatarHtml
+  }
+  if(
+    unreadCount===0&&
+    previous?.memberId===identity.memberId&&
+    previous.unreadCount>0&&
+    settling
+  ){
+    unreadCount=previous.unreadCount
   }
 
   const railHtml=liveRail?.outerHTML||(
     previous?.memberId===identity.memberId ? previous.railHtml||'' : ''
   )
-  if(!railHtml&&!avatarHtml)return
+  if(!railHtml&&!avatarHtml&&!unreadCount)return
 
   writeSnapshot({
-    v:1,
+    v:2,
     memberId:identity.memberId,
     savedAt:Date.now(),
     railHtml,
-    avatarHtml
+    avatarHtml,
+    unreadCount
   })
 }
 
@@ -103,10 +135,10 @@ function scheduleCapture(delay=120){
 
 function mutationMatters(mutation:MutationRecord){
   const target=mutation.target
-  if(target instanceof Element&&target.closest('.family-story-home,#change'))return true
+  if(target instanceof Element&&target.closest('.family-story-home,#change,#chat,#navchat'))return true
   return Array.from(mutation.addedNodes).some(node=>{
     if(!(node instanceof Element))return false
-    return node.matches('.shell,.family-story-home,#change')||!!node.querySelector('.family-story-home,#change')
+    return node.matches('.shell,.family-story-home,#change,.chat-unread-badge')||!!node.querySelector('.family-story-home,#change,.chat-unread-badge')
   })
 }
 
@@ -177,4 +209,4 @@ window.addEventListener('beforeunload',()=>{
 },{once:true})
 
 restore()
-window.setTimeout(capture,AVATAR_SETTLE_MS+200)
+window.setTimeout(capture,SETTLE_MS+200)
