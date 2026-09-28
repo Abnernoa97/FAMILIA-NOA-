@@ -32,7 +32,7 @@ function fallback(root:HTMLElement,message='Toca para abrir la cámara del telé
   root.querySelector<HTMLButtonElement>('[data-native-camera]')?.addEventListener('click',()=>{
     const input=cameraInput()
     stopLiveCamera()
-    window.setTimeout(()=>input?.click(),0)
+    input?.click()
   },{once:true})
 }
 
