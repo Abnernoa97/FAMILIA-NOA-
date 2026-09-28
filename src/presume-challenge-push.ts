@@ -114,6 +114,19 @@ async function challengeCompleted(slot:Slot){
   return !!data?.length
 }
 
+function waitForPresumeEntry(timeout=5000){
+  return new Promise<HTMLButtonElement|null>(resolve=>{
+    const started=Date.now()
+    const check=()=>{
+      const button=document.querySelector<HTMLButtonElement>('#ok.presumecard')
+      if(button){resolve(button);return}
+      if(Date.now()-started>=timeout){resolve(null);return}
+      window.setTimeout(check,50)
+    }
+    check()
+  })
+}
+
 function waitForPresume(timeout=5000){
   return new Promise<HTMLElement|null>(resolve=>{
     const found=document.querySelector<HTMLElement>('.presume-screen')
@@ -130,7 +143,11 @@ function waitForPresume(timeout=5000){
 }
 
 async function openFromPush(slot:Slot){
-  if(!document.querySelector('.presume-screen'))document.querySelector<HTMLButtonElement>('#ok')?.click()
+  if(!document.querySelector('.presume-screen')){
+    const entry=await waitForPresumeEntry()
+    if(!entry)return
+    entry.click()
+  }
   const root=await waitForPresume()
   if(!root||await challengeCompleted(slot))return
   document.dispatchEvent(new CustomEvent('presume:capture-start'))
