@@ -134,7 +134,7 @@ async function openFromPush(slot:Slot){
   const root=await waitForPresume()
   if(!root||await challengeCompleted(slot))return
   document.dispatchEvent(new CustomEvent('presume:capture-start'))
-  document.dispatchEvent(new CustomEvent('presume:open-challenge-camera',{detail:{slot}}))
+  document.dispatchEvent(new CustomEvent('presume:open-push-camera',{detail:{slot}}))
 }
 
 function cleanPushQuery(){
