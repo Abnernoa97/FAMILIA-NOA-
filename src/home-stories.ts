@@ -19,6 +19,7 @@ let profiles=new Map<string,Profile>()
 let stories:Story[]=[]
 let channel:ReturnType<typeof supabase.channel>|null=null
 let loading=false
+let dataReady=false
 let refreshTimer:number|null=null
 let expiryTimer:number|null=null
 let viewer:HTMLElement|null=null
@@ -31,7 +32,7 @@ let viewerDrawToken=0
 let picker:HTMLElement|null=null
 let preview:HTMLElement|null=null
 
-const esc=(value:string)=>String(value||'').replace(/[&<>"']/g,char=>({'&':'&amp;','<':'&lt;','>':'&gt;','"':'&quot;',"'":'&#039;'}[char]||char))
+const esc=(value:string)=>String(value||'').replace(/[&<>"']/g,char=>({'&':'&amp;','<':'&lt;','>':'&gt;','"':'&quot',"'":'&#039;'}[char]||char))
 const identity=()=>getIdentity()
 const memberFor=(id:string)=>members.find(member=>member.id===id)||null
 const profileFor=(id:string)=>profiles.get(id)||null
@@ -54,7 +55,7 @@ function storyCoverMarkup(group:StoryGroup){
   const latest=group.stories[group.stories.length-1]
   const url=mediaUrl(latest?.media_path)
   if(!url)return avatarMarkup(group.member)
-  return `<span class="family-story-avatar"><img src="${esc(url)}" alt="Historia de ${esc(group.member.name)}" loading="lazy" decoding="async"></span>`
+  return `<span class="family-story-avatar"><img src="${esc(url)}" alt="Historia de ${esc(group.member.name)}" loading="eager" decoding="async"></span>`
 }
 
 function activeStories(){
@@ -141,8 +142,7 @@ function scheduleExpiryRefresh(){
 }
 
 async function refreshStories(){
-  const shell=document.querySelector<HTMLElement>('.shell')
-  if(!shell||loading)return
+  if(loading)return
   const me=identity()?.memberId
   if(!me)return
   loading=true
@@ -160,10 +160,19 @@ async function refreshStories(){
     members=(membersRes.data||[]) as Member[]
     profiles=new Map(((profilesRes.data||[]) as Profile[]).map(profile=>[profile.member_id,profile]))
     stories=(storiesRes.data||[]) as Story[]
-    await primeMedia([
+    dataReady=true
+
+    // Paint the rail as soon as relational data arrives. Previously signed URLs are
+    // already restored from the private-media cache, so repeat opens feel immediate.
+    renderRail()
+    scheduleExpiryRefresh()
+
+    const paths=[
       ...stories.map(story=>story.media_path),
       ...Array.from(profiles.values()).map(profile=>profile.avatar_path)
-    ])
+    ]
+    await primeMedia(paths)
+    // First-time media may have required a fresh signature; hydrate the covers once.
     renderRail()
     scheduleExpiryRefresh()
   }catch(error){
@@ -178,7 +187,7 @@ function scheduleRefresh(){
   refreshTimer=window.setTimeout(()=>{
     refreshTimer=null
     void refreshStories()
-  },140)
+  },80)
 }
 
 function startRealtime(){
@@ -405,11 +414,25 @@ function scan(){
     closePicker()
     closePreview()
     if(viewer)closeViewerDirect()
+    if(identity()?.memberId&&!dataReady&&!loading)void refreshStories()
     return
   }
   startRealtime()
-  if(!shell.querySelector('.family-story-home')&&!loading)void refreshStories()
+  if(dataReady){
+    if(!shell.querySelector('.family-story-home'))renderRail()
+    scheduleExpiryRefresh()
+  }else if(!loading){
+    void refreshStories()
+  }
 }
+
+window.addEventListener('familia-noa:identity-changed',()=>{
+  dataReady=false
+  members=[]
+  profiles.clear()
+  stories=[]
+  scan()
+})
 
 const observer=new MutationObserver(scan)
 observer.observe(document.body,{childList:true,subtree:true})
