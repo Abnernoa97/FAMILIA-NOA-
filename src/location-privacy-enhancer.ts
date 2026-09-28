@@ -1,9 +1,16 @@
 import { supabase } from './supabase'
 import { getIdentity } from './core/identity'
 
+const STALE_AFTER_MS=60*60*1000
+const FRESHNESS_FETCH_TTL_MS=30*1000
+
 let observer:MutationObserver|null=null
 let busy=false
 let scheduled:number|null=null
+let freshnessLoading=false
+let lastFreshnessFetch=0
+let periodicTimer:number|null=null
+const updatedByName=new Map<string,number>()
 
 function injectStyles(){
   if(document.querySelector('#location-privacy-css'))return
@@ -12,6 +19,7 @@ function injectStyles(){
   style.textContent=`
   .location-stop-share{width:100%;margin-top:10px;padding:14px 16px;border:1px solid #ddd8ce;border-radius:16px;background:transparent;color:#6f6b63;font-weight:700}
   .location-stop-share:disabled{opacity:.5;cursor:wait}
+  .location-privacy-note{margin:10px 16px 0;padding:11px 13px;border:1px solid #e5dfd4;border-radius:14px;background:#f8f5ef;color:#79746c;font-size:11px;line-height:1.45}
   .locationrow.stale{opacity:.72;border-style:dashed;background:#faf8f3}
   .locationrow.stale .location-dot{opacity:.55}
   .family-map-marker.location-stale .family-map-marker-dot{opacity:.58;filter:grayscale(.35)}
@@ -33,10 +41,14 @@ function ownLocationRow(page:HTMLElement){
   )||null
 }
 
+function rowName(row:HTMLElement){
+  return (row.querySelector('b')?.textContent||'').replace(/\s*·\s*tú\s*$/i,'').trim()
+}
+
 function staleNames(page:HTMLElement){
   return new Set(
-    [...page.querySelectorAll<HTMLElement>('.locationrow.stale b')]
-      .map(node=>(node.textContent||'').replace(/\s*·\s*tú\s*$/i,'').trim())
+    [...page.querySelectorAll<HTMLElement>('.locationrow.stale')]
+      .map(row=>rowName(row))
       .filter(Boolean)
   )
 }
@@ -46,11 +58,32 @@ function chipName(chip:HTMLElement){
   return (textNode?.textContent||'').trim()
 }
 
-function decorateStaleState(page:HTMLElement){
-  page.querySelectorAll<HTMLElement>('.locationrow.stale small').forEach(small=>{
-    if(small.dataset.staleLabel==='1')return
-    small.dataset.staleLabel='1'
-    small.textContent=`Última ubicación · ${small.textContent||''}`
+function ensurePrivacyNote(page:HTMLElement){
+  if(page.querySelector('[data-location-privacy-note]'))return
+  const box=page.querySelector<HTMLElement>('.locationbox')
+  if(!box)return
+  const note=document.createElement('div')
+  note.className='location-privacy-note'
+  note.dataset.locationPrivacyNote='1'
+  note.textContent='La app no rastrea en segundo plano. Se muestra la última ubicación compartida y cuándo fue actualizada.'
+  box.insertAdjacentElement('afterend',note)
+}
+
+function applyFreshness(page:HTMLElement){
+  page.querySelectorAll<HTMLElement>('.locationrow').forEach(row=>{
+    if(row.classList.contains('locationrow-empty'))return
+    const name=rowName(row)
+    const updated=updatedByName.get(name)
+    const stale=typeof updated==='number'&&Number.isFinite(updated)?Date.now()-updated>STALE_AFTER_MS:row.classList.contains('stale')
+    row.classList.toggle('stale',stale)
+    row.dataset.locationFreshness=stale?'stale':'fresh'
+    const small=row.querySelector<HTMLElement>('small')
+    if(small){
+      const clean=(small.textContent||'').replace(/^Última ubicación\s*·\s*/i,'')
+      const next=stale?`Última ubicación · ${clean}`:clean
+      if(small.textContent!==next)small.textContent=next
+      small.dataset.staleLabel=stale?'1':'0'
+    }
   })
 
   const stale=staleNames(page)
@@ -68,6 +101,40 @@ function decorateStaleState(page:HTMLElement){
   page.querySelectorAll<HTMLElement>('.family-map-chip').forEach(chip=>{
     chip.classList.toggle('location-stale',stale.has(chipName(chip)))
   })
+
+  const mapTitle=page.querySelector<HTMLElement>('[data-family-map] .family-map-head b')
+  if(mapTitle&&mapTitle.textContent!=='Últimas ubicaciones')mapTitle.textContent='Últimas ubicaciones'
+  const listTitle=page.querySelector<HTMLElement>('.location-section-title span')
+  if(listTitle&&listTitle.textContent!=='Se actualiza cuando alguien comparte')listTitle.textContent='Se actualiza cuando alguien comparte'
+}
+
+async function refreshFreshness(force=false){
+  const page=document.querySelector<HTMLElement>('.location-page')
+  if(!page||freshnessLoading||!getIdentity()?.memberId)return
+  if(!force&&Date.now()-lastFreshnessFetch<FRESHNESS_FETCH_TTL_MS){applyFreshness(page);return}
+  freshnessLoading=true
+  try{
+    const [membersResult,locationsResult]=await Promise.all([
+      supabase.from('family_members').select('id,name,active').eq('active',true),
+      supabase.from('locations').select('member_id,updated_at')
+    ])
+    if(membersResult.error)throw membersResult.error
+    if(locationsResult.error)throw locationsResult.error
+    const names=new Map((membersResult.data||[]).map((member:any)=>[String(member.id),String(member.name||'')]))
+    updatedByName.clear()
+    ;(locationsResult.data||[]).forEach((row:any)=>{
+      const name=names.get(String(row.member_id))
+      const time=new Date(String(row.updated_at||'')).getTime()
+      if(name&&Number.isFinite(time))updatedByName.set(name,time)
+    })
+    lastFreshnessFetch=Date.now()
+  }catch(error){
+    console.warn('Location freshness check failed',error)
+  }finally{
+    freshnessLoading=false
+    const current=document.querySelector<HTMLElement>('.location-page')
+    if(current)applyFreshness(current)
+  }
 }
 
 function syncStopButton(page:HTMLElement){
@@ -108,6 +175,8 @@ function syncStopButton(page:HTMLElement){
         const text=page.querySelector<HTMLElement>('#locationtext')
         if(text)text.textContent='Ya no compartes tu ubicación con la familia.'
         button.remove()
+        lastFreshnessFetch=0
+        void refreshFreshness(true)
       }catch(error){
         console.error('Stop family location sharing failed',error)
         button.disabled=false
@@ -125,8 +194,10 @@ function enhance(){
   scheduled=null
   const page=document.querySelector<HTMLElement>('.location-page')
   if(!page)return
-  decorateStaleState(page)
+  ensurePrivacyNote(page)
+  applyFreshness(page)
   syncStopButton(page)
+  void refreshFreshness()
 }
 
 function schedule(){
@@ -137,4 +208,12 @@ function schedule(){
 injectStyles()
 observer=new MutationObserver(schedule)
 observer.observe(document.body,{childList:true,subtree:true})
+periodicTimer=window.setInterval(()=>{if(document.querySelector('.location-page')){lastFreshnessFetch=0;schedule()}},60*1000)
+document.addEventListener('visibilitychange',()=>{if(!document.hidden&&document.querySelector('.location-page')){lastFreshnessFetch=0;schedule()}})
+window.addEventListener('beforeunload',()=>{
+  observer?.disconnect()
+  observer=null
+  if(scheduled!==null)window.clearTimeout(scheduled)
+  if(periodicTimer!==null)window.clearInterval(periodicTimer)
+},{once:true})
 schedule()
