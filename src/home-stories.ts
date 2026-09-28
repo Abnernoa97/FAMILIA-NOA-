@@ -17,6 +17,7 @@ type StoryGroup={member:Member;stories:Story[]}
 let members:Member[]=[]
 let profiles=new Map<string,Profile>()
 let stories:Story[]=[]
+let viewedStoryIds=new Set<string>()
 let channel:ReturnType<typeof supabase.channel>|null=null
 let loading=false
 let dataReady=false
@@ -31,8 +32,9 @@ let viewerPaused=false
 let viewerDrawToken=0
 let picker:HTMLElement|null=null
 let preview:HTMLElement|null=null
+let actionSheet:HTMLElement|null=null
 
-const esc=(value:string)=>String(value||'').replace(/[&<>"']/g,char=>({'&':'&amp;','<':'&lt;','>':'&gt;','"':'&quot',"'":'&#039;'}[char]||char))
+const esc=(value:string)=>String(value||'').replace(/[&<>"']/g,char=>({'&':'&amp;','<':'&lt;','>':'&gt;','"':'&quot;',"'":'&#039;'}[char]||char))
 const identity=()=>getIdentity()
 const memberFor=(id:string)=>members.find(member=>member.id===id)||null
 const profileFor=(id:string)=>profiles.get(id)||null
@@ -90,9 +92,16 @@ function groups(){
   return ordered.map(member=>({member,stories:byMember.get(member.id)||[]}))
 }
 
+function groupHasUnseen(group:StoryGroup){
+  const me=identity()?.memberId||''
+  if(!me||group.member.id===me)return false
+  return group.stories.some(story=>!viewedStoryIds.has(story.id))
+}
+
 function storyTile(group:StoryGroup,own=false){
   const member=group.member
-  return `<div class="family-story-item ${own?'family-story-own':''}"><button class="family-story-main has-story" data-home-story-member="${esc(member.id)}" aria-label="Ver historia de ${esc(member.name)}"><span class="family-story-frame"><span class="family-story-inner">${storyCoverMarkup(group)}</span></span></button>${own?'<button class="family-story-plus" data-home-story-create aria-label="Agregar a tu historia">+</button>':''}<span class="family-story-name">${own?'Tu historia':esc(member.name)}</span></div>`
+  const stateClass=own?'own-story':groupHasUnseen(group)?'new-story':'seen-story'
+  return `<div class="family-story-item ${own?'family-story-own':''}"><button class="family-story-main has-story ${stateClass}" data-home-story-member="${esc(member.id)}" aria-label="Ver historia de ${esc(member.name)}"><span class="family-story-frame"><span class="family-story-inner">${storyCoverMarkup(group)}</span></span></button>${own?'<button class="family-story-plus" data-home-story-create aria-label="Agregar a tu historia">+</button>':''}<span class="family-story-name">${own?'Tu historia':esc(member.name)}</span></div>`
 }
 
 function createTile(member:Member){
@@ -148,18 +157,21 @@ async function refreshStories(){
   loading=true
   try{
     const now=new Date().toISOString()
-    const [membersRes,profilesRes,storiesRes]=await Promise.all([
+    const [membersRes,profilesRes,storiesRes,viewsRes]=await Promise.all([
       supabase.from('family_members').select('id,name').eq('active',true).order('created_at'),
       supabase.from('family_profiles').select('member_id,avatar_path'),
-      supabase.from('family_stories').select('id,member_id,media_path,created_at,expires_at').gt('expires_at',now).order('created_at',{ascending:true})
+      supabase.from('family_stories').select('id,member_id,media_path,created_at,expires_at').gt('expires_at',now).order('created_at',{ascending:true}),
+      supabase.from('family_story_views').select('story_id').eq('viewer_member_id',me)
     ])
     if(membersRes.error)throw membersRes.error
     if(profilesRes.error)throw profilesRes.error
     if(storiesRes.error)throw storiesRes.error
+    if(viewsRes.error)throw viewsRes.error
 
     members=(membersRes.data||[]) as Member[]
     profiles=new Map(((profilesRes.data||[]) as Profile[]).map(profile=>[profile.member_id,profile]))
     stories=(storiesRes.data||[]) as Story[]
+    ;((viewsRes.data||[]) as Array<{story_id:string}>).forEach(row=>viewedStoryIds.add(row.story_id))
     dataReady=true
 
     // Paint the rail as soon as relational data arrives. Previously signed URLs are
@@ -194,6 +206,7 @@ function startRealtime(){
   if(channel)return
   channel=supabase.channel('familia-home-stories')
     .on('postgres_changes',{event:'*',schema:'public',table:'family_stories'},scheduleRefresh)
+    .on('postgres_changes',{event:'*',schema:'public',table:'family_story_views'},scheduleRefresh)
     .on('postgres_changes',{event:'*',schema:'public',table:'family_profiles'},scheduleRefresh)
     .on('postgres_changes',{event:'*',schema:'public',table:'family_members'},scheduleRefresh)
     .subscribe()
@@ -208,12 +221,16 @@ function stopRealtime(){
 
 function closePicker(){picker?.remove();picker=null}
 function closePreview(){preview?.remove();preview=null}
+function closeActionSheet(){actionSheet?.remove();actionSheet=null}
 
 function showPicker(){
   closePicker()
+  const me=identity()?.memberId||''
+  const count=groups().find(group=>group.member.id===me)?.stories.length||0
+  const countText=count===0?'Dura 24 horas':`${count} ${count===1?'historia activa':'historias activas'}`
   const root=document.createElement('div')
   root.className='family-story-picker'
-  root.innerHTML=`<div class="family-story-picker-card"><div class="family-story-picker-head"><b>Tu historia</b><button class="family-story-picker-close" aria-label="Cerrar">×</button></div><div class="family-story-source-grid"><button class="family-story-source" data-story-source="camera"><i>◎</i><b>Cámara</b><small>Tómala ahora</small></button><button class="family-story-source" data-story-source="gallery"><i>▧</i><b>Galería</b><small>Elige una foto</small></button></div></div>`
+  root.innerHTML=`<div class="family-story-picker-card"><div class="family-story-picker-head"><div><b>Tu historia</b><small>${countText}</small></div><button class="family-story-picker-close" aria-label="Cerrar">×</button></div><div class="family-story-source-grid"><button class="family-story-source" data-story-source="camera"><i>◎</i><b>Cámara</b><small>Tómala ahora</small></button><button class="family-story-source" data-story-source="gallery"><i>▧</i><b>Galería</b><small>Elige una foto</small></button></div></div>`
   document.body.appendChild(root)
   picker=root
   root.addEventListener('click',event=>{if(event.target===root)closePicker()})
@@ -293,12 +310,26 @@ async function publishStory(file:File){
   void signMedia(path).catch(()=>undefined)
 }
 
+async function markViewed(story:Story){
+  const me=identity()?.memberId
+  if(!me||story.member_id===me||viewedStoryIds.has(story.id))return
+  viewedStoryIds.add(story.id)
+  renderRail()
+  const {error}=await supabase.from('family_story_views').upsert({
+    story_id:story.id,
+    viewer_member_id:me,
+    viewed_at:new Date().toISOString()
+  },{onConflict:'story_id,viewer_member_id'})
+  if(error)console.warn('Story view could not be saved',error)
+}
+
 function clearViewerTimer(){
   if(viewerTimer!==null){window.clearTimeout(viewerTimer);viewerTimer=null}
 }
 
 function closeViewerDirect(){
   clearViewerTimer()
+  closeActionSheet()
   viewerDrawToken++
   viewer?.remove()
   viewer=null
@@ -309,6 +340,7 @@ function closeViewerDirect(){
 }
 
 function closeViewer(){
+  closeActionSheet()
   if(history.state?.[HISTORY_KEY]===1)history.back()
   else closeViewerDirect()
 }
@@ -338,17 +370,82 @@ function scheduleViewer(){
   viewerTimer=window.setTimeout(()=>moveViewer(1),STORY_MS)
 }
 
+function showOwnStoryActions(story:Story,position:number,total:number){
+  closeActionSheet()
+  clearViewerTimer()
+  viewerPaused=true
+  const root=document.createElement('div')
+  root.className='family-story-actions'
+  root.innerHTML=`<div class="family-story-actions-card"><div class="family-story-actions-copy"><b>Tu historia</b><span>${total===1?'1 historia activa':`${position} de ${total} historias activas`}</span></div><button class="family-story-delete" data-story-delete>Eliminar historia</button><button class="family-story-cancel" data-story-cancel>Cancelar</button></div>`
+  document.body.appendChild(root)
+  actionSheet=root
+  const resume=()=>{
+    closeActionSheet()
+    viewerPaused=false
+    scheduleViewer()
+  }
+  root.addEventListener('click',event=>{if(event.target===root)resume()})
+  root.querySelector('[data-story-cancel]')?.addEventListener('click',resume)
+  root.querySelector<HTMLButtonElement>('[data-story-delete]')?.addEventListener('click',async()=>{
+    const button=root.querySelector<HTMLButtonElement>('[data-story-delete]')!
+    button.disabled=true
+    button.textContent='Eliminando…'
+    try{
+      await deleteOwnStory(story)
+    }catch(error){
+      console.error('Story delete failed',error)
+      button.disabled=false
+      button.textContent='No se pudo eliminar'
+    }
+  })
+}
+
+async function deleteOwnStory(story:Story){
+  const me=identity()?.memberId
+  if(!me||story.member_id!==me)throw new Error('NOT_OWN_STORY')
+
+  const {error}=await supabase.from('family_stories').delete().eq('id',story.id).eq('member_id',me)
+  if(error)throw error
+
+  stories=stories.filter(item=>item.id!==story.id)
+  viewedStoryIds.delete(story.id)
+  forgetMedia(story.media_path)
+  closeActionSheet()
+  renderRail()
+  scheduleExpiryRefresh()
+
+  const {error:storageError}=await supabase.storage.from(BUCKET).remove([story.media_path])
+  if(storageError)console.warn('Deleted story left an orphaned media object',storageError)
+
+  if(!viewer)return
+  const nextGroups=groups()
+  const sameGroupIndex=nextGroups.findIndex(group=>group.member.id===me)
+  if(sameGroupIndex<0){
+    closeViewer()
+    return
+  }
+  viewerGroups=nextGroups
+  viewerGroupIndex=sameGroupIndex
+  viewerStoryIndex=Math.min(viewerStoryIndex,viewerGroups[viewerGroupIndex].stories.length-1)
+  viewerPaused=false
+  await drawViewer()
+}
+
 async function drawViewer(){
   if(!viewer)return
   const token=++viewerDrawToken
   clearViewerTimer()
+  closeActionSheet()
   const group=viewerGroups[viewerGroupIndex]
   const story=group?.stories[viewerStoryIndex]
   if(!group||!story){closeViewer();return}
 
-  viewer.innerHTML=`<div class="family-story-viewer-top"><div class="family-story-progress">${group.stories.map((_,index)=>`<i class="${index<viewerStoryIndex?'seen':index===viewerStoryIndex?'active':''}"></i>`).join('')}</div><div class="family-story-viewer-head">${avatarMarkup(group.member,'family-story-viewer-avatar')}<div class="family-story-viewer-who"><b>${esc(group.member.name)}</b><span>${age(story.created_at)}</span></div><button class="family-story-viewer-close" aria-label="Cerrar">×</button></div></div><div class="family-story-stage"><div class="family-story-loading">Cargando historia…</div><div class="family-story-stage-nav"><button data-story-prev aria-label="Historia anterior"></button><button data-story-next aria-label="Historia siguiente"></button></div></div>`
+  const own=group.member.id===identity()?.memberId
+  const ownerActions=own?'<button class="family-story-viewer-more" data-story-more aria-label="Opciones de tu historia">⋯</button>':''
+  viewer.innerHTML=`<div class="family-story-viewer-top"><div class="family-story-progress">${group.stories.map((_,index)=>`<i class="${index<viewerStoryIndex?'seen':index===viewerStoryIndex?'active':''}"></i>`).join('')}</div><div class="family-story-viewer-head">${avatarMarkup(group.member,'family-story-viewer-avatar')}<div class="family-story-viewer-who"><b>${esc(group.member.name)}</b><span>${age(story.created_at)}</span></div>${ownerActions}<button class="family-story-viewer-close" aria-label="Cerrar">×</button></div></div><div class="family-story-stage"><div class="family-story-loading">Cargando historia…</div><div class="family-story-stage-nav"><button data-story-prev aria-label="Historia anterior"></button><button data-story-next aria-label="Historia siguiente"></button></div></div>`
 
   viewer.querySelector('.family-story-viewer-close')?.addEventListener('click',closeViewer)
+  viewer.querySelector('[data-story-more]')?.addEventListener('click',()=>showOwnStoryActions(story,viewerStoryIndex+1,group.stories.length))
   viewer.querySelector('[data-story-prev]')?.addEventListener('click',event=>{event.stopPropagation();moveViewer(-1)})
   viewer.querySelector('[data-story-next]')?.addEventListener('click',event=>{event.stopPropagation();moveViewer(1)})
   const stage=viewer.querySelector<HTMLElement>('.family-story-stage')!
@@ -377,7 +474,10 @@ async function drawViewer(){
   image.src=url
   image.alt=`Historia de ${group.member.name}`
   image.decoding='async'
-  image.addEventListener('load',()=>loading?.remove(),{once:true})
+  image.addEventListener('load',()=>{
+    loading?.remove()
+    void markViewed(story)
+  },{once:true})
   image.addEventListener('error',()=>{if(loading)loading.textContent='No se pudo abrir esta historia.'},{once:true})
   stage.insertBefore(image,stage.querySelector('.family-story-stage-nav'))
   scheduleViewer()
@@ -387,13 +487,12 @@ async function openViewer(memberId:string){
   viewerGroups=groups()
   const groupIndex=viewerGroups.findIndex(group=>group.member.id===memberId)
   if(groupIndex<0)return
+  const targetGroup=viewerGroups[groupIndex]
+  const me=identity()?.memberId||''
+  const firstUnseen=targetGroup.member.id===me?-1:targetGroup.stories.findIndex(story=>!viewedStoryIds.has(story.id))
   viewerGroupIndex=groupIndex
-  viewerStoryIndex=0
+  viewerStoryIndex=firstUnseen>=0?firstUnseen:0
   viewerPaused=false
-  closeViewerDirect()
-  viewerGroups=groups()
-  viewerGroupIndex=viewerGroups.findIndex(group=>group.member.id===memberId)
-  if(viewerGroupIndex<0)return
 
   const root=document.createElement('div')
   root.className='family-story-viewer'
@@ -413,6 +512,7 @@ function scan(){
     stopRealtime()
     closePicker()
     closePreview()
+    closeActionSheet()
     if(viewer)closeViewerDirect()
     if(identity()?.memberId&&!dataReady&&!loading)void refreshStories()
     return
@@ -431,6 +531,7 @@ window.addEventListener('familia-noa:identity-changed',()=>{
   members=[]
   profiles.clear()
   stories=[]
+  viewedStoryIds.clear()
   scan()
 })
 
