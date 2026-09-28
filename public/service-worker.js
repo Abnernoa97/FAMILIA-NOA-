@@ -1,4 +1,4 @@
-const CACHE = 'familia-noa-v47';
+const CACHE = 'familia-noa-v48';
 const BASE = new URL(self.registration.scope).pathname;
 const STATIC = [
   BASE,
@@ -41,19 +41,28 @@ self.addEventListener('push', event => {
       catch { payload = {}; }
     }
 
+    const emergency = payload.type === 'family-emergency';
     const title = payload.title || 'FAMILIA NOA';
     const body = payload.message || payload.body || 'Tienes una nueva actualización.';
     const tag = payload.tag || 'familia-noa';
 
-    await self.registration.showNotification(title, {
+    const options = {
       body,
       tag,
       renotify: true,
       icon: BASE + 'icons/icon-192.svg',
       badge: BASE + 'icons/icon-192.svg',
-      vibrate: [180, 80, 180],
+      vibrate: emergency ? [700, 180, 700, 180, 1000] : [180, 80, 180],
+      requireInteraction: emergency,
+      silent: false,
       data: payload
-    });
+    };
+
+    if (emergency) {
+      options.actions = [{ action:'open-emergency', title:'ABRIR EMERGENCIA' }];
+    }
+
+    await self.registration.showNotification(title, options);
   })());
 });
 
