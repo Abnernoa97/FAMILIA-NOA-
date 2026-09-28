@@ -109,10 +109,11 @@ const loadLocation = async () => {
   if (locationLoaded || !document.querySelector('.location-page')) return
   try {
     await import('./location-map-enhancer')
+    await import('./location-privacy-enhancer')
     locationLoaded = true
   } catch (error) {
     locationLoaded = false
-    console.error('Location map enhancer failed to load', error)
+    console.error('Location enhancer failed to load', error)
   }
 }
 
