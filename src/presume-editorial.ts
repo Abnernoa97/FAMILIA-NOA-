@@ -26,8 +26,16 @@ function decorateQuickActions(root:HTMLElement){
 function compactChallenge(){
   const root=document.querySelector<HTMLElement>('.presume-screen')
   if(!root)return
+
+  // Stories now live on Home as their own 24-hour feature. Keep PRESUME focused
+  // on the photo reminder and family feed.
+  root.querySelector('.pres-stories')?.remove()
+
   const challenge=root.querySelector<HTMLElement>('.pres-challenge')
-  if(!challenge)return
+  if(!challenge){
+    decorateQuickActions(root)
+    return
+  }
 
   const eyebrow=challenge.querySelector<HTMLElement>('.eyebrow')
   if(eyebrow){
@@ -37,17 +45,6 @@ function compactChallenge(){
 
   const main=challenge.querySelector<HTMLButtonElement>('.pres-main')
   const done=!!main?.classList.contains('done')
-  const support=[...challenge.querySelectorAll<HTMLParagraphElement>('p')].find(p=>!p.classList.contains('eyebrow'))
-  if(support){
-    const next=done?'Ya compartiste tu momento.':'Una foto real, sin preparar.'
-    if(support.textContent!==next)support.textContent=next
-  }
-
-  if(main){
-    const next=done?'Mira a la familia':'PRESUME'
-    if(main.textContent!==next)main.textContent=next
-  }
-
   const reminder=root.querySelector<HTMLButtonElement>('.pres-reminder')
   if(reminder){
     const active=reminder.dataset.realPush==='1'||reminder.textContent?.toLowerCase().includes('activados')
@@ -55,6 +52,19 @@ function compactChallenge(){
     if(reminder.textContent!==next)reminder.textContent=next
     if(reminder.parentElement===challenge)challenge.insertAdjacentElement('afterend',reminder)
   }
+
+  // Once today's current slot has been completed, the black reminder disappears.
+  // The base PRESUME renderer creates it again automatically when the next slot is due.
+  if(done){
+    challenge.remove()
+    decorateQuickActions(root)
+    return
+  }
+
+  const support=[...challenge.querySelectorAll<HTMLParagraphElement>('p')].find(p=>!p.classList.contains('eyebrow'))
+  if(support&&support.textContent!=='Una foto real, sin preparar.')support.textContent='Una foto real, sin preparar.'
+
+  if(main&&main.textContent!=='PRESUME')main.textContent='PRESUME'
 
   decorateQuickActions(root)
 }
