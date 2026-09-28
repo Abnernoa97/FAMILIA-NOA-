@@ -50,6 +50,13 @@ function avatarMarkup(member:Member,cls='family-story-avatar'){
   return `<span class="${cls}">${url?`<img src="${esc(url)}" alt="${esc(member.name)}">`:esc(member.name.charAt(0)||'?')}</span>`
 }
 
+function storyCoverMarkup(group:StoryGroup){
+  const latest=group.stories[group.stories.length-1]
+  const url=mediaUrl(latest?.media_path)
+  if(!url)return avatarMarkup(group.member)
+  return `<span class="family-story-avatar"><img src="${esc(url)}" alt="Historia de ${esc(group.member.name)}" loading="lazy" decoding="async"></span>`
+}
+
 function activeStories(){
   const now=Date.now()
   return stories.filter(story=>new Date(story.expires_at).getTime()>now)
@@ -82,8 +89,9 @@ function groups(){
   return ordered.map(member=>({member,stories:byMember.get(member.id)||[]}))
 }
 
-function storyTile(member:Member,own=false){
-  return `<div class="family-story-item ${own?'family-story-own':''}"><button class="family-story-main has-story" data-home-story-member="${esc(member.id)}" aria-label="Ver historia de ${esc(member.name)}"><span class="family-story-frame"><span class="family-story-inner">${avatarMarkup(member)}</span></span></button>${own?'<button class="family-story-plus" data-home-story-create aria-label="Agregar a tu historia">+</button>':''}<span class="family-story-name">${own?'Tu historia':esc(member.name)}</span></div>`
+function storyTile(group:StoryGroup,own=false){
+  const member=group.member
+  return `<div class="family-story-item ${own?'family-story-own':''}"><button class="family-story-main has-story" data-home-story-member="${esc(member.id)}" aria-label="Ver historia de ${esc(member.name)}"><span class="family-story-frame"><span class="family-story-inner">${storyCoverMarkup(group)}</span></span></button>${own?'<button class="family-story-plus" data-home-story-create aria-label="Agregar a tu historia">+</button>':''}<span class="family-story-name">${own?'Tu historia':esc(member.name)}</span></div>`
 }
 
 function createTile(member:Member){
@@ -107,7 +115,7 @@ function renderRail(){
   const section=document.createElement('section')
   section.className='family-story-home'
   section.setAttribute('aria-label','Historias de la familia')
-  section.innerHTML=`<div class="family-story-scroll">${ownGroup?storyTile(mine,true):createTile(mine)}${others.map(group=>storyTile(group.member)).join('')}</div>`
+  section.innerHTML=`<div class="family-story-scroll">${ownGroup?storyTile(ownGroup,true):createTile(mine)}${others.map(group=>storyTile(group)).join('')}</div>`
   top.insertAdjacentElement('afterend',section)
   shell.classList.add('has-home-stories')
 
