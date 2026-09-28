@@ -35,6 +35,7 @@ const loadProfile = async () => {
   try {
     await import('./profile-enhancer')
     await import('./profile-featured-media')
+    await import('./profile-realtime')
     profileLoaded = true
   } catch (error) {
     profileLoaded = false
@@ -45,6 +46,7 @@ const loadProfile = async () => {
 const loadAssistant = async () => {
   if (assistantLoaded || !document.querySelector('.shell')) return
   try {
+    await import('./profile-noa-guard')
     await import('./profile-assistant')
     await import('./noa-minimal.css')
     assistantLoaded = true
