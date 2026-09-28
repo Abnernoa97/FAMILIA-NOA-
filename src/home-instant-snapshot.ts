@@ -181,6 +181,14 @@ document.addEventListener('click',event=>{
   if(!create&&!member)return
   event.preventDefault()
   event.stopImmediatePropagation()
+
+  // The instant rail is only a painted snapshot and has no live handlers.
+  // Remove it on the first interaction so home-stories can synchronously
+  // replace it with the real rail, then replay the user's tap there.
+  const shell=cached.closest<HTMLElement>('.shell')
+  cached.remove()
+  shell?.classList.remove('has-home-stories')
+
   if(create)queueAction({kind:'create'})
   else queueAction({kind:'member',memberId:member?.dataset.homeStoryMember||''})
 },true)
