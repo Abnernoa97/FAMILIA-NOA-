@@ -2,6 +2,7 @@ export type OutboxJob={id:string;busy:boolean}
 
 type PersistedJob<T>={scope:string;job:T}
 const DB='familia-noa-outbox',STORE='jobs',VERSION=1
+const RETRY_DELAYS=[1500,3500,8000,15000,30000]
 
 function db():Promise<IDBDatabase>{
  return new Promise((resolve,reject)=>{
@@ -30,13 +31,30 @@ async function load(scope:string):Promise<any[]>{
 export class Outbox<T extends OutboxJob>{
  private jobs=new Map<string,T>()
  private online:()=>void
+ private visible:()=>void
+ private retryTimer:number|null=null
+ private retryAttempt=0
+ private disposed=false
  constructor(
   private send:(job:T)=>Promise<void>,
   private scope='default',
   private normalize?:(job:any)=>T|null
  ){
-  this.online=()=>this.retryAll()
+  this.online=()=>{this.retryAttempt=0;this.cancelRetry();this.retryAll()}
+  this.visible=()=>{if(document.visibilityState==='visible'){this.retryAttempt=0;this.cancelRetry();this.retryAll()}}
   window.addEventListener('online',this.online)
+  document.addEventListener('visibilitychange',this.visible)
+ }
+ private cancelRetry(){if(this.retryTimer!==null){window.clearTimeout(this.retryTimer);this.retryTimer=null}}
+ private scheduleRetry(){
+  if(this.disposed||!this.jobs.size||this.retryTimer!==null||navigator.onLine===false)return
+  const delay=RETRY_DELAYS[Math.min(this.retryAttempt,RETRY_DELAYS.length-1)]
+  this.retryAttempt=Math.min(this.retryAttempt+1,RETRY_DELAYS.length-1)
+  this.retryTimer=window.setTimeout(()=>{
+   this.retryTimer=null
+   if(this.disposed||navigator.onLine===false)return
+   this.retryAll()
+  },delay)
  }
  async restore(onRestore?:(job:T)=>void){
   if(!('indexedDB'in window))return
@@ -51,11 +69,42 @@ export class Outbox<T extends OutboxJob>{
    this.retryAll()
   }catch(error){console.error('Outbox restore failed',error)}
  }
- async add(job:T){this.jobs.set(job.id,job);if('indexedDB'in window){try{await put(this.scope,job)}catch(error){console.error('Outbox persist failed',error)}}void this.run(job).catch(()=>{})}
+ async add(job:T){
+  this.jobs.set(job.id,job)
+  if('indexedDB'in window){try{await put(this.scope,job)}catch(error){console.error('Outbox persist failed',error)}}
+  void this.run(job).catch(()=>{})
+ }
  get(id:string){return this.jobs.get(id)}
- done(id:string){this.jobs.delete(id);if('indexedDB'in window)void remove(this.scope,id).catch(error=>console.error('Outbox cleanup failed',error))}
- async run(job:T){if(job.busy)return;job.busy=true;try{await this.send(job)}catch{job.busy=false;throw new Error('OUTBOX_SEND_FAILED')}}
+ done(id:string){
+  this.jobs.delete(id)
+  if(!this.jobs.size){this.retryAttempt=0;this.cancelRetry()}
+  if('indexedDB'in window)void remove(this.scope,id).catch(error=>console.error('Outbox cleanup failed',error))
+ }
+ async run(job:T){
+  if(job.busy||this.disposed)return
+  job.busy=true
+  try{
+   await this.send(job)
+   this.retryAttempt=0
+  }catch{
+   job.busy=false
+   this.scheduleRetry()
+   throw new Error('OUTBOX_SEND_FAILED')
+  }
+ }
  retry(id:string){const job=this.jobs.get(id);if(job&&!job.busy)void this.run(job).catch(()=>{})}
- retryAll(){this.jobs.forEach(job=>{if(!job.busy)void this.run(job).catch(()=>{})})}
- clear(cleanup?:(job:T)=>void){this.jobs.forEach(job=>cleanup?.(job));this.jobs.clear();window.removeEventListener('online',this.online)}
+ retryAll(){
+  if(this.disposed||navigator.onLine===false)return
+  let attempted=false
+  this.jobs.forEach(job=>{if(!job.busy){attempted=true;void this.run(job).catch(()=>{})}})
+  if(!attempted&&this.jobs.size)this.scheduleRetry()
+ }
+ clear(cleanup?:(job:T)=>void){
+  this.disposed=true
+  this.cancelRetry()
+  this.jobs.forEach(job=>cleanup?.(job))
+  this.jobs.clear()
+  window.removeEventListener('online',this.online)
+  document.removeEventListener('visibilitychange',this.visible)
+ }
 }
