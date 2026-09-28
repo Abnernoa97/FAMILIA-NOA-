@@ -109,14 +109,15 @@ function addLogin() {
 }
 
 export async function getPasskeyStatus(memberId = getIdentity()?.memberId || '') {
-  if (!memberId || !passkeySupported()) return { has:false, ids:[] as string[], supported:passkeySupported() }
+  const device=readDevice()
+  if (!memberId || !passkeySupported()) return { has:false, ids:[] as string[], supported:passkeySupported(), deviceReady:false }
   try {
     const result = await call('passkey-status', { member_id: memberId })
     const ids = Array.isArray(result?.credential_ids) ? result.credential_ids.filter((id: unknown): id is string => typeof id === 'string') : []
-    if (result?.hasPasskey && ids[0]) writeDevice({ memberId, credentialId:ids[0] })
-    return { has:!!result?.hasPasskey, ids, supported:true }
+    const deviceReady=!!device?.credentialId&&device.memberId===memberId&&ids.includes(device.credentialId)
+    return { has:!!result?.hasPasskey, ids, supported:true, deviceReady }
   } catch {
-    return { has:false, ids:[] as string[], supported:true }
+    return { has:false, ids:[] as string[], supported:true, deviceReady:false }
   }
 }
 
@@ -125,7 +126,7 @@ export async function enablePasskeyForCurrentMember() {
   if (!identity?.memberId) throw new Error('Primero entra con tu perfil familiar.')
   if (!passkeySupported()) throw new Error('Este dispositivo no permite huella o Face ID desde la app.')
   const status = await getPasskeyStatus(identity.memberId)
-  if (status.has) {
+  if (status.deviceReady) {
     document.dispatchEvent(new CustomEvent('family:passkey-changed'))
     return true
   }
@@ -146,7 +147,7 @@ async function addSetup() {
   setupInProgress = true
   try {
     const status = await getPasskeyStatus(identity.memberId)
-    if (status.has) return
+    if (status.deviceReady) return
     const button = document.createElement('button')
     button.id = 'enableBiometric'
     button.className = 'biometric-setup'
