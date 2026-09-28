@@ -8,6 +8,7 @@ const STORE='snapshots'
 const DB_VERSION=1
 const MAX_AGE=10*60*1000
 const MAX_HTML=900_000
+const CHAT_SNAPSHOT_MESSAGES=50
 const STALE='data-view-cache'
 const memory=new Map<string,Snapshot>()
 let dbPromise:Promise<IDBDatabase|null>|null=null
@@ -157,6 +158,10 @@ function captureChat(){
   clone.querySelectorAll('.chat-pending,[data-pending-id],[data-pending-text-id]').forEach(node=>node.remove())
   clone.querySelectorAll('.reactions-open').forEach(node=>node.classList.remove('reactions-open'))
   clone.querySelectorAll(`[${STALE}]`).forEach(node=>node.remove())
+  const bubbles=Array.from(clone.querySelectorAll<HTMLElement>('.chat-bubble[data-message-id]'))
+  if(bubbles.length>CHAT_SNAPSHOT_MESSAGES){
+    bubbles.slice(0,bubbles.length-CHAT_SNAPSHOT_MESSAGES).forEach(node=>node.remove())
+  }
   if(!clone.querySelector('.chat-bubble,.chat-empty'))return
   write('chat',clone.innerHTML)
 }
