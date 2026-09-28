@@ -15,10 +15,13 @@ type FeaturedRow={
 
 let activeMemberId=''
 let renderTimer:number|null=null
-let busy=false
+let rendering=false
+let mutationBusy=false
+let realtimeChannel:ReturnType<typeof supabase.channel>|null=null
+let realtimeMemberId=''
 
 function esc(value:string){
-  return String(value||'').replace(/[&<>"']/g,char=>({'&':'&amp;','<':'&lt;','>':'&gt;','"':'&quot;',"'":'&#039;'}[char]||char))
+  return String(value||'').replace(/[&<>"']/g,char=>({'&':'&amp;','<':'&lt;','>':'&gt;','"':'&quot',"'":'&#039;'}[char]||char))
 }
 
 function injectStyles(){
@@ -70,17 +73,36 @@ async function openFeatured(rows:FeaturedRow[],index:number){
   openMediaViewer(items,Math.min(index,items.length-1))
 }
 
+function stopRealtime(){
+  realtimeChannel?.unsubscribe()
+  realtimeChannel=null
+  realtimeMemberId=''
+}
+
+function startRealtime(memberId:string,detail:HTMLElement){
+  if(realtimeChannel&&realtimeMemberId===memberId)return
+  stopRealtime()
+  realtimeMemberId=memberId
+  realtimeChannel=supabase.channel(`profile-featured-${memberId}-${Date.now()}`)
+    .on('postgres_changes',{event:'*',schema:'public',table:'profile_featured_media',filter:`member_id=eq.${memberId}`},()=>{
+      if(detail.isConnected)scheduleRender(detail,20)
+    })
+    .subscribe()
+}
+
 async function render(detail:HTMLElement){
-  if(!detail.isConnected||busy)return
+  if(!detail.isConnected||rendering||mutationBusy)return
   const memberId=await resolveMemberId(detail)
   if(!memberId||!detail.isConnected)return
-  busy=true
+  startRealtime(memberId,detail)
+  rendering=true
   try{
     const rows=await loadRows(memberId)
     await primeMedia(rows.map(row=>row.storage_path))
     if(!detail.isConnected)return
     const mine=getIdentity()?.memberId===memberId
     const visible=rows.map(row=>({row,src:mediaUrl(row.storage_path)})).filter(item=>!!item.src)
+    const visibleRows=visible.map(item=>item.row)
     const selectedIds=new Set(rows.map(row=>row.source_photo_id).filter((id):id is string=>!!id))
 
     detail.querySelectorAll<HTMLButtonElement>('[data-feature-photo]').forEach(star=>{
@@ -97,12 +119,12 @@ async function render(detail:HTMLElement){
       :(mine?'<div class="profile-feature-empty">Toca ☆ en hasta 3 fotos para destacar tus momentos favoritos.</div>':'')
 
     target.querySelectorAll<HTMLButtonElement>('[data-normalized-feature-index]').forEach(button=>button.addEventListener('click',()=>{
-      void openFeatured(rows,Number(button.dataset.normalizedFeatureIndex||0))
+      void openFeatured(visibleRows,Number(button.dataset.normalizedFeatureIndex||0))
     }))
   }catch(error){
     console.error('Profile featured media load failed',error)
   }finally{
-    busy=false
+    rendering=false
   }
 }
 
@@ -133,10 +155,10 @@ document.addEventListener('click',event=>{
   event.preventDefault()
   event.stopPropagation()
   event.stopImmediatePropagation()
-  if(busy)return
+  if(mutationBusy)return
 
   void(async()=>{
-    busy=true
+    mutationBusy=true
     status(detail,'Guardando…')
     try{
       if(star){
@@ -158,23 +180,33 @@ document.addEventListener('click',event=>{
       console.error('Profile featured media update failed',error)
       status(detail,'No se pudieron guardar los destacados.')
     }finally{
-      busy=false
+      mutationBusy=false
       scheduleRender(detail,0)
     }
   })()
 },true)
 
 const observer=new MutationObserver(mutations=>{
+  let detail:HTMLElement|null=null
   for(const mutation of mutations){
     for(const node of Array.from(mutation.addedNodes)){
       if(!(node instanceof Element))continue
-      const detail=node.matches('.profile-detail')?node as HTMLElement:node.querySelector<HTMLElement>('.profile-detail')
-      if(detail){scheduleRender(detail,0);return}
+      detail=node.matches('.profile-detail')?node as HTMLElement:node.querySelector<HTMLElement>('.profile-detail')
+      if(detail)break
     }
+    if(detail)break
+  }
+  if(detail){scheduleRender(detail,0);return}
+  if(!document.querySelector('.profile-detail')){
+    activeMemberId=''
+    stopRealtime()
   }
 })
 observer.observe(document.body,{childList:true,subtree:true})
 
 window.addEventListener('popstate',()=>{
-  if(!document.querySelector('.profile-detail'))activeMemberId=''
+  if(!document.querySelector('.profile-detail')){
+    activeMemberId=''
+    stopRealtime()
+  }
 })
