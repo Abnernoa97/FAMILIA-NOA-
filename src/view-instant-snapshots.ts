@@ -90,11 +90,27 @@ async function clearPersistent(){
 function marker(kind:Kind){return `<i ${STALE}="${kind}" hidden></i>`}
 function hasMarker(root:ParentNode,kind:Kind){return !!root.querySelector(`[${STALE}="${kind}"]`)}
 
+function matchAlbumLayout(root:HTMLElement){
+  // Paint the cached album with the same final geometry before albums-enhancer
+  // refreshes it. This prevents Android from showing a one-frame scale/zoom jump.
+  root.style.minHeight='100dvh'
+  root.style.maxWidth='760px'
+  root.style.margin='0 auto'
+  root.style.display='block'
+  root.style.background='#f5f2eb'
+  root.style.padding='22px 18px 110px'
+  if(window.matchMedia('(max-width:430px)').matches){
+    root.style.paddingLeft='14px'
+    root.style.paddingRight='14px'
+  }
+}
+
 function restorePhotos(){
   const root=document.querySelector<HTMLElement>('[data-photo-page]')
   if(!root||hasMarker(root,'photos')||!root.querySelector('.loading'))return
   const snapshot=read('photos')
   if(!snapshot)return
+  matchAlbumLayout(root)
   root.className='page photo-page instant-photo-snapshot'
   root.innerHTML=marker('photos')+snapshot.html
 }
