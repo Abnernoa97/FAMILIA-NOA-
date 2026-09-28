@@ -38,7 +38,6 @@ function fallback(root:HTMLElement,message='Toca para abrir la cámara del telé
 
 async function openLiveCamera(slot:Slot){
   if(active)return
-  if(navigator.userActivation?.isActive)return
   active=true
   const root=document.createElement('div')
   root.className='pres-live-camera'
@@ -52,6 +51,7 @@ async function openLiveCamera(slot:Slot){
 
   if(!navigator.mediaDevices?.getUserMedia){fallback(root);return}
   try{
+    await new Promise<void>(resolve=>requestAnimationFrame(()=>resolve()))
     const stream=await navigator.mediaDevices.getUserMedia({video:{facingMode:{ideal:'environment'},width:{ideal:1920},height:{ideal:1080}},audio:false})
     if(!root.isConnected){stream.getTracks().forEach(track=>track.stop());return}
     liveStream=stream
@@ -92,7 +92,7 @@ async function openLiveCamera(slot:Slot){
   }
 }
 
-document.addEventListener('presume:open-challenge-camera',event=>{
+document.addEventListener('presume:open-push-camera',event=>{
   const detail=(event as CustomEvent<{slot?:Slot}>).detail
   const slot:Slot=detail?.slot==='afternoon'?'afternoon':'morning'
   void openLiveCamera(slot)
