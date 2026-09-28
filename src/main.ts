@@ -5,6 +5,7 @@ import { closeChat, openChat } from './chat-core'
 import { startHomeChatUnread, stopHomeChatUnread } from './chat-features'
 import { initNavigation, enterView, replaceView, backView, type AppView } from './core/navigation'
 import { closeMediaViewer, isMediaViewerOpen } from './core/media-viewer'
+import { clearPrivateMediaCache } from './core/private-media'
 
 type Member = { id: string; name: string; active: boolean; must_share_location: boolean }
 type FamilySessionResponse = {
@@ -20,15 +21,35 @@ type FamilyLocation = {
   accuracy:number|null
   updated_at:string
 }
+type HomeBootstrap = {
+  memberId:string
+  memberName:string
+  members:Member[]
+  settings:any
+  savedAt:number
+}
 
 const FALLBACK = ['Mamá', 'Papá', 'Romel', 'Osniel', 'Abner']
-let members: Member[] = []
-let membersLoaded = false
-let settingsLoaded = false
-let settingsCache: any = null
+const HOME_BOOTSTRAP_KEY='familia-noa-home-bootstrap-v1'
+
+function readHomeBootstrap():HomeBootstrap|null{
+  try{
+    const raw=localStorage.getItem(HOME_BOOTSTRAP_KEY)
+    if(!raw)return null
+    const parsed=JSON.parse(raw) as HomeBootstrap
+    if(!parsed?.memberId||!parsed?.memberName||!Array.isArray(parsed.members))return null
+    return parsed
+  }catch{return null}
+}
+
+const cachedBootstrap=readHomeBootstrap()
+let members: Member[] = cachedBootstrap?.members?.length ? cachedBootstrap.members : []
+let membersLoaded = members.length>0
+let settingsLoaded = cachedBootstrap ? true : false
+let settingsCache: any = cachedBootstrap?.settings ?? null
 const initialIdentity = getIdentity()
-let memberName = initialIdentity?.name || ''
-let memberId = initialIdentity?.memberId || ''
+let memberName = initialIdentity?.name || cachedBootstrap?.memberName || ''
+let memberId = initialIdentity?.memberId || cachedBootstrap?.memberId || ''
 let settingsChannel: ReturnType<typeof supabase.channel> | null = null
 let familySyncChannel: ReturnType<typeof supabase.channel> | null = null
 let mandatoryLocationVerified = false
@@ -37,6 +58,23 @@ const app = document.querySelector<HTMLDivElement>('#app')!
 document.title = 'FAMILIA NOA'
 
 const esc = (value: string) => value.replace(/[&<>"']/g, char => ({ '&':'&amp;', '<':'&lt;', '>':'&gt;', '"':'&quot;', "'":'&#039;' }[char] || char))
+
+function saveHomeBootstrap(){
+  if(!memberId||!memberName||!members.length)return
+  try{
+    localStorage.setItem(HOME_BOOTSTRAP_KEY,JSON.stringify({
+      memberId,
+      memberName,
+      members,
+      settings:settingsCache,
+      savedAt:Date.now()
+    } satisfies HomeBootstrap))
+  }catch{}
+}
+
+function clearHomeBootstrap(){
+  try{localStorage.removeItem(HOME_BOOTSTRAP_KEY)}catch{}
+}
 
 function locationAge(value:string){
   const ms=Date.now()-new Date(value).getTime()
@@ -54,9 +92,11 @@ function locationAge(value:string){
 async function loadMembers(force = false) {
   if (membersLoaded && !force) return
   const { data } = await supabase.from('family_members').select('id,name,active,must_share_location').eq('active', true).order('created_at')
-  members = (data || []) as Member[]
+  const loaded=(data || []) as Member[]
+  if(loaded.length)members=loaded
+  else if(!members.length)members = FALLBACK.map((name, index) => ({ id:String(index), name, active:true, must_share_location:name === 'Mamá' || name === 'Papá' }))
   membersLoaded = true
-  if (!members.length) members = FALLBACK.map((name, index) => ({ id:String(index), name, active:true, must_share_location:name === 'Mamá' || name === 'Papá' }))
+  saveHomeBootstrap()
 }
 
 function currentMember(){
@@ -75,6 +115,8 @@ function stopActiveViews() {
 async function clearFamilySession() {
   try { await supabase.auth.signOut({ scope:'local' }) } catch {}
   clearIdentity()
+  clearHomeBootstrap()
+  clearPrivateMediaCache()
   memberName = ''
   memberId = ''
   mandatoryLocationVerified = false
@@ -97,6 +139,7 @@ async function acceptFamilySession(result: FamilySessionResponse) {
   memberId = profile.id
   mandatoryLocationVerified = false
   mandatoryLocationGateActive = false
+  saveHomeBootstrap()
 }
 
 function login(errorText = '') {
@@ -128,6 +171,7 @@ function securityStep(name: string) {
       await acceptFamilySession(result)
       startSettingsRealtime()
       startFamilyRealtime()
+      saveHomeBootstrap()
       enterFamilyHome()
     } catch (loginError) {
       console.error('Family session login failed', loginError)
@@ -158,9 +202,10 @@ async function loadSettings(force = false) {
     return
   }
   const { data } = await supabase.from('app_settings').select('settings').eq('id', 'global').maybeSingle()
-  settingsCache = data?.settings || null
+  settingsCache = data?.settings || settingsCache || null
   settingsLoaded = true
   if (settingsCache) applySettings(settingsCache)
+  saveHomeBootstrap()
 }
 
 function startSettingsRealtime() {
@@ -170,6 +215,7 @@ function startSettingsRealtime() {
       settingsCache = (payload.new as any).settings || null
       settingsLoaded = true
       applySettings(settingsCache)
+      saveHomeBootstrap()
     })
     .subscribe()
 }
@@ -191,6 +237,7 @@ function startFamilyRealtime() {
         } else if (index >= 0) members.splice(index, 1)
       }
       membersLoaded = true
+      saveHomeBootstrap()
       const current = members.find(member => member.id === memberId)
       if (!current) {
         void clearFamilySession()
@@ -403,7 +450,63 @@ function sheet(title: string, text: string) {
   element.addEventListener('click', event => { if (event.target === element) element.remove() })
 }
 
+async function refreshFastBoot(expectedMemberId:string){
+  try{
+    const [authenticated]=await Promise.all([
+      getAuthenticatedFamilyMember(),
+      loadMembers(true),
+      loadSettings(true)
+    ])
+    if(!authenticated||authenticated.id!==expectedMemberId){
+      // Do not tear down a usable cached screen for a transient network failure.
+      // Supabase will reject protected reads/actions and the next authenticated event
+      // will reconcile the session. A verified active profile refreshes the cache below.
+      return
+    }
+    memberId=authenticated.id
+    memberName=authenticated.name
+    const identity=getIdentity()
+    if(!identity||identity.memberId!==authenticated.id||identity.name!==authenticated.name){
+      setIdentity({memberId:authenticated.id,name:authenticated.name})
+    }
+    saveHomeBootstrap()
+    if(requiresMandatoryLocation()){
+      renderMandatoryLocation()
+      return
+    }
+    const title=document.querySelector<HTMLElement>('.top h1')
+    if(title)title.innerHTML=`Hola, ${esc(memberName)} <span>♡</span>`
+    if(settingsCache)applySettings(settingsCache)
+  }catch(error){
+    console.warn('Background home refresh failed',error)
+  }
+}
+
 async function boot() {
+  const {data:{session}}=await supabase.auth.getSession()
+  const sessionMemberId=String(session?.user?.app_metadata?.member_id||'')
+  const familySession=!!session&&session.user?.app_metadata?.family_member===true&&!!sessionMemberId
+  const cached=readHomeBootstrap()
+
+  if(familySession&&cached&&cached.memberId===sessionMemberId&&cached.members.length){
+    members=cached.members
+    membersLoaded=true
+    settingsCache=cached.settings??null
+    settingsLoaded=true
+    memberId=cached.memberId
+    memberName=cached.memberName
+    const identity=getIdentity()
+    if(!identity||identity.memberId!==memberId||identity.name!==memberName){
+      setIdentity({memberId,name:memberName})
+    }
+    mandatoryLocationVerified=false
+    startSettingsRealtime()
+    startFamilyRealtime()
+    enterFamilyHome()
+    void refreshFastBoot(sessionMemberId)
+    return
+  }
+
   await loadMembers()
   const authenticated = await getAuthenticatedFamilyMember()
   if (authenticated && members.some(member => member.id === authenticated.id)) {
@@ -414,6 +517,7 @@ async function boot() {
     memberId = authenticated.id
     memberName = authenticated.name
     mandatoryLocationVerified=false
+    saveHomeBootstrap()
     startSettingsRealtime()
     startFamilyRealtime()
     enterFamilyHome()
