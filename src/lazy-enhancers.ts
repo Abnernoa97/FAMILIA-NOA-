@@ -6,9 +6,10 @@ let presumeLoaded = false
 let presumeLoading = false
 let albumsLoaded = false
 let locationLoaded = false
+let deviceOnboardingLoaded = false
 
 const loadBiometric = async () => {
-  if (biometricLoaded || !document.querySelector('.members')) return
+  if (biometricLoaded || (!document.querySelector('.members') && !document.querySelector('.shell'))) return
   try {
     await import('./biometric-enhancer')
     biometricLoaded = true
@@ -72,6 +73,17 @@ const loadPresume = async () => {
   }
 }
 
+const loadDeviceOnboarding = async () => {
+  if (deviceOnboardingLoaded || !document.querySelector('.shell')) return
+  try {
+    await import('./device-onboarding')
+    deviceOnboardingLoaded = true
+  } catch (error) {
+    deviceOnboardingLoaded = false
+    console.error('Device onboarding failed to load', error)
+  }
+}
+
 const loadAlbums = async () => {
   if (albumsLoaded || !document.querySelector('.photo-page')) return
   try {
@@ -109,9 +121,10 @@ function scan() {
   void loadProfile()
   void loadAssistant()
   void loadPresume()
+  void loadDeviceOnboarding()
   void loadAlbums()
   void loadLocation()
-  if (biometricLoaded && profileLoaded && assistantLoaded && presenceLoaded && presumeLoaded && albumsLoaded && locationLoaded) {
+  if (biometricLoaded && profileLoaded && assistantLoaded && presenceLoaded && presumeLoaded && deviceOnboardingLoaded && albumsLoaded && locationLoaded) {
     observer?.disconnect()
     observer = null
   }
