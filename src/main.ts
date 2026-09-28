@@ -273,6 +273,16 @@ function enterFamilyHome(){
   renderHome()
 }
 
+async function openProfileFromHome(button:HTMLButtonElement){
+  try{
+    await import('./profile-enhancer')
+    button.dispatchEvent(new MouseEvent('click',{bubbles:true,cancelable:true,view:window}))
+  }catch(error){
+    console.error('Profile screen failed to load',error)
+    sheet('Perfil no disponible','No se pudo abrir tu perfil en este momento. Inténtalo de nuevo.')
+  }
+}
+
 function renderHome() {
   if(requiresMandatoryLocation()){
     renderMandatoryLocation()
@@ -282,16 +292,14 @@ function renderHome() {
   mandatoryLocationGateActive=false
   closeChat()
   stopHomeChatUnread()
-  app.innerHTML = `<main class="shell"><header class="top"><div><p class="eyebrow">FAMILIA NOA</p><h1>Hola, ${esc(memberName)} <span>♡</span></h1></div><button class="avatar" id="change">${esc(memberName.charAt(0))}</button></header><section class="hero"><p class="eyebrow">TODOS CERCA</p><h2>¿Cómo está la familia hoy?</h2><p>Habla, comparte y revisa que todos estén bien.</p></section><section class="grid"><button class="card dark" id="chat"><i>✦</i><b>Chat</b><small>Habla con todos</small></button><button class="card photo" id="photos"><i>◌</i><b>Fotos</b><small>Momentos de familia</small></button><button class="card" id="location"><i>⌖</i><b>Ubicación</b><small>Ver dónde estamos</small></button><button class="card ok" id="ok"><i>♥</i><b>Estoy bien</b><small>Avísale a la familia</small></button><button class="card help" id="help"><i>!</i><b>Ayuda</b><small>Necesito a mi familia</small></button></section><nav><button class="active">Inicio</button><button id="navchat">Chat</button><button id="navphotos">Fotos</button><button id="navlocation">Ubicación</button></nav></main>`
+  app.innerHTML = `<main class="shell"><header class="top"><div><p class="eyebrow">FAMILIA NOA</p><h1>Hola, ${esc(memberName)} <span>♡</span></h1></div><button class="avatar" id="change" aria-label="Abrir perfil">${esc(memberName.charAt(0))}</button></header><section class="hero"><p class="eyebrow">TODOS CERCA</p><h2>¿Cómo está la familia hoy?</h2><p>Habla, comparte y revisa que todos estén bien.</p></section><section class="grid"><button class="card dark" id="chat"><i>✦</i><b>Chat</b><small>Habla con todos</small></button><button class="card photo" id="photos"><i>◌</i><b>Fotos</b><small>Momentos de familia</small></button><button class="card" id="location"><i>⌖</i><b>Ubicación</b><small>Ver dónde estamos</small></button><button class="card ok" id="ok"><i>♥</i><b>Estoy bien</b><small>Avísale a la familia</small></button><button class="card help" id="help"><i>!</i><b>Ayuda</b><small>Necesito a mi familia</small></button></section><nav><button class="active">Inicio</button><button id="navchat">Chat</button><button id="navphotos">Fotos</button><button id="navlocation">Ubicación</button></nav></main>`
   if (settingsCache) applySettings(settingsCache)
   startHomeChatUnread(memberId)
-  document.querySelector('#change')!.addEventListener('click', async () => {
-    stopActiveViews()
-    familySyncChannel?.unsubscribe()
-    settingsChannel?.unsubscribe()
-    await clearFamilySession()
-    login()
-  })
+  const profileButton=document.querySelector<HTMLButtonElement>('#change')!
+  profileButton.addEventListener('click',event=>{
+    event.preventDefault()
+    void openProfileFromHome(profileButton)
+  },{once:true})
   document.querySelector('#chat')!.addEventListener('click', () => openChatScreen())
   document.querySelector('#navchat')!.addEventListener('click', () => openChatScreen())
   document.querySelector('#photos')!.addEventListener('click', () => void renderPhotos())
@@ -299,7 +307,7 @@ function renderHome() {
   document.querySelector('#location')!.addEventListener('click', () => void renderLocation())
   document.querySelector('#navlocation')!.addEventListener('click', () => void renderLocation())
   document.querySelector('#ok')!.addEventListener('click', setWellbeing)
-  document.querySelector('#help')!.addEventListener('click', sendHelp)
+  document.querySelector('#help')!.addEventListener('click', () => void sendHelp())
 }
 
 async function setWellbeing() {
@@ -310,8 +318,22 @@ async function setWellbeing() {
 
 async function sendHelp() {
   if (!memberId) return
-  const { error } = await supabase.from('help_alerts').insert({ member_id:memberId, message:`${memberName} necesita ayuda.` })
-  sheet(error ? 'No se pudo enviar' : 'Ayuda enviada', error ? 'Inténtalo de nuevo en un momento.' : 'La familia recibirá tu alerta.')
+  try{
+    const {data,error}=await supabase.functions.invoke('family-emergency',{body:{action:'trigger'}})
+    if(error||!data?.ok)throw error||new Error(data?.error||'EMERGENCY_FAILED')
+    sheet('Emergencia activada','La alerta se envió a FAMILIA NOA y se intentará avisar por Push a los dispositivos registrados.')
+  }catch(error){
+    console.error('Family emergency trigger failed from home',error)
+    const {error:fallbackError}=await supabase.from('help_alerts').insert({
+      member_id:memberId,
+      message:`${memberName} activó AYUDA.`,
+      emergency:true
+    })
+    sheet(
+      fallbackError?'No se pudo enviar':'Emergencia activada',
+      fallbackError?'Comprueba tu conexión e inténtalo de nuevo.':'La familia la verá dentro de la app. El Push externo podría no haberse enviado.'
+    )
+  }
 }
 
 async function renderPhotos(push = true) {
@@ -327,7 +349,7 @@ function renderMandatoryLocation(){
   replaceView('location')
   stopHomeChatUnread()
   closeChat()
-  app.innerHTML=`<main class="page location-page"><header class="pagehead"><div style="width:42px"></div><div><p class="eyebrow">FAMILIA NOA</p><h1>Ubicación requerida</h1></div></header><section class="locationbox"><div class="pin">⌖</div><div><p class="eyebrow">OBLIGATORIO</p><h2>Comparte tu ubicación para continuar</h2><p id="locationtext">Para ${esc(memberName)}, la ubicación debe estar activa y actualizarse al entrar a la app.</p></div><button class="primary" id="sharelocation">Activar ubicación y continuar</button></section><section class="family-locations" id="familylocations"><div class="location-section-title"><b>Familia</b><span>Se actualiza en tiempo real</span></div><div class="loading">Cargando…</div></section></main>`
+  app.innerHTML=`<main class="page location-page"><header class="pagehead"><div style="width:42px"></div><div><p class="eyebrow">FAMILIA NOA</p><h1>Ubicación requerida</h1></div></header><section class="locationbox"><div class="pin">⌖</div><div><p class="eyebrow">OBLIGATORIO</p><h2>Comparte tu ubicación para continuar</h2><p id="locationtext">Para ${esc(memberName)}, la ubicación debe estar activa y actualizarse al entrar a la app.</p></div><button class="primary" id="sharelocation">Activar ubicación y continuar</button></section><section class="family-locations" id="familylocations"><div class="location-section-title"><b>Familia</b><span>Se actualiza cuando alguien comparte</span></div><div class="loading">Cargando…</div></section></main>`
   document.querySelector('#sharelocation')!.addEventListener('click',()=>void shareLocation())
   void loadLocations()
 }
@@ -340,7 +362,7 @@ async function renderLocation(push = true) {
   closeChat()
   const current = currentMember()
   const mandatory = !!current?.must_share_location
-  app.innerHTML = `<main class="page location-page"><header class="pagehead"><button id="back" aria-label="Volver">‹</button><div><p class="eyebrow">FAMILIA NOA</p><h1>Ubicación</h1></div></header><section class="locationbox"><div class="pin">⌖</div><div><p class="eyebrow">TU UBICACIÓN</p><h2>${mandatory?'Mantener ubicación al día':'Compartir ubicación'}</h2><p id="locationtext">${mandatory?'La ubicación es obligatoria para este perfil y se verifica cada vez que entras a la app.':'Comparte tu ubicación con la familia cuando quieras.'}</p></div><button class="primary" id="sharelocation">Actualizar ubicación</button></section><section class="family-locations" id="familylocations"><div class="location-section-title"><b>Familia</b><span>Se actualiza en tiempo real</span></div><div class="loading">Cargando…</div></section></main>`
+  app.innerHTML = `<main class="page location-page"><header class="pagehead"><button id="back" aria-label="Volver">‹</button><div><p class="eyebrow">FAMILIA NOA</p><h1>Ubicación</h1></div></header><section class="locationbox"><div class="pin">⌖</div><div><p class="eyebrow">TU UBICACIÓN</p><h2>${mandatory?'Mantener ubicación al día':'Compartir ubicación'}</h2><p id="locationtext">${mandatory?'La ubicación es obligatoria para este perfil y se verifica cada vez que entras a la app.':'Comparte tu ubicación con la familia cuando quieras.'}</p></div><button class="primary" id="sharelocation">Actualizar ubicación</button></section><section class="family-locations" id="familylocations"><div class="location-section-title"><b>Familia</b><span>Se actualiza cuando alguien comparte</span></div><div class="loading">Cargando…</div></section></main>`
   document.querySelector('#back')!.addEventListener('click', () => backView())
   document.querySelector('#sharelocation')!.addEventListener('click', () => void shareLocation())
   await loadLocations()
@@ -418,7 +440,7 @@ async function loadLocations() {
   const { data,error } = await supabase.from('locations').select('member_id,latitude,longitude,accuracy,updated_at').order('updated_at', { ascending:false })
   if(error){
     console.error('Family locations load failed',error)
-    element.innerHTML='<div class="location-section-title"><b>Familia</b><span>Se actualiza en tiempo real</span></div><div class="empty">No se pudieron cargar las ubicaciones. Inténtalo de nuevo.</div>'
+    element.innerHTML='<div class="location-section-title"><b>Familia</b><span>Se actualiza cuando alguien comparte</span></div><div class="empty">No se pudieron cargar las ubicaciones. Inténtalo de nuevo.</div>'
     return
   }
 
@@ -432,13 +454,12 @@ async function loadLocations() {
       return `<div class="locationrow locationrow-empty"><div class="location-person"><span class="location-dot"></span><div><b>${esc(member.name)}${mine?' · tú':''}</b><small>${member.must_share_location?'Ubicación obligatoria pendiente':'Aún no ha compartido ubicación'}</small></div></div></div>`
     }
     const ageMs=Date.now()-new Date(item.updated_at).getTime()
-    const stale=Number.isFinite(ageMs)&&ageMs>24*60*60*1000
+    const stale=Number.isFinite(ageMs)&&ageMs>60*60*1000
     const accuracy=Number.isFinite(item.accuracy)?` · ±${Math.round(item.accuracy as number)} m`:''
     const href=`https://www.google.com/maps/search/?api=1&query=${encodeURIComponent(`${item.latitude},${item.longitude}`)}`
-    return `<div class="locationrow${stale?' stale':''}"><div class="location-person"><span class="location-dot"></span><div><b>${esc(member.name)}${mine?' · tú':''}</b><small>${locationAge(item.updated_at)}${accuracy}</small></div></div><a target="_blank" rel="noopener noreferrer" href="${href}">Ver mapa ›</a></div>`
+    return `<div class="locationrow${stale?' stale':''}"><div class="location-person"><span class="location-dot"></span><div><b>${esc(member.name)}${mine?' · tú':''}</b><small>${stale?'Última ubicación · ':''}${locationAge(item.updated_at)}${accuracy}</small></div></div><a target="_blank" rel="noopener noreferrer" href="${href}">Ver mapa ›</a></div>`
   }).join('')
-
-  element.innerHTML=`<div class="location-section-title"><b>Familia</b><span>Se actualiza en tiempo real</span></div>${cards||'<div class="empty">Aún no hay ubicaciones compartidas.</div>'}`
+  element.innerHTML=`<div class="location-section-title"><b>Familia</b><span>Se actualiza cuando alguien comparte</span></div>${cards||'<div class="empty">Aún no hay ubicaciones compartidas.</div>'}`
 }
 
 function sheet(title: string, text: string) {
