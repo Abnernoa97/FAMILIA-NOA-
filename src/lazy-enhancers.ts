@@ -61,6 +61,7 @@ const loadPresume = async () => {
   presumeLoading = true
   try {
     await import('./presume-enhancer')
+    await import('./home-stories')
     await import('./presume-management')
     await import('./presume-memory-guard')
     await import('./presume-push-camera')
