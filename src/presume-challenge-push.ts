@@ -7,6 +7,7 @@ const PUSH_MEMBER_KEY='familia-noa-presume-push-member'
 const LEGACY_REMINDER_KEY='familia-noa-presume-reminders'
 
 type Slot='morning'|'afternoon'
+export type PushSetupStatus={supported:boolean;permission:NotificationPermission|'unsupported';ready:boolean;needsInstall:boolean}
 
 const localDateKey=(date=new Date())=>{
   const y=date.getFullYear(),m=String(date.getMonth()+1).padStart(2,'0'),d=String(date.getDate()).padStart(2,'0')
@@ -23,7 +24,7 @@ function base64UrlToBytes(value:string){
 
 function isIOS(){return /iPad|iPhone|iPod/.test(navigator.userAgent)||(navigator.platform==='MacIntel'&&navigator.maxTouchPoints>1)}
 function isStandalone(){return window.matchMedia?.('(display-mode: standalone)').matches||(window.navigator as any).standalone===true}
-function hasPush(){return 'serviceWorker'in navigator&&'Notification'in window&&'PushManager'in window}
+export function pushSupported(){return 'serviceWorker'in navigator&&'Notification'in window&&'PushManager'in window}
 
 function syncReminderUi(){
   const memberId=getIdentity()?.memberId||''
@@ -40,9 +41,23 @@ function syncReminderUi(){
   })
 }
 
-async function ensurePushSubscription(interactive:boolean){
+export async function getPushSetupStatus():Promise<PushSetupStatus>{
+  const memberId=getIdentity()?.memberId||''
+  if(!pushSupported())return{supported:false,permission:'unsupported',ready:false,needsInstall:false}
+  if(isIOS()&&!isStandalone())return{supported:true,permission:Notification.permission,ready:false,needsInstall:true}
+  const permission=Notification.permission
+  if(permission!=='granted')return{supported:true,permission,ready:false,needsInstall:false}
+  try{
+    const registration=await navigator.serviceWorker.ready
+    const subscription=await registration.pushManager.getSubscription()
+    const ready=!!subscription&&!!memberId&&localStorage.getItem(PUSH_KEY)==='1'&&localStorage.getItem(PUSH_MEMBER_KEY)===memberId
+    return{supported:true,permission,ready,needsInstall:false}
+  }catch{return{supported:true,permission,ready:false,needsInstall:false}}
+}
+
+export async function ensurePushSubscription(interactive:boolean){
   const memberId=getIdentity()?.memberId
-  if(!memberId||!hasPush())return false
+  if(!memberId||!pushSupported())return false
   if(isIOS()&&!isStandalone())return false
   let permission=Notification.permission
   if(permission==='default'&&interactive)permission=await Notification.requestPermission()
@@ -50,6 +65,7 @@ async function ensurePushSubscription(interactive:boolean){
     localStorage.removeItem(PUSH_KEY)
     localStorage.removeItem(PUSH_MEMBER_KEY)
     syncReminderUi()
+    document.dispatchEvent(new CustomEvent('family:push-changed'))
     return false
   }
 
@@ -80,6 +96,7 @@ async function ensurePushSubscription(interactive:boolean){
   localStorage.setItem(PUSH_KEY,'1')
   localStorage.setItem(PUSH_MEMBER_KEY,memberId)
   syncReminderUi()
+  document.dispatchEvent(new CustomEvent('family:push-changed'))
   return true
 }
 
