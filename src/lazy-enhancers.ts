@@ -36,7 +36,6 @@ const loadProfile = async () => {
     await import('./profile-enhancer')
     await import('./profile-featured-media')
     await import('./profile-realtime')
-    await import('./profile-avatar-guard')
     profileLoaded = true
   } catch (error) {
     profileLoaded = false
