@@ -6,8 +6,44 @@ const TTL_SECONDS = 60 * 60
 const CACHE_SKEW_MS = 60 * 1000
 const SIGN_TIMEOUT_MS = 3500
 const MISSING_TTL_MS = 30 * 60 * 1000
+const PERSIST_KEY = 'familia-noa-private-media-cache-v1'
+const PERSIST_LIMIT = 120
 const cache = new Map<string,{url:string;expires:number}>()
 const missingCache = new Map<string,number>()
+let persistTimer:number|null=null
+
+function restorePersistentCache(){
+  try{
+    const raw=localStorage.getItem(PERSIST_KEY)
+    if(!raw)return
+    const parsed=JSON.parse(raw) as Array<[string,{url:string;expires:number}]>
+    const now=Date.now()
+    parsed.forEach(([path,item])=>{
+      if(path&&item?.url&&Number(item.expires)>now)cache.set(path,{url:String(item.url),expires:Number(item.expires)})
+    })
+  }catch{
+    try{localStorage.removeItem(PERSIST_KEY)}catch{}
+  }
+}
+
+function persistNow(){
+  persistTimer=null
+  try{
+    const now=Date.now()
+    const entries=[...cache.entries()]
+      .filter(([,item])=>item.expires>now)
+      .sort((a,b)=>b[1].expires-a[1].expires)
+      .slice(0,PERSIST_LIMIT)
+    localStorage.setItem(PERSIST_KEY,JSON.stringify(entries))
+  }catch{}
+}
+
+function schedulePersist(){
+  if(persistTimer!==null)return
+  persistTimer=window.setTimeout(persistNow,80)
+}
+
+restorePersistentCache()
 
 function timeoutAfter<T>(promise:Promise<T>,ms=SIGN_TIMEOUT_MS){
   return new Promise<T>((resolve,reject)=>{
@@ -35,6 +71,7 @@ function knownMissing(path:string){
 function rememberMissing(path:string){
   cache.delete(path)
   missingCache.set(path,Date.now()+MISSING_TTL_MS)
+  schedulePersist()
 }
 
 export function mediaUrl(path:string|null|undefined){
@@ -42,6 +79,7 @@ export function mediaUrl(path:string|null|undefined){
   const item=cache.get(path)
   if(!item||item.expires<=Date.now()){
     cache.delete(path)
+    schedulePersist()
     return ''
   }
   return item.url
@@ -50,6 +88,7 @@ export function mediaUrl(path:string|null|undefined){
 function remember(path:string,url:string){
   missingCache.delete(path)
   cache.set(path,{url,expires:Date.now()+(TTL_SECONDS*1000)-CACHE_SKEW_MS})
+  schedulePersist()
   return url
 }
 
@@ -105,7 +144,15 @@ export function forgetMedia(path:string|null|undefined){
   if(path){
     cache.delete(path)
     missingCache.delete(path)
+    schedulePersist()
   }
+}
+
+export function clearPrivateMediaCache(){
+  cache.clear()
+  missingCache.clear()
+  if(persistTimer!==null){window.clearTimeout(persistTimer);persistTimer=null}
+  try{localStorage.removeItem(PERSIST_KEY)}catch{}
 }
 
 function chatMessageId(path:string){
