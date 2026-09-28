@@ -1,12 +1,13 @@
 import './home-stories.css'
 import { getIdentity } from './core/identity'
 
-const KEY='familia-noa-home-instant-v2'
+const KEY='familia-noa-home-instant-v3'
+const LEGACY_KEYS=['familia-noa-home-instant-v2']
 const MAX_AGE=10*60*1000
 const SETTLE_MS=1500
 
 type HomeSnapshot={
-  v:2
+  v:3
   memberId:string
   savedAt:number
   railHtml:string
@@ -19,12 +20,14 @@ let restoreAt=0
 let queuedAction:{kind:'member'|'create';memberId?:string}|null=null
 let actionTimer:number|null=null
 
+try{LEGACY_KEYS.forEach(key=>localStorage.removeItem(key))}catch{}
+
 function readSnapshot():HomeSnapshot|null{
   try{
     const raw=localStorage.getItem(KEY)
     if(!raw)return null
     const value=JSON.parse(raw) as Partial<HomeSnapshot>
-    if(value.v!==2||!value.memberId||!Number.isFinite(value.savedAt))return null
+    if(value.v!==3||!value.memberId||!Number.isFinite(value.savedAt))return null
     if(Date.now()-Number(value.savedAt)>MAX_AGE){localStorage.removeItem(KEY);return null}
     return {...value,unreadCount:Math.max(0,Number(value.unreadCount)||0)} as HomeSnapshot
   }catch{return null}
@@ -61,7 +64,17 @@ function restore(){
   if(!restoreAt)restoreAt=Date.now()
 
   const avatar=shell.querySelector<HTMLButtonElement>('#change')
-  if(avatar&&snapshot.avatarHtml&&avatar.innerHTML!==snapshot.avatarHtml){
+  // A snapshot is allowed to improve the initial letter into a cached image,
+  // but it must never overwrite an image that has already been hydrated by
+  // the live private-avatar loader. The previous behavior caused a race where
+  // every avatar <img> mutation was immediately replaced again by the cached
+  // single-letter markup.
+  if(
+    avatar&&
+    snapshot.avatarHtml&&
+    !avatar.querySelector('img')&&
+    avatar.innerHTML!==snapshot.avatarHtml
+  ){
     avatar.innerHTML=snapshot.avatarHtml
   }
 
@@ -119,7 +132,7 @@ function capture(){
   if(!railHtml&&!avatarHtml&&!unreadCount)return
 
   writeSnapshot({
-    v:2,
+    v:3,
     memberId:identity.memberId,
     savedAt:Date.now(),
     railHtml,
