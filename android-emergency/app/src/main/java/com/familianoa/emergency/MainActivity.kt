@@ -20,6 +20,9 @@ class MainActivity : Activity() {
     private lateinit var root: LinearLayout
     private lateinit var permissionBox: LinearLayout
     private var members: List<FamilyMember> = emptyList()
+    private var loginStatus: TextView? = null
+    private var memberSpinner: Spinner? = null
+    private var activateButton: Button? = null
 
     override fun onCreate(savedInstanceState: Bundle?) {
         super.onCreate(savedInstanceState)
@@ -81,7 +84,9 @@ class MainActivity : Activity() {
 
     private fun renderLogin() {
         val status = text("Cargando miembros…", 14, false, Color.DKGRAY)
+        loginStatus = status
         val spinner = Spinner(this)
+        memberSpinner = spinner
         root.addView(spinner, match())
         val house = EditText(this).apply {
             hint = "Número de la casa de Trinidad"
@@ -94,6 +99,7 @@ class MainActivity : Activity() {
             text = "CONFIGURAR PROTECCIÓN"
             isEnabled = false
         }
+        activateButton = activate
         root.addView(activate, match())
 
         activate.setOnClickListener {
@@ -127,8 +133,6 @@ class MainActivity : Activity() {
                 }
             }.start()
         }
-
-        status.tag = Pair(spinner, activate)
     }
 
     private fun loadMembers() {
@@ -137,16 +141,15 @@ class MainActivity : Activity() {
                 val loaded = Api.fetchMembers()
                 members = loaded
                 runOnUiThread {
-                    val status = root.findViewsWithText("Cargando miembros…", ViewGroup.FIND_VIEWS_WITH_TEXT).firstOrNull() as? TextView
-                    val pair = status?.tag as? Pair<*, *>
-                    val spinner = pair?.first as? Spinner
-                    val activate = pair?.second as? Button
-                    spinner?.adapter = ArrayAdapter(this, android.R.layout.simple_spinner_dropdown_item, loaded.map { it.name })
-                    status?.text = if (loaded.isEmpty()) "No hay miembros disponibles." else "Elige quién usa este teléfono."
-                    activate?.isEnabled = loaded.isNotEmpty()
+                    memberSpinner?.adapter = ArrayAdapter(this, android.R.layout.simple_spinner_dropdown_item, loaded.map { it.name })
+                    loginStatus?.text = if (loaded.isEmpty()) "No hay miembros disponibles." else "Elige quién usa este teléfono."
+                    activateButton?.isEnabled = loaded.isNotEmpty()
                 }
             } catch (error:Throwable) {
-                runOnUiThread { toast(error.message ?: "No se pudo cargar la familia") }
+                runOnUiThread {
+                    loginStatus?.text = error.message ?: "No se pudo cargar la familia"
+                    activateButton?.isEnabled = false
+                }
             }
         }.start()
     }
