@@ -62,6 +62,7 @@ const loadPresume = async () => {
   try {
     await import('./presume-enhancer')
     await import('./home-stories')
+    await import('./home-story-engagement')
     await import('./home-story-responses')
     await import('./story-response-notify')
     await import('./story-deep-link')
