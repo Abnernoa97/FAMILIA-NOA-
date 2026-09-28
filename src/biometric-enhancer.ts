@@ -9,7 +9,7 @@ const LEGACY_KEYS = [
   'familia-noa-passkey-member-id',
   'familia-noa-biometric-authenticated',
 ]
-const supported = () => typeof window !== 'undefined' && !!window.PublicKeyCredential && window.isSecureContext
+export const passkeySupported = () => typeof window !== 'undefined' && !!window.PublicKeyCredential && window.isSecureContext
 let setupInProgress = false
 
 type PasskeyDevice = { memberId: string; credentialId?: string }
@@ -96,7 +96,7 @@ async function biometric(button: HTMLButtonElement, error: HTMLElement) {
 }
 
 function addLogin() {
-  if (!supported()) return
+  if (!passkeySupported()) return
   const members = document.querySelector('.members')
   if (!members || document.querySelector('#biometricLogin')) return
   const wrapper = document.createElement('div')
@@ -108,59 +108,61 @@ function addLogin() {
   button.onclick = () => void biometric(button, error)
 }
 
-async function hasPasskey(memberId: string) {
+export async function getPasskeyStatus(memberId = getIdentity()?.memberId || '') {
+  if (!memberId || !passkeySupported()) return { has:false, ids:[] as string[], supported:passkeySupported() }
   try {
     const result = await call('passkey-status', { member_id: memberId })
     const ids = Array.isArray(result?.credential_ids) ? result.credential_ids.filter((id: unknown): id is string => typeof id === 'string') : []
-    return { has:!!result?.hasPasskey, ids }
+    if (result?.hasPasskey && ids[0]) writeDevice({ memberId, credentialId:ids[0] })
+    return { has:!!result?.hasPasskey, ids, supported:true }
   } catch {
-    return { has:false, ids:[] as string[] }
+    return { has:false, ids:[] as string[], supported:true }
   }
 }
 
-async function registerPasskey(memberId: string, house: string, nickname: string) {
-  try {
-    const status = await hasPasskey(memberId)
-    if (status.has) {
-      writeDevice({ memberId, credentialId:status.ids[0] })
-      alert('Este perfil ya tiene una huella o Face ID registrado.')
-      return
-    }
-    const optionsResult = await call('register-options', { member_id:memberId, house_number:house, nickname })
-    const response = await startRegistration({ optionsJSON:optionsResult.options })
-    const result = await call('register-verify', { token:optionsResult.token, response })
-    writeDevice({ memberId, credentialId:result?.credential_id || response.id })
-    alert('Listo. Este teléfono ya puede entrar con huella o reconocimiento facial.')
-  } catch (err) {
-    const name = err instanceof Error ? err.name : ''
-    if (name === 'NotAllowedError' || name === 'AbortError') return
-    alert(err instanceof Error ? err.message : 'No se pudo activar la biometría.')
+export async function enablePasskeyForCurrentMember() {
+  const identity = getIdentity()
+  if (!identity?.memberId) throw new Error('Primero entra con tu perfil familiar.')
+  if (!passkeySupported()) throw new Error('Este dispositivo no permite huella o Face ID desde la app.')
+  const status = await getPasskeyStatus(identity.memberId)
+  if (status.has) {
+    document.dispatchEvent(new CustomEvent('family:passkey-changed'))
+    return true
   }
+  const optionsResult = await call('register-options', { member_id:identity.memberId })
+  const response = await startRegistration({ optionsJSON:optionsResult.options })
+  const result = await call('register-verify', { token:optionsResult.token, response })
+  writeDevice({ memberId:identity.memberId, credentialId:result?.credential_id || response.id })
+  document.dispatchEvent(new CustomEvent('family:passkey-changed'))
+  return true
 }
 
 async function addSetup() {
-  if (!supported() || setupInProgress) return
+  if (!passkeySupported() || setupInProgress) return
   const home = document.querySelector('.shell')
   const change = document.querySelector<HTMLElement>('#change')
   const identity = getIdentity()
-  if (!home || !change || !identity || document.querySelector('#enableBiometric')) return
+  if (!home || !change || !identity || document.querySelector('#enableBiometric') || document.querySelector('[data-device-onboarding]')) return
   setupInProgress = true
   try {
-    const status = await hasPasskey(identity.memberId)
-    if (status.has) {
-      writeDevice({ memberId:identity.memberId, credentialId:status.ids[0] })
-      return
-    }
+    const status = await getPasskeyStatus(identity.memberId)
+    if (status.has) return
     const button = document.createElement('button')
     button.id = 'enableBiometric'
     button.className = 'biometric-setup'
     button.textContent = '🔐 Activar huella / Face ID'
     change.parentElement?.after(button)
     button.onclick = async () => {
-      const house = prompt('Confirma el número de la casa.')
-      if (!house) return
-      const nickname = prompt(`Confirma tu apodo familiar, ${identity.name}.`)
-      if (nickname) await registerPasskey(identity.memberId, house, nickname)
+      button.disabled = true
+      try {
+        await enablePasskeyForCurrentMember()
+        alert('Listo. Este teléfono ya puede entrar con huella o reconocimiento facial.')
+        button.remove()
+      } catch (err) {
+        const name = err instanceof Error ? err.name : ''
+        if (name !== 'NotAllowedError' && name !== 'AbortError') alert(err instanceof Error ? err.message : 'No se pudo activar la biometría.')
+        button.disabled = false
+      }
     }
   } finally {
     setupInProgress = false
