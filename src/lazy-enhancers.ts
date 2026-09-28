@@ -63,6 +63,8 @@ const loadPresume = async () => {
     await import('./presume-enhancer')
     await import('./home-stories')
     await import('./home-story-responses')
+    await import('./story-response-notify')
+    await import('./story-deep-link')
     await import('./presume-management')
     await import('./presume-memory-guard')
     await import('./presume-push-camera')
