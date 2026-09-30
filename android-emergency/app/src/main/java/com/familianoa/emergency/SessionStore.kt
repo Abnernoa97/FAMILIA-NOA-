@@ -11,6 +11,7 @@ class SessionStore(context: Context) {
     val accessToken: String get() = prefs.getString("access_token", "") ?: ""
     val refreshToken: String get() = prefs.getString("refresh_token", "") ?: ""
     val expiresAt: Long get() = prefs.getLong("expires_at", 0L)
+    val biometricEnabled: Boolean get() = prefs.getBoolean("biometric_enabled", false)
     val activeAlertId: String get() = prefs.getString("active_alert_id", "") ?: ""
     val activeAlertMemberId: String get() = prefs.getString("active_alert_member_id", "") ?: ""
     val activeAlertMessage: String get() = prefs.getString("active_alert_message", "") ?: ""
@@ -33,6 +34,10 @@ class SessionStore(context: Context) {
             .putString("refresh_token", refreshToken)
             .putLong("expires_at", expiresAt)
             .apply()
+    }
+
+    fun setBiometricEnabled(enabled:Boolean) {
+        prefs.edit().putBoolean("biometric_enabled", enabled).apply()
     }
 
     fun needsRefresh(): Boolean = expiresAt <= (System.currentTimeMillis() / 1000L) + 120L
