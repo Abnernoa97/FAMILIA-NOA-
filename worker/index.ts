@@ -30,7 +30,12 @@ export default {
     const url=new URL(request.url)
 
     if(url.pathname==='/api/noa-voice/status'){
-      return Response.json({ok:true,engine:'cloudflare-workers-ai-melotts',lang:'es'})
+      return Response.json({
+        ok:true,
+        engine:'cloudflare-workers-ai-melotts',
+        lang:'es',
+        aiBound:!!env.AI,
+      })
     }
 
     if(url.pathname==='/api/noa-voice'){
