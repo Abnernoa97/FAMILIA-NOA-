@@ -1,143 +1,370 @@
 package com.familianoa.emergency
 
 import android.Manifest
-import android.app.Activity
 import android.app.NotificationManager
 import android.content.Intent
 import android.content.pm.PackageManager
 import android.graphics.Color
+import android.graphics.Typeface
+import android.graphics.drawable.GradientDrawable
 import android.net.Uri
 import android.os.Build
 import android.os.Bundle
 import android.os.PowerManager
 import android.provider.Settings
+import android.text.InputType
 import android.view.Gravity
+import android.view.View
 import android.view.ViewGroup
-import android.widget.*
+import android.widget.Button
+import android.widget.EditText
+import android.widget.LinearLayout
+import android.widget.ScrollView
+import android.widget.Space
+import android.widget.TextView
+import android.widget.Toast
+import androidx.biometric.BiometricManager
+import androidx.biometric.BiometricPrompt
+import androidx.core.content.ContextCompat
+import androidx.fragment.app.FragmentActivity
 
-class ProtectionActivity : Activity() {
+class ProtectionActivity : FragmentActivity() {
+    companion object {
+        private const val REQ_NOTIFICATIONS = 110
+        private const val REQ_MEDIA = 111
+        private const val REQ_LOCATION = 112
+    }
+
     private lateinit var store: SessionStore
     private lateinit var root: LinearLayout
-    private lateinit var permissionBox: LinearLayout
     private var members: List<FamilyMember> = emptyList()
-    private var loginStatus: TextView? = null
-    private var memberSpinner: Spinner? = null
-    private var activateButton: Button? = null
+    private var selectedMember: FamilyMember? = null
+    private var currentScreen = ""
+    private var biometricInProgress = false
 
     override fun onCreate(savedInstanceState: Bundle?) {
         super.onCreate(savedInstanceState)
         store = SessionStore(this)
-        render()
-        if (!store.configured) loadMembers()
+        window.statusBarColor = BG
+        window.navigationBarColor = Color.BLACK
+        window.decorView.systemUiVisibility = View.SYSTEM_UI_FLAG_LIGHT_STATUS_BAR
+        if (store.configured) renderReady() else {
+            renderWhoAreYou()
+            loadMembers()
+        }
     }
 
     override fun onResume() {
         super.onResume()
-        if (::permissionBox.isInitialized) renderPermissions()
+        if (!::store.isInitialized || biometricInProgress) return
         if (store.configured) EmergencyService.start(this)
+        if (::root.isInitialized && currentScreen != "security") renderCurrent()
     }
 
-    private fun render() {
-        val scroll = ScrollView(this)
-        root = LinearLayout(this).apply {
-            orientation = LinearLayout.VERTICAL
-            setPadding(dp(24), dp(34), dp(24), dp(44))
-            setBackgroundColor(Color.rgb(247, 244, 237))
+    private fun renderCurrent() {
+        when {
+            store.configured -> renderReady()
+            currentScreen == "security" && selectedMember != null -> renderSecurity(selectedMember!!)
+            else -> renderWhoAreYou()
         }
-        scroll.addView(root, ViewGroup.LayoutParams(ViewGroup.LayoutParams.MATCH_PARENT, ViewGroup.LayoutParams.WRAP_CONTENT))
-        setContentView(scroll)
+    }
 
-        text("FAMILIA NOA", 14, true, Color.rgb(115, 20, 31))
-        text("Protección de AYUDA", 34, true, Color.rgb(24, 24, 24)).apply { setPadding(0, dp(4), 0, dp(8)) }
-        text("AYUDA trabaja dentro de esta misma app. Esta protección puede mostrar una alerta roja encima de otras apps y sobre la pantalla bloqueada.", 16, false, Color.DKGRAY)
-        spacer(22)
-
-        if (store.configured) renderConfigured() else renderLogin()
-
+    private fun renderWhoAreYou() {
+        currentScreen = "who"
+        selectedMember = null
+        beginPage()
+        brand()
+        spacer(34)
+        eyebrow("PRIVATE FAMILY SPACE")
+        displayTitle("¿Quién eres?")
+        body("Un solo lugar para estar cerca, estés donde estés.")
         spacer(24)
-        text("PERMISOS DE PRIORIDAD", 12, true, Color.DKGRAY)
-        permissionBox = LinearLayout(this).apply { orientation = LinearLayout.VERTICAL }
-        root.addView(permissionBox)
-        renderPermissions()
-    }
+        biometricAccess(configured = false)
+        spacer(18)
+        permissionCard()
+        spacer(24)
+        divider("o entra con tu perfil")
+        spacer(18)
 
-    private fun renderConfigured() {
-        card().apply {
-            addView(makeText("Protección configurada", 18, true, Color.rgb(20, 90, 48)))
-            addView(makeText(store.memberName, 26, true, Color.BLACK))
-            addView(makeText("El servicio se inicia automáticamente y vuelve a arrancar después de reiniciar el teléfono.", 14, false, Color.DKGRAY))
-        }
-        button("ACTIVAR / REINICIAR PROTECCIÓN") {
-            EmergencyService.start(this)
-            toast("Protección activa")
-        }
-        button("ABRIR FAMILIA NOA") {
-            startActivity(Intent(this, MainActivity::class.java).apply {
-                addFlags(Intent.FLAG_ACTIVITY_CLEAR_TOP or Intent.FLAG_ACTIVITY_SINGLE_TOP)
-            })
-            finish()
-        }
-        val change = Button(this).apply {
-            text = "Cambiar perfil de este teléfono"
-            setOnClickListener {
-                EmergencyService.stop(this@ProtectionActivity)
-                store.clearAll()
-                recreate()
+        if (members.isEmpty()) {
+            val loading = text("Cargando familia…", 15, false, MUTED)
+            loading.gravity = Gravity.CENTER_HORIZONTAL
+        } else {
+            members.forEach { member ->
+                profileCard(member.name) { renderSecurity(member) }
+                spacer(10)
             }
         }
-        root.addView(change)
     }
 
-    private fun renderLogin() {
-        val status = text("Cargando miembros…", 14, false, Color.DKGRAY)
-        loginStatus = status
-        val spinner = Spinner(this)
-        memberSpinner = spinner
-        root.addView(spinner, match())
-        val house = EditText(this).apply {
-            hint = "Número de la casa de Trinidad"
-            inputType = android.text.InputType.TYPE_CLASS_NUMBER
-        }
-        val nickname = EditText(this).apply { hint = "Tu apodo en la familia" }
-        root.addView(house, match())
-        root.addView(nickname, match())
-        val activate = Button(this).apply {
-            text = "CONFIGURAR PROTECCIÓN"
-            isEnabled = false
-        }
-        activateButton = activate
-        root.addView(activate, match())
+    private fun renderSecurity(member: FamilyMember) {
+        currentScreen = "security"
+        selectedMember = member
+        beginPage()
+        backButton { renderWhoAreYou() }
+        spacer(14)
+        brand()
+        spacer(30)
+        eyebrow("ACCESO FAMILIAR")
+        displayTitle(member.name)
+        body("Confirma tus datos para entrar.")
+        spacer(24)
 
-        activate.setOnClickListener {
-            if (members.isEmpty()) return@setOnClickListener
-            val index = spinner.selectedItemPosition.coerceIn(0, members.lastIndex)
-            val member = members[index]
+        val status = text("", 13, false, ERROR)
+        val house = field("Número de la casa de Trinidad", numeric = true)
+        val nickname = field("Tu apodo en la familia", numeric = false)
+        spacer(8)
+        val enter = primaryButton("ENTRAR") {
             val houseValue = house.text.toString().trim()
             val nicknameValue = nickname.text.toString().trim()
             if (houseValue.isBlank() || nicknameValue.isBlank()) {
                 status.text = "Completa los dos datos familiares."
-                return@setOnClickListener
+                return@primaryButton
             }
-            activate.isEnabled = false
-            status.text = "Verificando acceso familiar…"
+            status.text = "Verificando…"
+            it.isEnabled = false
             Thread {
                 try {
                     val session = Api.login(member.id, houseValue, nicknameValue)
                     store.saveSession(session.memberId, session.memberName, session.accessToken, session.refreshToken, session.expiresAt)
+                    EmergencyService.start(this)
                     runOnUiThread {
-                        EmergencyService.start(this)
                         if (Build.VERSION.SDK_INT >= 33 && checkSelfPermission(Manifest.permission.POST_NOTIFICATIONS) != PackageManager.PERMISSION_GRANTED) {
-                            requestPermissions(arrayOf(Manifest.permission.POST_NOTIFICATIONS), 110)
+                            requestPermissions(arrayOf(Manifest.permission.POST_NOTIFICATIONS), REQ_NOTIFICATIONS)
                         }
-                        recreate()
+                        renderReady()
                     }
                 } catch (error: Throwable) {
                     runOnUiThread {
-                        status.text = error.message ?: "No se pudo configurar."
-                        activate.isEnabled = true
+                        status.text = "Datos incorrectos. Comprueba el número de la casa y tu apodo."
+                        it.isEnabled = true
                     }
                 }
             }.start()
+        }
+        enter.contentDescription = "Entrar a FAMILIA NOA"
+    }
+
+    private fun renderReady() {
+        currentScreen = "ready"
+        selectedMember = null
+        beginPage()
+        brand()
+        spacer(34)
+        eyebrow("PRIVATE FAMILY SPACE")
+        displayTitle("Hola, ${store.memberName}")
+        body("Tu teléfono ya está conectado a FAMILIA NOA.")
+        spacer(24)
+        biometricAccess(configured = true)
+        spacer(18)
+        permissionCard()
+        spacer(22)
+        primaryButton("ENTRAR A FAMILIA NOA") { openFamily() }
+        spacer(10)
+        secondaryButton("Cambiar perfil de este teléfono") {
+            EmergencyService.stop(this)
+            store.clearAll()
+            members = emptyList()
+            renderWhoAreYou()
+            loadMembers()
+        }
+    }
+
+    private fun beginPage() {
+        val scroll = ScrollView(this).apply {
+            isFillViewport = true
+            setBackgroundColor(BG)
+        }
+        root = LinearLayout(this).apply {
+            orientation = LinearLayout.VERTICAL
+            setPadding(dp(28), dp(28), dp(28), dp(44))
+            setBackgroundColor(BG)
+        }
+        scroll.addView(root, ViewGroup.LayoutParams(ViewGroup.LayoutParams.MATCH_PARENT, ViewGroup.LayoutParams.WRAP_CONTENT))
+        setContentView(scroll)
+    }
+
+    private fun brand() {
+        text("FAMILIA NOA", 18, true, INK).apply {
+            letterSpacing = .13f
+        }
+    }
+
+    private fun eyebrow(value: String) {
+        text(value, 12, false, Color.rgb(58, 58, 56)).apply { letterSpacing = .04f }
+        spacer(10)
+    }
+
+    private fun displayTitle(value: String) {
+        text(value, 44, false, INK).apply {
+            typeface = Typeface.create(Typeface.SERIF, Typeface.NORMAL)
+            setLineSpacing(0f, .92f)
+        }
+        spacer(8)
+    }
+
+    private fun body(value: String) {
+        text(value, 18, false, MUTED).apply { setLineSpacing(dp(3).toFloat(), 1f) }
+    }
+
+    private fun biometricAccess(configured: Boolean) {
+        val manager = BiometricManager.from(this)
+        val available = manager.canAuthenticate(BiometricManager.Authenticators.BIOMETRIC_WEAK) == BiometricManager.BIOMETRIC_SUCCESS
+        val enabled = store.biometricEnabled
+        val label = when {
+            !available -> "Huella / Face ID no disponible"
+            configured && enabled -> "🔐 ENTRAR CON HUELLA / FACE ID"
+            enabled -> "✓ HUELLA / FACE ID ACTIVADA"
+            else -> "🔐 ACTIVAR HUELLA / FACE ID"
+        }
+        val button = Button(this).apply {
+            text = label
+            isAllCaps = false
+            textSize = 16f
+            setTextColor(if (available) Color.WHITE else Color.rgb(120, 118, 112))
+            typeface = Typeface.DEFAULT_BOLD
+            gravity = Gravity.CENTER
+            background = rounded(if (available) INK else Color.rgb(229, 225, 218), 18)
+            setPadding(dp(16), dp(14), dp(16), dp(14))
+            isEnabled = available && !(enabled && !configured)
+            setOnClickListener {
+                if (available) showBiometric(configured)
+            }
+        }
+        root.addView(button, LinearLayout.LayoutParams(ViewGroup.LayoutParams.MATCH_PARENT, dp(58)))
+        if (enabled && !configured) {
+            val note = text("La huella ya está lista. Elige tu perfil una vez para terminar de asociar este teléfono.", 11, false, MUTED)
+            note.setPadding(dp(4), dp(8), dp(4), 0)
+        }
+    }
+
+    private fun showBiometric(configured: Boolean) {
+        val executor = ContextCompat.getMainExecutor(this)
+        val prompt = BiometricPrompt(this, executor, object : BiometricPrompt.AuthenticationCallback() {
+            override fun onAuthenticationError(errorCode: Int, errString: CharSequence) {
+                super.onAuthenticationError(errorCode, errString)
+                biometricInProgress = false
+                if (errorCode != BiometricPrompt.ERROR_NEGATIVE_BUTTON && errorCode != BiometricPrompt.ERROR_USER_CANCELED && errorCode != BiometricPrompt.ERROR_CANCELED) {
+                    toast(errString.toString())
+                }
+            }
+
+            override fun onAuthenticationSucceeded(result: BiometricPrompt.AuthenticationResult) {
+                super.onAuthenticationSucceeded(result)
+                biometricInProgress = false
+                store.setBiometricEnabled(true)
+                if (configured && store.configured) openFamily()
+                else {
+                    toast("Huella / Face ID activada")
+                    renderWhoAreYou()
+                }
+            }
+        })
+        val info = BiometricPrompt.PromptInfo.Builder()
+            .setTitle("FAMILIA NOA")
+            .setSubtitle(if (configured) "Confirma que eres tú" else "Activa el acceso rápido de este teléfono")
+            .setAllowedAuthenticators(BiometricManager.Authenticators.BIOMETRIC_WEAK)
+            .setNegativeButtonText("Cancelar")
+            .build()
+        biometricInProgress = true
+        prompt.authenticate(info)
+    }
+
+    private data class PermissionState(
+        val notifications: Boolean,
+        val overlay: Boolean,
+        val fullScreen: Boolean,
+        val battery: Boolean,
+        val dnd: Boolean,
+        val camera: Boolean,
+        val microphone: Boolean,
+        val location: Boolean,
+    ) {
+        val allReady: Boolean get() = notifications && overlay && fullScreen && battery && dnd && camera && microphone && location
+    }
+
+    private fun permissions(): PermissionState {
+        val manager = getSystemService(NotificationManager::class.java)
+        val power = getSystemService(PowerManager::class.java)
+        return PermissionState(
+            notifications = Build.VERSION.SDK_INT < 33 || checkSelfPermission(Manifest.permission.POST_NOTIFICATIONS) == PackageManager.PERMISSION_GRANTED,
+            overlay = Settings.canDrawOverlays(this),
+            fullScreen = Build.VERSION.SDK_INT < 34 || manager.canUseFullScreenIntent(),
+            battery = power.isIgnoringBatteryOptimizations(packageName),
+            dnd = manager.isNotificationPolicyAccessGranted,
+            camera = checkSelfPermission(Manifest.permission.CAMERA) == PackageManager.PERMISSION_GRANTED,
+            microphone = checkSelfPermission(Manifest.permission.RECORD_AUDIO) == PackageManager.PERMISSION_GRANTED,
+            location = checkSelfPermission(Manifest.permission.ACCESS_FINE_LOCATION) == PackageManager.PERMISSION_GRANTED || checkSelfPermission(Manifest.permission.ACCESS_COARSE_LOCATION) == PackageManager.PERMISSION_GRANTED,
+        )
+    }
+
+    private fun permissionCard() {
+        val state = permissions()
+        val card = LinearLayout(this).apply {
+            orientation = LinearLayout.VERTICAL
+            setPadding(dp(18), dp(17), dp(18), dp(17))
+            background = rounded(Color.WHITE, 22, Color.rgb(225, 219, 209))
+        }
+        card.addView(makeText("Prepara este teléfono", 15, true, INK))
+        card.addView(makeText("Todo se activa desde aquí. AYUDA sigue trabajando por detrás.", 11, false, MUTED).apply { setPadding(0, dp(3), 0, dp(10)) })
+
+        val alerts = listOf(state.notifications, state.overlay, state.fullScreen)
+        val power = listOf(state.battery, state.dnd)
+        val media = listOf(state.camera, state.microphone)
+        card.addView(statusRow("Alertas de emergencia", alerts.count { it }, alerts.size))
+        card.addView(statusRow("Batería y No molestar", power.count { it }, power.size))
+        card.addView(statusRow("Cámara y voz", media.count { it }, media.size))
+        card.addView(statusRow("Ubicación", if (state.location) 1 else 0, 1))
+
+        val action = Button(this).apply {
+            text = if (state.allReady) "✓ TELÉFONO LISTO" else "ACTIVAR LO QUE FALTA"
+            isAllCaps = false
+            textSize = 12f
+            typeface = Typeface.DEFAULT_BOLD
+            setTextColor(if (state.allReady) Color.rgb(24, 104, 59) else Color.WHITE)
+            background = rounded(if (state.allReady) Color.rgb(238, 247, 241) else INK, 15)
+            setPadding(dp(12), dp(11), dp(12), dp(11))
+            isEnabled = !state.allReady
+            setOnClickListener { activateNextMissing() }
+        }
+        card.addView(action, LinearLayout.LayoutParams(ViewGroup.LayoutParams.MATCH_PARENT, dp(48)).apply { topMargin = dp(11) })
+        root.addView(card, LinearLayout.LayoutParams(ViewGroup.LayoutParams.MATCH_PARENT, ViewGroup.LayoutParams.WRAP_CONTENT))
+    }
+
+    private fun statusRow(label: String, ready: Int, total: Int): View {
+        val row = LinearLayout(this).apply {
+            orientation = LinearLayout.HORIZONTAL
+            gravity = Gravity.CENTER_VERTICAL
+            setPadding(0, dp(7), 0, dp(7))
+        }
+        val dot = TextView(this).apply {
+            text = if (ready == total) "✓" else "○"
+            textSize = 16f
+            setTextColor(if (ready == total) Color.rgb(24, 104, 59) else Color.rgb(145, 139, 128))
+            gravity = Gravity.CENTER
+        }
+        row.addView(dot, LinearLayout.LayoutParams(dp(28), dp(28)))
+        row.addView(makeText(label, 12, true, INK), LinearLayout.LayoutParams(0, ViewGroup.LayoutParams.WRAP_CONTENT, 1f))
+        row.addView(makeText(if (ready == total) "Listo" else "$ready/$total", 11, true, if (ready == total) Color.rgb(24, 104, 59) else MUTED))
+        return row
+    }
+
+    private fun activateNextMissing() {
+        val state = permissions()
+        when {
+            !state.notifications && Build.VERSION.SDK_INT >= 33 -> requestPermissions(arrayOf(Manifest.permission.POST_NOTIFICATIONS), REQ_NOTIFICATIONS)
+            !state.overlay -> startActivity(Intent(Settings.ACTION_MANAGE_OVERLAY_PERMISSION, Uri.parse("package:$packageName")))
+            !state.fullScreen && Build.VERSION.SDK_INT >= 34 -> startActivity(Intent(Settings.ACTION_MANAGE_APP_USE_FULL_SCREEN_INTENT, Uri.parse("package:$packageName")))
+            !state.battery -> startActivity(Intent(Settings.ACTION_REQUEST_IGNORE_BATTERY_OPTIMIZATIONS, Uri.parse("package:$packageName")))
+            !state.dnd -> startActivity(Intent(Settings.ACTION_NOTIFICATION_POLICY_ACCESS_SETTINGS))
+            !state.camera || !state.microphone -> {
+                val missing = mutableListOf<String>()
+                if (!state.camera) missing += Manifest.permission.CAMERA
+                if (!state.microphone) missing += Manifest.permission.RECORD_AUDIO
+                requestPermissions(missing.toTypedArray(), REQ_MEDIA)
+            }
+            !state.location -> requestPermissions(arrayOf(Manifest.permission.ACCESS_FINE_LOCATION, Manifest.permission.ACCESS_COARSE_LOCATION), REQ_LOCATION)
+            else -> toast("Este teléfono ya está listo")
         }
     }
 
@@ -147,80 +374,135 @@ class ProtectionActivity : Activity() {
                 val loaded = Api.fetchMembers()
                 members = loaded
                 runOnUiThread {
-                    memberSpinner?.adapter = ArrayAdapter(this, android.R.layout.simple_spinner_dropdown_item, loaded.map { it.name })
-                    loginStatus?.text = if (loaded.isEmpty()) "No hay miembros disponibles." else "Elige quién usa este teléfono."
-                    activateButton?.isEnabled = loaded.isNotEmpty()
+                    if (!store.configured && currentScreen == "who") renderWhoAreYou()
                 }
             } catch (error: Throwable) {
-                runOnUiThread {
-                    loginStatus?.text = error.message ?: "No se pudo cargar la familia"
-                    activateButton?.isEnabled = false
-                }
+                runOnUiThread { toast(error.message ?: "No se pudo cargar la familia") }
             }
         }.start()
     }
 
-    private fun renderPermissions() {
-        if (!::permissionBox.isInitialized) return
-        permissionBox.removeAllViews()
-        val notificationsOk = Build.VERSION.SDK_INT < 33 || checkSelfPermission(Manifest.permission.POST_NOTIFICATIONS) == PackageManager.PERMISSION_GRANTED
-        val overlayOk = Settings.canDrawOverlays(this)
-        val nm = getSystemService(NotificationManager::class.java)
-        val fullScreenOk = Build.VERSION.SDK_INT < 34 || nm.canUseFullScreenIntent()
-        val dndOk = nm.isNotificationPolicyAccessGranted
-        val pm = getSystemService(PowerManager::class.java)
-        val batteryOk = pm.isIgnoringBatteryOptimizations(packageName)
-
-        permissionBox.addView(permissionButton("Notificaciones", notificationsOk) {
-            if (Build.VERSION.SDK_INT >= 33) requestPermissions(arrayOf(Manifest.permission.POST_NOTIFICATIONS), 110)
-        })
-        permissionBox.addView(permissionButton("Mostrar sobre otras aplicaciones", overlayOk) {
-            startActivity(Intent(Settings.ACTION_MANAGE_OVERLAY_PERMISSION, Uri.parse("package:$packageName")))
-        })
-        permissionBox.addView(permissionButton("Pantalla completa de emergencia", fullScreenOk) {
-            if (Build.VERSION.SDK_INT >= 34) startActivity(Intent(Settings.ACTION_MANAGE_APP_USE_FULL_SCREEN_INTENT, Uri.parse("package:$packageName")))
-        })
-        permissionBox.addView(permissionButton("Ignorar ahorro de batería", batteryOk) {
-            startActivity(Intent(Settings.ACTION_REQUEST_IGNORE_BATTERY_OPTIMIZATIONS, Uri.parse("package:$packageName")))
-        })
-        permissionBox.addView(permissionButton("Atravesar No molestar", dndOk) {
-            startActivity(Intent(Settings.ACTION_NOTIFICATION_POLICY_ACCESS_SETTINGS))
-        })
-        val all = notificationsOk && overlayOk && fullScreenOk && batteryOk
-        permissionBox.addView(makeText(if (all) "✓ Protección de máxima prioridad lista" else "Activa todos los permisos posibles para que AYUDA tenga la máxima prioridad.", 14, true, if (all) Color.rgb(20, 90, 48) else Color.rgb(150, 35, 35)))
-    }
-
-    private fun permissionButton(label: String, ok: Boolean, action: () -> Unit): Button = Button(this).apply {
-        text = if (ok) "✓ $label" else "ACTIVAR · $label"
-        setOnClickListener { action() }
-        isAllCaps = false
-    }
-
-    private fun card(): LinearLayout {
-        val box = LinearLayout(this).apply {
-            orientation = LinearLayout.VERTICAL
-            setPadding(dp(18), dp(18), dp(18), dp(18))
-            setBackgroundColor(Color.WHITE)
+    private fun profileCard(name: String, action: () -> Unit) {
+        val button = Button(this).apply {
+            text = "$name                                      ›"
+            gravity = Gravity.CENTER_VERTICAL
+            isAllCaps = false
+            textSize = 18f
+            setTextColor(INK)
+            typeface = Typeface.DEFAULT_BOLD
+            background = rounded(Color.WHITE, 20, Color.rgb(230, 225, 217))
+            setPadding(dp(18), 0, dp(18), 0)
+            setOnClickListener { action() }
         }
-        root.addView(box, LinearLayout.LayoutParams(ViewGroup.LayoutParams.MATCH_PARENT, ViewGroup.LayoutParams.WRAP_CONTENT).apply { bottomMargin = dp(14) })
-        return box
+        root.addView(button, LinearLayout.LayoutParams(ViewGroup.LayoutParams.MATCH_PARENT, dp(76)))
     }
 
-    private fun button(label: String, action: () -> Unit) {
-        root.addView(Button(this).apply { text = label; setOnClickListener { action() } }, match())
+    private fun field(hint: String, numeric: Boolean): EditText {
+        val input = EditText(this).apply {
+            this.hint = hint
+            textSize = 16f
+            setTextColor(INK)
+            setHintTextColor(Color.rgb(135, 131, 123))
+            background = rounded(Color.WHITE, 18, Color.rgb(224, 219, 210))
+            setPadding(dp(16), 0, dp(16), 0)
+            inputType = if (numeric) InputType.TYPE_CLASS_NUMBER else InputType.TYPE_CLASS_TEXT
+            isSingleLine = true
+        }
+        root.addView(input, LinearLayout.LayoutParams(ViewGroup.LayoutParams.MATCH_PARENT, dp(58)).apply { bottomMargin = dp(11) })
+        return input
     }
 
-    private fun text(value: String, size: Int, bold: Boolean, color: Int): TextView = makeText(value, size, bold, color).also { root.addView(it, match()) }
+    private fun primaryButton(label: String, action: (Button) -> Unit): Button {
+        val button = Button(this).apply {
+            text = label
+            isAllCaps = false
+            textSize = 14f
+            typeface = Typeface.DEFAULT_BOLD
+            setTextColor(Color.WHITE)
+            background = rounded(INK, 18)
+            setOnClickListener { action(this) }
+        }
+        root.addView(button, LinearLayout.LayoutParams(ViewGroup.LayoutParams.MATCH_PARENT, dp(58)))
+        return button
+    }
+
+    private fun secondaryButton(label: String, action: () -> Unit) {
+        val button = Button(this).apply {
+            text = label
+            isAllCaps = false
+            textSize = 13f
+            typeface = Typeface.DEFAULT_BOLD
+            setTextColor(INK)
+            background = rounded(Color.WHITE, 18, Color.rgb(224, 219, 210))
+            setOnClickListener { action() }
+        }
+        root.addView(button, LinearLayout.LayoutParams(ViewGroup.LayoutParams.MATCH_PARENT, dp(56)))
+    }
+
+    private fun backButton(action: () -> Unit) {
+        val button = TextView(this).apply {
+            text = "‹ Volver"
+            textSize = 14f
+            setTextColor(INK)
+            setPadding(0, dp(8), 0, dp(8))
+            setOnClickListener { action() }
+        }
+        root.addView(button)
+    }
+
+    private fun divider(value: String) {
+        val label = text(value, 12, false, Color.rgb(145, 140, 132))
+        label.gravity = Gravity.CENTER
+    }
+
+    private fun text(value: String, size: Int, bold: Boolean, color: Int): TextView = makeText(value, size, bold, color).also {
+        root.addView(it, LinearLayout.LayoutParams(ViewGroup.LayoutParams.MATCH_PARENT, ViewGroup.LayoutParams.WRAP_CONTENT))
+    }
+
     private fun makeText(value: String, size: Int, bold: Boolean, color: Int) = TextView(this).apply {
         text = value
         textSize = size.toFloat()
         setTextColor(color)
-        if (bold) setTypeface(typeface, android.graphics.Typeface.BOLD)
+        if (bold) setTypeface(typeface, Typeface.BOLD)
         gravity = Gravity.START
-        setPadding(0, dp(5), 0, dp(5))
     }
-    private fun spacer(height: Int) = Space(this).also { root.addView(it, LinearLayout.LayoutParams(1, dp(height))) }
-    private fun match() = LinearLayout.LayoutParams(ViewGroup.LayoutParams.MATCH_PARENT, ViewGroup.LayoutParams.WRAP_CONTENT).apply { bottomMargin = dp(8) }
+
+    private fun spacer(height: Int) {
+        root.addView(Space(this), LinearLayout.LayoutParams(1, dp(height)))
+    }
+
+    private fun rounded(fill: Int, radius: Int, stroke: Int? = null): GradientDrawable = GradientDrawable().apply {
+        shape = GradientDrawable.RECTANGLE
+        setColor(fill)
+        cornerRadius = dp(radius).toFloat()
+        if (stroke != null) setStroke(dp(1), stroke)
+    }
+
+    private fun openFamily() {
+        EmergencyService.start(this)
+        startActivity(Intent(this, MainActivity::class.java).apply {
+            addFlags(Intent.FLAG_ACTIVITY_CLEAR_TOP or Intent.FLAG_ACTIVITY_SINGLE_TOP)
+        })
+        finish()
+    }
+
+    override fun onRequestPermissionsResult(requestCode: Int, permissions: Array<out String>, grantResults: IntArray) {
+        super.onRequestPermissionsResult(requestCode, permissions, grantResults)
+        if (requestCode == REQ_NOTIFICATIONS || requestCode == REQ_MEDIA || requestCode == REQ_LOCATION) renderCurrent()
+    }
+
+    @Deprecated("Deprecated in Java")
+    override fun onBackPressed() {
+        if (currentScreen == "security") renderWhoAreYou() else super.onBackPressed()
+    }
+
     private fun dp(value: Int) = (value * resources.displayMetrics.density).toInt()
     private fun toast(value: String) = Toast.makeText(this, value, Toast.LENGTH_SHORT).show()
+
+    private companion object Colors {
+        val BG: Int = Color.rgb(247, 244, 237)
+        val INK: Int = Color.rgb(23, 23, 22)
+        val MUTED: Int = Color.rgb(107, 103, 96)
+        val ERROR: Int = Color.rgb(154, 54, 48)
+    }
 }
