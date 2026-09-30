@@ -1,6 +1,7 @@
 package com.familianoa.emergency
 
 import android.Manifest
+import android.app.Activity
 import android.app.NotificationManager
 import android.content.Intent
 import android.content.pm.PackageManager
@@ -23,12 +24,8 @@ import android.widget.ScrollView
 import android.widget.Space
 import android.widget.TextView
 import android.widget.Toast
-import androidx.biometric.BiometricManager
-import androidx.biometric.BiometricPrompt
-import androidx.core.content.ContextCompat
-import androidx.fragment.app.FragmentActivity
 
-class ProtectionActivity : FragmentActivity() {
+class ProtectionActivity : Activity() {
     companion object {
         private const val REQ_NOTIFICATIONS = 110
         private const val REQ_MEDIA = 111
@@ -44,7 +41,6 @@ class ProtectionActivity : FragmentActivity() {
     private var members: List<FamilyMember> = emptyList()
     private var selectedMember: FamilyMember? = null
     private var currentScreen = ""
-    private var biometricInProgress = false
 
     override fun onCreate(savedInstanceState: Bundle?) {
         super.onCreate(savedInstanceState)
@@ -60,7 +56,7 @@ class ProtectionActivity : FragmentActivity() {
 
     override fun onResume() {
         super.onResume()
-        if (!::store.isInitialized || biometricInProgress) return
+        if (!::store.isInitialized) return
         if (store.configured) EmergencyService.start(this)
         if (::root.isInitialized && currentScreen != "security") renderCurrent()
     }
@@ -83,11 +79,9 @@ class ProtectionActivity : FragmentActivity() {
         displayTitle("¿Quién eres?")
         body("Un solo lugar para estar cerca, estés donde estés.")
         spacer(24)
-        biometricAccess(configured = false)
-        spacer(18)
         permissionCard()
-        spacer(24)
-        divider("o entra con tu perfil")
+        spacer(26)
+        divider("entra con tu perfil")
         spacer(18)
 
         if (members.isEmpty()) {
@@ -111,7 +105,7 @@ class ProtectionActivity : FragmentActivity() {
         spacer(30)
         eyebrow("ACCESO FAMILIAR")
         displayTitle(member.name)
-        body("Confirma tus datos para entrar.")
+        body("Confirma tus datos una sola vez para conectar este teléfono.")
         spacer(24)
 
         val status = text("", 13, false, ERROR)
@@ -157,10 +151,8 @@ class ProtectionActivity : FragmentActivity() {
         spacer(34)
         eyebrow("PRIVATE FAMILY SPACE")
         displayTitle("Hola, ${store.memberName}")
-        body("Tu teléfono ya está conectado a FAMILIA NOA.")
+        body("Este teléfono ya recuerda tu perfil. La próxima vez entrarás directo a FAMILIA NOA.")
         spacer(24)
-        biometricAccess(configured = true)
-        spacer(18)
         permissionCard()
         spacer(22)
         primaryButton("ENTRAR A FAMILIA NOA") { openFamily() }
@@ -207,67 +199,6 @@ class ProtectionActivity : FragmentActivity() {
 
     private fun body(value: String) {
         text(value, 18, false, MUTED).apply { setLineSpacing(dp(3).toFloat(), 1f) }
-    }
-
-    private fun biometricAccess(configured: Boolean) {
-        val manager = BiometricManager.from(this)
-        val available = manager.canAuthenticate(BiometricManager.Authenticators.BIOMETRIC_WEAK) == BiometricManager.BIOMETRIC_SUCCESS
-        val enabled = store.biometricEnabled
-        val label = when {
-            !available -> "Huella / Face ID no disponible"
-            configured && enabled -> "🔐 ENTRAR CON HUELLA / FACE ID"
-            enabled -> "✓ HUELLA / FACE ID ACTIVADA"
-            else -> "🔐 ACTIVAR HUELLA / FACE ID"
-        }
-        val button = Button(this).apply {
-            text = label
-            isAllCaps = false
-            textSize = 16f
-            setTextColor(if (available) Color.WHITE else Color.rgb(120, 118, 112))
-            typeface = Typeface.DEFAULT_BOLD
-            gravity = Gravity.CENTER
-            background = rounded(if (available) INK else Color.rgb(229, 225, 218), 18)
-            setPadding(dp(16), dp(14), dp(16), dp(14))
-            isEnabled = available && !(enabled && !configured)
-            setOnClickListener { if (available) showBiometric(configured) }
-        }
-        root.addView(button, LinearLayout.LayoutParams(ViewGroup.LayoutParams.MATCH_PARENT, dp(58)))
-        if (enabled && !configured) {
-            val note = text("La huella ya está lista. Elige tu perfil una vez para terminar de asociar este teléfono.", 11, false, MUTED)
-            note.setPadding(dp(4), dp(8), dp(4), 0)
-        }
-    }
-
-    private fun showBiometric(configured: Boolean) {
-        val executor = ContextCompat.getMainExecutor(this)
-        val prompt = BiometricPrompt(this, executor, object : BiometricPrompt.AuthenticationCallback() {
-            override fun onAuthenticationError(errorCode: Int, errString: CharSequence) {
-                super.onAuthenticationError(errorCode, errString)
-                biometricInProgress = false
-                if (errorCode != BiometricPrompt.ERROR_NEGATIVE_BUTTON && errorCode != BiometricPrompt.ERROR_USER_CANCELED && errorCode != BiometricPrompt.ERROR_CANCELED) {
-                    toast(errString.toString())
-                }
-            }
-
-            override fun onAuthenticationSucceeded(result: BiometricPrompt.AuthenticationResult) {
-                super.onAuthenticationSucceeded(result)
-                biometricInProgress = false
-                store.setBiometricEnabled(true)
-                if (configured && store.configured) openFamily()
-                else {
-                    toast("Huella / Face ID activada")
-                    renderWhoAreYou()
-                }
-            }
-        })
-        val info = BiometricPrompt.PromptInfo.Builder()
-            .setTitle("FAMILIA NOA")
-            .setSubtitle(if (configured) "Confirma que eres tú" else "Activa el acceso rápido de este teléfono")
-            .setAllowedAuthenticators(BiometricManager.Authenticators.BIOMETRIC_WEAK)
-            .setNegativeButtonText("Cancelar")
-            .build()
-        biometricInProgress = true
-        prompt.authenticate(info)
     }
 
     private data class PermissionState(
