@@ -5,6 +5,7 @@ on:
     branches: [main]
     paths:
       - 'src/**'
+      - 'worker/**'
       - 'public/**'
       - 'index.html'
       - 'package.json'
@@ -28,12 +29,18 @@ jobs:
         run: npm install
       - name: Build canonical web app
         run: npm run build
-      - name: Verify NOA voice code is bundled
+      - name: Verify NOA voice client is bundled
         shell: bash
         run: |
-          grep -R -q "translate.googleapis.com/translate_tts" dist
+          grep -R -q "/api/noa-voice" dist
           grep -R -q "familiaNoaSpeakText" dist
-          grep -R -q "webview-streamed-voice" dist
+          grep -R -q "cloudflare-workers-ai-melotts" dist
+      - name: Verify Worker voice endpoint
+        shell: bash
+        run: |
+          grep -q "@cf/myshell-ai/melotts" worker/index.ts
+          grep -q "binding.*AI\|\"binding\": \"AI\"" wrangler.jsonc
+          npx wrangler deploy --dry-run --outdir .wrangler-dry
       - name: Enforce Cloudflare static asset limit
         shell: bash
         run: |
@@ -47,15 +54,15 @@ jobs:
               raise SystemExit(1)
           print('All static assets are within Cloudflare 25 MiB limit.')
           PY
-      - name: Verify retired code is absent
+      - name: Verify retired voice code is absent
         shell: bash
         run: |
-          if grep -R -q "noa-voice-style" dist; then
-            echo "Retired voice wrapper found in bundle"
+          if grep -R -q "translate.googleapis.com/translate_tts\|translate.google.com/translate_tts\|webview-streamed-voice" dist; then
+            echo "Retired direct network TTS path found in bundle"
             exit 1
           fi
-          if grep -R -q "piper-tts-web\|es_MX-claude-high\|TTS-ENGINE" dist; then
-            echo "Retired Piper path found in bundle"
+          if grep -R -q "noa-voice-style\|piper-tts-web\|es_MX-claude-high\|TTS-ENGINE" dist; then
+            echo "Retired Piper/voice wrapper found in bundle"
             exit 1
           fi
           if find dist -type f -name 'ort-wasm*.wasm' | grep -q .; then
