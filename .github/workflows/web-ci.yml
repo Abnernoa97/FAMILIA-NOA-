@@ -1,0 +1,42 @@
+name: Validate FAMILIA NOA Web
+
+on:
+  push:
+    branches: [main]
+    paths:
+      - 'src/**'
+      - 'public/**'
+      - 'index.html'
+      - 'package.json'
+      - 'vite.config.ts'
+      - 'wrangler.jsonc'
+      - '.github/workflows/web-ci.yml'
+  workflow_dispatch:
+
+permissions:
+  contents: read
+
+jobs:
+  audit-build:
+    runs-on: ubuntu-latest
+    steps:
+      - uses: actions/checkout@v5
+      - uses: actions/setup-node@v5
+        with:
+          node-version: 22
+      - name: Install dependencies
+        run: npm install
+      - name: Build canonical web app
+        run: npm run build
+      - name: Verify NOA voice is bundled
+        shell: bash
+        run: |
+          grep -R -q "es_MX-claude-high" dist
+          grep -R -q "familiaNoaSpeakText" dist
+      - name: Verify retired code is absent
+        shell: bash
+        run: |
+          if grep -R -q "noa-voice-style" dist; then
+            echo "Retired voice wrapper found in bundle"
+            exit 1
+          fi
