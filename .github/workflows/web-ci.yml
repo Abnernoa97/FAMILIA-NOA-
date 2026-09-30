@@ -41,6 +41,19 @@ jobs:
           grep -q "@cf/myshell-ai/melotts" worker/index.ts
           grep -q "binding.*AI\|\"binding\": \"AI\"" wrangler.jsonc
           npx wrangler deploy --dry-run --outdir .wrangler-dry
+      - name: Verify live NOA voice route
+        shell: bash
+        run: |
+          for attempt in $(seq 1 12); do
+            body="$(curl -fsS --max-time 10 https://familia-noa.soloaplicaciones97.workers.dev/api/noa-voice/status || true)"
+            echo "Attempt ${attempt}: ${body}"
+            if printf '%s' "$body" | grep -q '"aiBound":true'; then
+              exit 0
+            fi
+            sleep 5
+          done
+          echo "Live NOA voice route did not report a healthy AI binding"
+          exit 1
       - name: Enforce Cloudflare static asset limit
         shell: bash
         run: |
