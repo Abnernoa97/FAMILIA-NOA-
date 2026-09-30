@@ -2,18 +2,16 @@ const nativeAndroid=/FAMILIA-NOA-Android/i.test(navigator.userAgent)
 const nativeBridge=(window as any).FamiliaNoaNative
 const hasNativeSpeak=!!nativeBridge&&typeof nativeBridge.speak==='function'
 
-const PIPER_MODULES=[
-  'https://esm.sh/@realtimex/piper-tts-web@1.1.1?deps=onnxruntime-web@1.22.0&target=es2022',
-  'https://cdn.jsdelivr.net/npm/@realtimex/piper-tts-web@1.1.1/+esm',
-]
-
 if(nativeAndroid&&!hasNativeSpeak){
+  const originalSynth=(window as any).speechSynthesis
   let audio:HTMLAudioElement|null=null
-  let objectUrl=''
   let requestId=0
-  let enginePromise:Promise<any>|null=null
   let statusTimer:number|undefined
-  let primed=false
+
+  const providers=[
+    (text:string)=>`https://translate.googleapis.com/translate_tts?ie=UTF-8&client=gtx&tl=es-MX&q=${encodeURIComponent(text)}`,
+    (text:string)=>`https://translate.google.com/translate_tts?ie=UTF-8&client=tw-ob&tl=es-MX&q=${encodeURIComponent(text)}`,
+  ]
 
   const ensureStatus=()=>{
     let el=document.querySelector<HTMLElement>('[data-noa-tts-status]')
@@ -35,144 +33,146 @@ if(nativeAndroid&&!hasNativeSpeak){
     if(linger>0)statusTimer=window.setTimeout(()=>{el.style.opacity='0'},linger)
   }
 
-  const primeAudio=()=>{
-    if(primed)return
-    primed=true
-    try{
-      const AudioCtx=(window as any).AudioContext||(window as any).webkitAudioContext
-      if(AudioCtx){
-        const ctx=new AudioCtx()
-        const gain=ctx.createGain()
-        gain.gain.value=0
-        const oscillator=ctx.createOscillator()
-        oscillator.connect(gain)
-        gain.connect(ctx.destination)
-        oscillator.start()
-        oscillator.stop(ctx.currentTime+.01)
-        Promise.resolve(ctx.resume?.()).catch(()=>{})
-        window.setTimeout(()=>{try{ctx.close?.()}catch{}},250)
-      }
-    }catch{}
-  }
-
-  document.addEventListener('pointerdown',primeAudio,{passive:true})
-
   const cleanup=()=>{
     if(audio){
       try{audio.pause()}catch{}
       audio.src=''
+      audio.onplay=null
+      audio.onended=null
+      audio.onerror=null
       audio=null
     }
-    if(objectUrl){
-      try{URL.revokeObjectURL(objectUrl)}catch{}
-      objectUrl=''
+  }
+
+  const chunks=(value:string)=>{
+    const text=String(value||'').replace(/\s+/g,' ').trim().slice(0,1200)
+    if(!text)return []
+    const out:string[]=[]
+    let rest=text
+    while(rest.length>170){
+      let cut=Math.max(
+        rest.lastIndexOf('. ',170),
+        rest.lastIndexOf(', ',170),
+        rest.lastIndexOf('; ',170),
+        rest.lastIndexOf(' ',170),
+      )
+      if(cut<70)cut=170
+      out.push(rest.slice(0,cut+1).trim())
+      rest=rest.slice(cut+1).trim()
     }
+    if(rest)out.push(rest)
+    return out
   }
 
-  const forceSingleThread=()=>{
+  const trySystemVoice=(utterance:any,text:string)=>{
+    if(!originalSynth||typeof originalSynth.speak!=='function')return false
     try{
-      const current=Math.max(1,Number((navigator as any).hardwareConcurrency||1))
-      if(current!==1)Object.defineProperty(navigator,'hardwareConcurrency',{configurable:true,get:()=>1})
-    }catch{}
-  }
-
-  const importRemote=async(url:string)=>import(/* @vite-ignore */ url)
-
-  const loadEngine=()=>{
-    if(enginePromise)return enginePromise
-    enginePromise=(async()=>{
-      forceSingleThread()
-      let lastError:any=null
-      for(const url of PIPER_MODULES){
-        try{
-          const module=await importRemote(url)
-          if(typeof module?.predict==='function'||typeof module?.TtsSession==='function')return module
-          throw new Error('Piper module loaded without TTS API')
-        }catch(error){
-          lastError=error
-          console.warn('NOA Piper provider failed',url,error)
-        }
+      const U=(window as any).SpeechSynthesisUtterance
+      if(!U)return false
+      const fallback=new U(text)
+      fallback.lang='es-MX'
+      fallback.rate=.96
+      fallback.pitch=1
+      const voices=originalSynth.getVoices?.()||[]
+      fallback.voice=voices.find((voice:any)=>String(voice.lang||'').toLowerCase()==='es-mx')||voices.find((voice:any)=>String(voice.lang||'').toLowerCase().startsWith('es'))||null
+      fallback.onstart=()=>{
+        setStatus('Hablando…')
+        try{utterance?.onstart?.(new Event('start'))}catch{}
       }
-      throw lastError||new Error('No Piper provider available')
-    })()
-    return enginePromise
+      fallback.onend=()=>{
+        setStatus('NOA',900)
+        try{utterance?.onend?.(new Event('end'))}catch{}
+      }
+      fallback.onerror=()=>{
+        setStatus('No pude reproducir la voz · VOICE-DEVICE',3500)
+        try{utterance?.onerror?.(new Event('error'))}catch{}
+      }
+      originalSynth.cancel?.()
+      originalSynth.speak(fallback)
+      return true
+    }catch{return false}
   }
 
-  const synthesize=async(utterance:any)=>{
+  const speakRemote=async(utterance:any)=>{
     const text=String(utterance?.text||'').trim()
     if(!text)return
     const mine=++requestId
     cleanup()
     setStatus('Preparando voz…')
-    try{
-      const tts=await loadEngine()
+    const parts=chunks(text)
+    if(!parts.length)return
+
+    let started=false
+    const playPart=(index:number,providerIndex=0)=>{
       if(mine!==requestId)return
-      setStatus('Preparando voz local…')
-      const progress=(value:any)=>{
-        if(mine!==requestId)return
-        const loaded=Number(value?.loaded||0)
-        const total=Number(value?.total||0)
-        if(total>0){
-          const pct=Math.max(0,Math.min(100,Math.round((loaded/total)*100)))
-          setStatus(`Descargando voz ${pct}%…`)
-        }
-      }
-      let wav:Blob
-      if(typeof tts.TtsSession==='function'){
-        const session=await tts.TtsSession.create({
-          voiceId:'es_MX-claude-high',
-          progress,
-          allowLocalModels:true,
-          fallbackStrategy:'cdn',
-          logger:(message:string)=>console.debug('NOA TTS',message),
-        })
-        wav=await session.predict(text.slice(0,900))
-      }else{
-        wav=await tts.predict({text:text.slice(0,900),voiceId:'es_MX-claude-high'},progress)
-      }
-      if(mine!==requestId)return
-      objectUrl=URL.createObjectURL(wav)
-      audio=new Audio(objectUrl)
-      audio.preload='auto'
-      audio.volume=1
-      audio.playbackRate=.97
-      audio.onplay=()=>{
-        setStatus('Hablando…')
-        try{utterance?.onstart?.(new Event('start'))}catch{}
-      }
-      audio.onended=()=>{
+      if(index>=parts.length){
         setStatus('NOA',900)
         try{utterance?.onend?.(new Event('end'))}catch{}
         cleanup()
+        return
       }
-      audio.onerror=()=>{
-        setStatus('No pude reproducir la voz · TTS-PLAY',3500)
-        try{utterance?.onerror?.(new Event('error'))}catch{}
+      if(providerIndex>=providers.length){
         cleanup()
+        if(trySystemVoice(utterance,text))return
+        document.documentElement.setAttribute('data-noa-tts-error','VOICE-NET')
+        setStatus('No pude reproducir la voz · VOICE-NET',3500)
+        try{utterance?.onerror?.(new Event('error'))}catch{}
+        return
       }
-      await audio.play()
-    }catch(error){
-      console.warn('NOA neural voice failed',error)
-      enginePromise=null
-      const message=String((error as any)?.message||error||'')
-      document.documentElement.setAttribute('data-noa-tts-error',message.slice(0,180))
-      setStatus('No pude activar la voz · TTS-ENGINE',3500)
-      try{utterance?.onerror?.(new Event('error'))}catch{}
-      cleanup()
+
+      const player=new Audio()
+      audio=player
+      player.preload='auto'
+      player.volume=1
+      player.playbackRate=.97
+      player.src=providers[providerIndex](parts[index])
+      player.onplay=()=>{
+        if(mine!==requestId)return
+        setStatus('Hablando…')
+        if(!started){
+          started=true
+          try{utterance?.onstart?.(new Event('start'))}catch{}
+        }
+      }
+      player.onended=()=>{
+        if(mine!==requestId)return
+        audio=null
+        playPart(index+1,0)
+      }
+      player.onerror=()=>{
+        if(mine!==requestId)return
+        try{player.pause()}catch{}
+        player.src=''
+        if(audio===player)audio=null
+        playPart(index,providerIndex+1)
+      }
+      const promise=player.play()
+      if(promise&&typeof promise.catch==='function'){
+        promise.catch(()=>{
+          if(mine!==requestId)return
+          try{player.pause()}catch{}
+          player.src=''
+          if(audio===player)audio=null
+          playPart(index,providerIndex+1)
+        })
+      }
     }
+
+    playPart(0,0)
   }
 
   const cancel=()=>{
     requestId++
     cleanup()
+    try{originalSynth?.cancel?.()}catch{}
     setStatus('NOA',500)
   }
 
-  const localSpeak=(utterance:any)=>{void synthesize(utterance)}
+  const localSpeak=(utterance:any)=>{void speakRemote(utterance)}
   const localSynth={
     speak:localSpeak,
     cancel,
-    getVoices:()=>[],
+    getVoices:()=>{try{return originalSynth?.getVoices?.()||[]}catch{return []}},
     pause:()=>audio?.pause(),
     resume:()=>{void audio?.play().catch(()=>{})},
     paused:false,
@@ -180,28 +180,18 @@ if(nativeAndroid&&!hasNativeSpeak){
     speaking:false,
   }
 
-  const existing=(window as any).speechSynthesis
   let installed=false
-
   try{
     Object.defineProperty(window,'speechSynthesis',{configurable:true,enumerable:true,value:localSynth})
     installed=(window as any).speechSynthesis===localSynth
   }catch{}
 
-  if(!installed&&existing){
+  if(!installed&&originalSynth){
     try{
-      const proto=Object.getPrototypeOf(existing)
-      if(proto){
-        Object.defineProperty(proto,'speak',{configurable:true,writable:true,value:localSpeak})
-        Object.defineProperty(proto,'cancel',{configurable:true,writable:true,value:cancel})
-        Object.defineProperty(proto,'getVoices',{configurable:true,writable:true,value:()=>[]})
-      }
+      originalSynth.speak=localSpeak
+      originalSynth.cancel=cancel
       installed=true
     }catch{}
-  }
-
-  if(!installed&&existing){
-    try{existing.speak=localSpeak;existing.cancel=cancel;existing.getVoices=()=>[];installed=true}catch{}
   }
 
   if(!(window as any).SpeechSynthesisUtterance){
@@ -220,28 +210,23 @@ if(nativeAndroid&&!hasNativeSpeak){
     try{Object.defineProperty(window,'SpeechSynthesisUtterance',{configurable:true,value:NoaUtterance})}catch{}
   }
 
-  document.documentElement.setAttribute('data-noa-voice-build','20260930-webview-piper-fix')
+  document.documentElement.setAttribute('data-noa-voice-build','20260930-webview-stream-v1')
 
   ;(window as any).__familiaNoaSpeakText=(text:string)=>{
-    const Utterance=(window as any).SpeechSynthesisUtterance
-    const utterance=Utterance?new Utterance(String(text||'')):{text:String(text||'')}
-    return synthesize(utterance)
+    const U=(window as any).SpeechSynthesisUtterance
+    const utterance=U?new U(String(text||'')):{text:String(text||'')}
+    return speakRemote(utterance)
   }
 
   ;(window as any).__familiaNoaLocalTts={
-    engine:'piper-remote-single-thread',
-    voice:'es_MX-claude-high',
-    build:'20260930-webview-piper-fix',
+    engine:'webview-streamed-voice',
+    build:'20260930-webview-stream-v1',
     installed,
     cancel,
     test:()=>{void (window as any).__familiaNoaSpeakText?.('Hola. Soy NOA.')},
   }
 
-  if(installed)setStatus('Voz NOA lista',1200)
-  else setStatus('Preparando motor de voz…',1800)
+  setStatus(installed?'Voz NOA lista':'Preparando voz…',1200)
 
-  window.addEventListener('beforeunload',()=>{
-    document.removeEventListener('pointerdown',primeAudio)
-    cleanup()
-  },{once:true})
+  window.addEventListener('beforeunload',cleanup,{once:true})
 }
