@@ -28,15 +28,33 @@ jobs:
         run: npm install
       - name: Build canonical web app
         run: npm run build
-      - name: Verify NOA voice is bundled
+      - name: Verify NOA voice code is bundled
         shell: bash
         run: |
           grep -R -q "es_MX-claude-high" dist
           grep -R -q "familiaNoaSpeakText" dist
+          grep -R -q "cdn.jsdelivr.net/npm/@realtimex/piper-tts-web@1.1.1/+esm" dist
+      - name: Enforce Cloudflare static asset limit
+        shell: bash
+        run: |
+          python - <<'PY'
+          from pathlib import Path
+          limit = 25 * 1024 * 1024
+          oversized = [(str(p), p.stat().st_size) for p in Path('dist').rglob('*') if p.is_file() and p.stat().st_size > limit]
+          if oversized:
+              for path, size in oversized:
+                  print(f'Oversized Cloudflare asset: {path} ({size} bytes)')
+              raise SystemExit(1)
+          print('All static assets are within Cloudflare 25 MiB limit.')
+          PY
       - name: Verify retired code is absent
         shell: bash
         run: |
           if grep -R -q "noa-voice-style" dist; then
             echo "Retired voice wrapper found in bundle"
+            exit 1
+          fi
+          if find dist -type f -name 'ort-wasm*.wasm' | grep -q .; then
+            echo "Oversized ONNX WASM must not be bundled into Cloudflare assets"
             exit 1
           fi
