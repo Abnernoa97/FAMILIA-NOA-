@@ -1,6 +1,5 @@
 if ('serviceWorker' in navigator) {
   let refreshing = false;
-  const root = location.pathname.startsWith('/FAMILIA-NOA-/') ? '/FAMILIA-NOA-/' : '/';
 
   navigator.serviceWorker.addEventListener('controllerchange', () => {
     if (refreshing) return;
@@ -10,8 +9,15 @@ if ('serviceWorker' in navigator) {
 
   window.addEventListener('load', async () => {
     try {
-      const registration = await navigator.serviceWorker.register(root + 'service-worker.js', {
-        scope: root,
+      const registrations = await navigator.serviceWorker.getRegistrations();
+      await Promise.all(registrations.map(async registration => {
+        if (registration.scope !== `${location.origin}/`) {
+          try { await registration.unregister(); } catch {}
+        }
+      }));
+
+      const registration = await navigator.serviceWorker.register('/service-worker.js', {
+        scope: '/',
         updateViaCache: 'none'
       });
       await registration.update();
