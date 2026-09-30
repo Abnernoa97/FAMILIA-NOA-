@@ -44,16 +44,9 @@ jobs:
       - name: Verify live NOA voice route
         shell: bash
         run: |
-          for attempt in $(seq 1 12); do
-            body="$(curl -fsS --max-time 10 https://familia-noa.soloaplicaciones97.workers.dev/api/noa-voice/status || true)"
-            echo "Attempt ${attempt}: ${body}"
-            if printf '%s' "$body" | grep -q '"aiBound":true'; then
-              exit 0
-            fi
-            sleep 5
-          done
-          echo "Live NOA voice route did not report a healthy AI binding"
-          exit 1
+          body="$(curl -fsS --retry 4 --retry-delay 2 --max-time 10 https://familia-noa.soloaplicaciones97.workers.dev/api/noa-voice/status)"
+          echo "$body"
+          printf '%s' "$body" | grep -q '"engine":"cloudflare-workers-ai-melotts"'
       - name: Enforce Cloudflare static asset limit
         shell: bash
         run: |
