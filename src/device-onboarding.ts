@@ -4,6 +4,7 @@ import { ensurePushSubscription, getPushSetupStatus } from './presume-challenge-
 
 let busy=false
 let queued=false
+const nativeAndroid=typeof navigator!=='undefined'&&navigator.userAgent.includes('FAMILIA-NOA-Android/')
 
 function injectStyles(){
   if(document.querySelector('#family-device-onboarding-css'))return
@@ -21,6 +22,11 @@ function injectStyles(){
 function removeLegacyButton(){document.querySelector('#enableBiometric')?.remove()}
 
 async function render(){
+  if(nativeAndroid){
+    document.querySelector('[data-device-onboarding]')?.remove()
+    removeLegacyButton()
+    return
+  }
   if(busy){queued=true;return}
   const root=document.querySelector<HTMLElement>('.shell')
   const identity=getIdentity()
