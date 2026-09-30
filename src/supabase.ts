@@ -16,7 +16,7 @@ if(typeof window!=='undefined'&&!isAdmin){
 
 const browserStorage = typeof window !== 'undefined' ? window.localStorage : undefined
 
-export const supabase = createClient(SUPABASE_URL, SUPABASE_PUBLISHABLE_KEY, {
+const client = createClient(SUPABASE_URL, SUPABASE_PUBLISHABLE_KEY, {
   auth: {
     storageKey: isAdmin ? 'familia-noa-admin-auth' : FAMILY_AUTH_KEY,
     storage: browserStorage,
@@ -25,3 +25,17 @@ export const supabase = createClient(SUPABASE_URL, SUPABASE_PUBLISHABLE_KEY, {
     detectSessionInUrl:false,
   },
 })
+
+// Supabase exposes `functions` through a getter that can create a new FunctionsClient
+// on each access. NOA decorates that client to add family conversation context, so we
+// intentionally keep one shared instance for the lifetime of this app session.
+const sharedFunctions = client.functions
+try{
+  Object.defineProperty(client,'functions',{
+    configurable:true,
+    enumerable:true,
+    get:()=>sharedFunctions,
+  })
+}catch{}
+
+export const supabase = client
