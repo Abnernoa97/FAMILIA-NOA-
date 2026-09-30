@@ -35,6 +35,7 @@ const loadAssistant = async () => {
   if (assistantLoaded || !document.querySelector('.shell')) return
   try {
     await import('./profile-noa-guard')
+    await import('./noa-context-enhancer')
     await import('./profile-assistant')
     await import('./noa-minimal.css')
     await import('./noa-draggable')
