@@ -40,6 +40,7 @@ const loadAssistant = async () => {
     await import('./noa-minimal.css')
     await import('./noa-draggable')
     await import('./noa-quick-prompts')
+    await import('./noa-web-tts')
     await import('./noa-voice-style')
     assistantLoaded = true
   } catch (error) {
