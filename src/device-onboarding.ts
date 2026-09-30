@@ -1,5 +1,4 @@
 import { getIdentity, onIdentityChange } from './core/identity'
-import { enablePasskeyForCurrentMember, getPasskeyStatus, passkeySupported } from './biometric-enhancer'
 import { ensurePushSubscription, getPushSetupStatus } from './presume-challenge-push'
 
 let busy=false
@@ -22,9 +21,9 @@ function injectStyles(){
 function removeLegacyButton(){document.querySelector('#enableBiometric')?.remove()}
 
 async function render(){
+  removeLegacyButton()
   if(nativeAndroid){
     document.querySelector('[data-device-onboarding]')?.remove()
-    removeLegacyButton()
     return
   }
   if(busy){queued=true;return}
@@ -33,10 +32,9 @@ async function render(){
   if(!root||!identity?.memberId){document.querySelector('[data-device-onboarding]')?.remove();return}
   busy=true
   try{
-    removeLegacyButton()
-    const [passkey,push]=await Promise.all([getPasskeyStatus(identity.memberId),getPushSetupStatus()])
+    const push=await getPushSetupStatus()
     if(!document.querySelector('.shell')||getIdentity()?.memberId!==identity.memberId)return
-    if(passkey.deviceReady&&push.ready){document.querySelector('[data-device-onboarding]')?.remove();return}
+    if(push.ready){document.querySelector('[data-device-onboarding]')?.remove();return}
 
     let panel=document.querySelector<HTMLElement>('[data-device-onboarding]')
     if(!panel){
@@ -48,33 +46,13 @@ async function render(){
       else root.prepend(panel)
     }
 
-    const passkeyRow=passkey.deviceReady?''
-      :passkeySupported()
-        ?`<div class="device-onboarding-row"><i class="device-onboarding-icon">⌁</i><div class="device-onboarding-copy"><b>Huella / Face ID</b><span>Entra rápido desde este teléfono.</span></div><button type="button" class="device-onboarding-action" data-enable-passkey>Activar</button></div>`
-        :`<div class="device-onboarding-row"><i class="device-onboarding-icon">⌁</i><div class="device-onboarding-copy"><b>Huella / Face ID</b><span>No disponible en este dispositivo.</span></div></div>`
-
     let pushRow=''
-    if(!push.ready){
-      if(push.needsInstall)pushRow=`<div class="device-onboarding-row"><i class="device-onboarding-icon">◉</i><div class="device-onboarding-copy"><b>Notificaciones</b><span>En iPhone, instala FAMILIA NOA en la pantalla de inicio primero.</span></div></div>`
-      else if(!push.supported)pushRow=`<div class="device-onboarding-row"><i class="device-onboarding-icon">◉</i><div class="device-onboarding-copy"><b>Notificaciones</b><span>No disponibles en este navegador.</span></div></div>`
-      else if(push.permission==='denied')pushRow=`<div class="device-onboarding-row"><i class="device-onboarding-icon">◉</i><div class="device-onboarding-copy"><b>Notificaciones</b><span>Están bloqueadas. Actívalas desde los ajustes del navegador o del teléfono.</span></div></div>`
-      else pushRow=`<div class="device-onboarding-row"><i class="device-onboarding-icon">◉</i><div class="device-onboarding-copy"><b>Notificaciones</b><span>Recibe los avisos de PRESUME aunque cierres la app.</span></div><button type="button" class="device-onboarding-action" data-enable-push>Activar</button></div>`
-    }
+    if(push.needsInstall)pushRow=`<div class="device-onboarding-row"><i class="device-onboarding-icon">◉</i><div class="device-onboarding-copy"><b>Notificaciones</b><span>En iPhone, instala FAMILIA NOA en la pantalla de inicio primero.</span></div></div>`
+    else if(!push.supported)pushRow=`<div class="device-onboarding-row"><i class="device-onboarding-icon">◉</i><div class="device-onboarding-copy"><b>Notificaciones</b><span>No disponibles en este navegador.</span></div></div>`
+    else if(push.permission==='denied')pushRow=`<div class="device-onboarding-row"><i class="device-onboarding-icon">◉</i><div class="device-onboarding-copy"><b>Notificaciones</b><span>Están bloqueadas. Actívalas desde los ajustes del navegador o del teléfono.</span></div></div>`
+    else pushRow=`<div class="device-onboarding-row"><i class="device-onboarding-icon">◉</i><div class="device-onboarding-copy"><b>Notificaciones</b><span>Recibe los avisos aunque cierres la app.</span></div><button type="button" class="device-onboarding-action" data-enable-push>Activar</button></div>`
 
-    panel.innerHTML=`<div class="device-onboarding-head"><div><b>Termina de preparar este teléfono</b><span>Solo falta activar lo que todavía no está listo.</span></div><span class="device-onboarding-badge">Privado</span></div><div class="device-onboarding-list">${passkeyRow}${pushRow}</div><div class="device-onboarding-error" data-device-error hidden></div>`
-
-    panel.querySelector<HTMLButtonElement>('[data-enable-passkey]')?.addEventListener('click',async event=>{
-      const button=event.currentTarget as HTMLButtonElement
-      const error=panel?.querySelector<HTMLElement>('[data-device-error]')
-      button.disabled=true
-      if(error){error.hidden=true;error.textContent=''}
-      try{await enablePasskeyForCurrentMember();await render()}
-      catch(err){
-        const name=err instanceof Error?err.name:''
-        if(name!=='NotAllowedError'&&name!=='AbortError'&&error){error.hidden=false;error.textContent=err instanceof Error?err.message:'No se pudo activar la biometría.'}
-        button.disabled=false
-      }
-    })
+    panel.innerHTML=`<div class="device-onboarding-head"><div><b>Termina de preparar este teléfono</b><span>Solo falta activar lo que todavía no está listo.</span></div><span class="device-onboarding-badge">Privado</span></div><div class="device-onboarding-list">${pushRow}</div><div class="device-onboarding-error" data-device-error hidden></div>`
 
     panel.querySelector<HTMLButtonElement>('[data-enable-push]')?.addEventListener('click',async event=>{
       const button=event.currentTarget as HTMLButtonElement
@@ -96,7 +74,6 @@ async function render(){
 injectStyles()
 const stopIdentityWatch=onIdentityChange(()=>void render())
 document.addEventListener('family:home-rendered',()=>void render())
-document.addEventListener('family:passkey-changed',()=>void render())
 document.addEventListener('family:push-changed',()=>void render())
 const app=document.querySelector('#app')
 const appObserver=app?new MutationObserver(()=>{if(document.querySelector('.shell'))void render()}):null
