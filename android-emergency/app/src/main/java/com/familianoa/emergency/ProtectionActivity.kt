@@ -33,6 +33,10 @@ class ProtectionActivity : FragmentActivity() {
         private const val REQ_NOTIFICATIONS = 110
         private const val REQ_MEDIA = 111
         private const val REQ_LOCATION = 112
+        private val BG: Int = Color.rgb(247, 244, 237)
+        private val INK: Int = Color.rgb(23, 23, 22)
+        private val MUTED: Int = Color.rgb(107, 103, 96)
+        private val ERROR: Int = Color.rgb(154, 54, 48)
     }
 
     private lateinit var store: SessionStore
@@ -114,7 +118,7 @@ class ProtectionActivity : FragmentActivity() {
         val house = field("Número de la casa de Trinidad", numeric = true)
         val nickname = field("Tu apodo en la familia", numeric = false)
         spacer(8)
-        val enter = primaryButton("ENTRAR") {
+        val enter = primaryButton("ENTRAR") { button ->
             val houseValue = house.text.toString().trim()
             val nicknameValue = nickname.text.toString().trim()
             if (houseValue.isBlank() || nicknameValue.isBlank()) {
@@ -122,7 +126,7 @@ class ProtectionActivity : FragmentActivity() {
                 return@primaryButton
             }
             status.text = "Verificando…"
-            it.isEnabled = false
+            button.isEnabled = false
             Thread {
                 try {
                     val session = Api.login(member.id, houseValue, nicknameValue)
@@ -134,10 +138,10 @@ class ProtectionActivity : FragmentActivity() {
                         }
                         renderReady()
                     }
-                } catch (error: Throwable) {
+                } catch (_: Throwable) {
                     runOnUiThread {
                         status.text = "Datos incorrectos. Comprueba el número de la casa y tu apodo."
-                        it.isEnabled = true
+                        button.isEnabled = true
                     }
                 }
             }.start()
@@ -185,9 +189,7 @@ class ProtectionActivity : FragmentActivity() {
     }
 
     private fun brand() {
-        text("FAMILIA NOA", 18, true, INK).apply {
-            letterSpacing = .13f
-        }
+        text("FAMILIA NOA", 18, true, INK).apply { letterSpacing = .13f }
     }
 
     private fun eyebrow(value: String) {
@@ -227,9 +229,7 @@ class ProtectionActivity : FragmentActivity() {
             background = rounded(if (available) INK else Color.rgb(229, 225, 218), 18)
             setPadding(dp(16), dp(14), dp(16), dp(14))
             isEnabled = available && !(enabled && !configured)
-            setOnClickListener {
-                if (available) showBiometric(configured)
-            }
+            setOnClickListener { if (available) showBiometric(configured) }
         }
         root.addView(button, LinearLayout.LayoutParams(ViewGroup.LayoutParams.MATCH_PARENT, dp(58)))
         if (enabled && !configured) {
@@ -383,18 +383,18 @@ class ProtectionActivity : FragmentActivity() {
     }
 
     private fun profileCard(name: String, action: () -> Unit) {
-        val button = Button(this).apply {
-            text = "$name                                      ›"
+        val card = LinearLayout(this).apply {
+            orientation = LinearLayout.HORIZONTAL
             gravity = Gravity.CENTER_VERTICAL
-            isAllCaps = false
-            textSize = 18f
-            setTextColor(INK)
-            typeface = Typeface.DEFAULT_BOLD
             background = rounded(Color.WHITE, 20, Color.rgb(230, 225, 217))
-            setPadding(dp(18), 0, dp(18), 0)
+            setPadding(dp(18), 0, dp(16), 0)
+            isClickable = true
+            isFocusable = true
             setOnClickListener { action() }
         }
-        root.addView(button, LinearLayout.LayoutParams(ViewGroup.LayoutParams.MATCH_PARENT, dp(76)))
+        card.addView(makeText(name, 18, true, INK), LinearLayout.LayoutParams(0, ViewGroup.LayoutParams.WRAP_CONTENT, 1f))
+        card.addView(makeText("›", 28, false, INK))
+        root.addView(card, LinearLayout.LayoutParams(ViewGroup.LayoutParams.MATCH_PARENT, dp(76)))
     }
 
     private fun field(hint: String, numeric: Boolean): EditText {
@@ -498,11 +498,4 @@ class ProtectionActivity : FragmentActivity() {
 
     private fun dp(value: Int) = (value * resources.displayMetrics.density).toInt()
     private fun toast(value: String) = Toast.makeText(this, value, Toast.LENGTH_SHORT).show()
-
-    private companion object Colors {
-        val BG: Int = Color.rgb(247, 244, 237)
-        val INK: Int = Color.rgb(23, 23, 22)
-        val MUTED: Int = Color.rgb(107, 103, 96)
-        val ERROR: Int = Color.rgb(154, 54, 48)
-    }
 }
