@@ -2,6 +2,7 @@ package com.familianoa.emergency
 
 import android.Manifest
 import android.app.Activity
+import android.app.ActivityManager
 import android.app.NotificationManager
 import android.content.Intent
 import android.content.pm.PackageManager
@@ -217,11 +218,14 @@ class ProtectionActivity : Activity() {
     private fun permissions(): PermissionState {
         val manager = getSystemService(NotificationManager::class.java)
         val power = getSystemService(PowerManager::class.java)
+        val activityManager = getSystemService(ActivityManager::class.java)
+        val backgroundAllowed = Build.VERSION.SDK_INT < 28 || !activityManager.isBackgroundRestricted
+        val batteryReady = backgroundAllowed || power.isIgnoringBatteryOptimizations(packageName)
         return PermissionState(
             notifications = Build.VERSION.SDK_INT < 33 || checkSelfPermission(Manifest.permission.POST_NOTIFICATIONS) == PackageManager.PERMISSION_GRANTED,
             overlay = Settings.canDrawOverlays(this),
             fullScreen = Build.VERSION.SDK_INT < 34 || manager.canUseFullScreenIntent(),
-            battery = power.isIgnoringBatteryOptimizations(packageName),
+            battery = batteryReady,
             dnd = manager.isNotificationPolicyAccessGranted,
             camera = checkSelfPermission(Manifest.permission.CAMERA) == PackageManager.PERMISSION_GRANTED,
             microphone = checkSelfPermission(Manifest.permission.RECORD_AUDIO) == PackageManager.PERMISSION_GRANTED,
@@ -240,10 +244,10 @@ class ProtectionActivity : Activity() {
         card.addView(makeText("Todo se activa desde aquí. AYUDA sigue trabajando por detrás.", 11, false, MUTED).apply { setPadding(0, dp(3), 0, dp(10)) })
 
         val alerts = listOf(state.notifications, state.overlay, state.fullScreen)
-        val power = listOf(state.battery, state.dnd)
         val media = listOf(state.camera, state.microphone)
         card.addView(statusRow("Alertas de emergencia", alerts.count { it }, alerts.size))
-        card.addView(statusRow("Batería y No molestar", power.count { it }, power.size))
+        card.addView(statusRow("Segundo plano", if (state.battery) 1 else 0, 1))
+        card.addView(statusRow("No molestar", if (state.dnd) 1 else 0, 1))
         card.addView(statusRow("Cámara y voz", media.count { it }, media.size))
         card.addView(statusRow("Ubicación", if (state.location) 1 else 0, 1))
 
