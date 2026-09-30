@@ -1,25 +1,25 @@
 let observer:MutationObserver|null=null
 
 const prompts=[
-  ['Resumen','Dame mi resumen del día'],
-  ['Quién escribió','¿Quién escribió en el chat?'],
-  ['Qué cambió','¿Qué hay nuevo desde que entré?'],
-  ['Quién estuvo','¿Quién estuvo activo?'],
-  ['Mensajes','¿Cuántos mensajes tengo por leer?'],
-  ['Fotos','¿Cuántas fotos se compartieron?'],
-  ['PRESUME','¿Quién ya hizo PRESUME?'],
+  ['Qué pasó hoy','¿Qué pasó hoy en la familia?'],
+  ['Quién escribió','¿Quién escribió en el chat hoy?'],
+  ['Qué dijeron','¿Qué dijeron hoy en el chat?'],
+  ['Qué cambió','¿Qué hay nuevo o qué cambió hoy?'],
+  ['Quién estuvo','¿Quién estuvo activo hoy?'],
+  ['Fotos','¿Cuántas fotos se compartieron hoy?'],
+  ['PRESUME','¿Quién ya hizo PRESUME hoy?'],
 ] as const
 
 function enhance(){
   const modal=document.querySelector<HTMLElement>('.noa-modal')
-  if(!modal||modal.dataset.noaPromptsV2==='1')return
-  modal.dataset.noaPromptsV2='1'
+  if(!modal||modal.dataset.noaPromptsV3==='1')return
+  modal.dataset.noaPromptsV3='1'
 
   const hero=modal.querySelector<HTMLElement>('.noa-hero p')
-  if(hero)hero.textContent='Pregúntame qué pasó, quién escribió, qué cambió o qué te falta por ver.'
+  if(hero)hero.textContent='Pregúntame qué pasó hoy, quién escribió, qué dijeron o qué hizo alguien de la familia.'
 
   const input=modal.querySelector<HTMLInputElement>('[data-noa-input]')
-  if(input)input.placeholder='Pregúntale a NOA sobre la familia…'
+  if(input)input.placeholder='Ej. ¿Qué hizo Mamá hoy?'
 
   const row=modal.querySelector<HTMLElement>('.noa-prompts')
   if(!row)return
