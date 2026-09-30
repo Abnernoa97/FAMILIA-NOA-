@@ -1,4 +1,4 @@
-const CACHE = 'familia-noa-v70';
+const CACHE = 'familia-noa-v71';
 const BASE = new URL(self.registration.scope).pathname;
 const STATIC = [
   BASE,
@@ -25,6 +25,10 @@ self.addEventListener('activate', event => {
     const keys = await caches.keys();
     await Promise.all(keys.filter(key => key.startsWith('familia-noa-v') && key !== CACHE).map(key => caches.delete(key)));
     await self.clients.claim();
+    const clients = await self.clients.matchAll({ type:'window', includeUncontrolled:true });
+    for (const client of clients) {
+      try { client.postMessage({ type:'FAMILIA_NOA_UPDATED', cache:CACHE }); } catch {}
+    }
   })());
 });
 
