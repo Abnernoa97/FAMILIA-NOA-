@@ -2,219 +2,449 @@ package com.familianoa.emergency
 
 import android.Manifest
 import android.app.Activity
-import android.app.NotificationManager
+import android.content.ClipData
 import android.content.Intent
 import android.content.pm.PackageManager
 import android.graphics.Color
 import android.net.Uri
-import android.os.Build
 import android.os.Bundle
-import android.os.PowerManager
-import android.provider.Settings
+import android.provider.MediaStore
 import android.view.Gravity
+import android.view.View
 import android.view.ViewGroup
-import android.widget.*
+import android.webkit.GeolocationPermissions
+import android.webkit.JavascriptInterface
+import android.webkit.PermissionRequest
+import android.webkit.ValueCallback
+import android.webkit.WebChromeClient
+import android.webkit.WebResourceError
+import android.webkit.WebResourceRequest
+import android.webkit.WebView
+import android.webkit.WebViewClient
+import android.widget.FrameLayout
+import android.widget.TextView
+import android.widget.Toast
+import androidx.core.content.FileProvider
+import org.json.JSONObject
+import java.io.File
 
 class MainActivity : Activity() {
+    companion object {
+        private const val REQ_PROTECTION = 210
+        private const val REQ_FILE_CHOOSER = 211
+        private const val REQ_CAMERA_FOR_CHOOSER = 212
+        private const val REQ_WEB_MEDIA = 213
+        private const val REQ_GEOLOCATION = 214
+        private const val NATIVE_MARKER = "familia-noa-native-bootstrapped"
+    }
+
     private lateinit var store: SessionStore
-    private lateinit var root: LinearLayout
-    private lateinit var permissionBox: LinearLayout
-    private var members: List<FamilyMember> = emptyList()
-    private var loginStatus: TextView? = null
-    private var memberSpinner: Spinner? = null
-    private var activateButton: Button? = null
+    private var webView: WebView? = null
+    private var loadingView: TextView? = null
+    private var openingProtection = false
+    private var loadedMemberId = ""
+
+    private var filePathCallback: ValueCallback<Array<Uri>>? = null
+    private var captureUri: Uri? = null
+    private var pendingFileChooserParams: WebChromeClient.FileChooserParams? = null
+
+    private var pendingWebPermissionRequest: PermissionRequest? = null
+    private var pendingWebResources: Array<String> = emptyArray()
+    private var pendingGeoOrigin: String? = null
+    private var pendingGeoCallback: GeolocationPermissions.Callback? = null
 
     override fun onCreate(savedInstanceState: Bundle?) {
         super.onCreate(savedInstanceState)
         store = SessionStore(this)
-        render()
-        if (!store.configured) loadMembers()
+        window.statusBarColor = Color.rgb(246, 243, 237)
+        window.navigationBarColor = Color.BLACK
+        window.decorView.systemUiVisibility = View.SYSTEM_UI_FLAG_LIGHT_STATUS_BAR
+
+        if (store.configured) renderWebApp() else openProtection()
     }
 
     override fun onResume() {
         super.onResume()
-        if (::permissionBox.isInitialized) renderPermissions()
-        if (store.configured) EmergencyService.start(this)
+        if (!::store.isInitialized || openingProtection) return
+
+        if (!store.configured) {
+            webView?.visibility = View.INVISIBLE
+            openProtection()
+            return
+        }
+
+        EmergencyService.start(this)
+        if (webView == null) {
+            renderWebApp()
+        } else if (loadedMemberId != store.memberId) {
+            loadedMemberId = store.memberId
+            webView?.evaluateJavascript(
+                "try{sessionStorage.removeItem('$NATIVE_MARKER');location.reload()}catch(e){}",
+                null
+            )
+        }
     }
 
-    private fun render() {
-        val scroll = ScrollView(this)
-        root = LinearLayout(this).apply {
-            orientation = LinearLayout.VERTICAL
-            setPadding(dp(24), dp(34), dp(24), dp(44))
-            setBackgroundColor(Color.rgb(247, 244, 237))
+    override fun onDestroy() {
+        filePathCallback?.onReceiveValue(null)
+        filePathCallback = null
+        pendingWebPermissionRequest?.deny()
+        pendingWebPermissionRequest = null
+        pendingGeoCallback?.invoke(pendingGeoOrigin, false, false)
+        pendingGeoCallback = null
+        pendingGeoOrigin = null
+        webView?.apply {
+            stopLoading()
+            webChromeClient = null
+            webViewClient = WebViewClient()
+            destroy()
         }
-        scroll.addView(root, ViewGroup.LayoutParams(ViewGroup.LayoutParams.MATCH_PARENT, ViewGroup.LayoutParams.WRAP_CONTENT))
-        setContentView(scroll)
-
-        text("FAMILIA NOA", 14, true, Color.rgb(115, 20, 31))
-        text("Protección de emergencia", 34, true, Color.rgb(24, 24, 24)).apply { setPadding(0, dp(4), 0, dp(8)) }
-        text("Este módulo existe solo para AYUDA. Cuando está activo puede mostrar una alerta roja encima de otras apps y sobre la pantalla bloqueada.", 16, false, Color.DKGRAY)
-        spacer(22)
-
-        if (store.configured) renderConfigured() else renderLogin()
-
-        spacer(24)
-        text("PERMISOS DE PRIORIDAD", 12, true, Color.DKGRAY)
-        permissionBox = LinearLayout(this).apply { orientation = LinearLayout.VERTICAL }
-        root.addView(permissionBox)
-        renderPermissions()
+        webView = null
+        super.onDestroy()
     }
 
-    private fun renderConfigured() {
-        card().apply {
-            addView(makeText("Protección configurada", 18, true, Color.rgb(20, 90, 48)))
-            addView(makeText(store.memberName, 26, true, Color.BLACK))
-            addView(makeText("El servicio se inicia automáticamente y vuelve a arrancar después de reiniciar el teléfono.", 14, false, Color.DKGRAY))
+    private fun openProtection() {
+        if (openingProtection) return
+        openingProtection = true
+        startActivityForResult(Intent(this, ProtectionActivity::class.java), REQ_PROTECTION)
+    }
+
+    private fun renderWebApp() {
+        if (!store.configured || webView != null) return
+        loadedMemberId = store.memberId
+        EmergencyService.start(this)
+
+        val frame = FrameLayout(this).apply { setBackgroundColor(Color.rgb(246, 243, 237)) }
+        val web = WebView(this).apply {
+            setBackgroundColor(Color.rgb(246, 243, 237))
+            visibility = View.INVISIBLE
+            settings.javaScriptEnabled = true
+            settings.domStorageEnabled = true
+            settings.databaseEnabled = true
+            settings.allowFileAccess = false
+            settings.allowContentAccess = true
+            settings.mediaPlaybackRequiresUserGesture = false
+            settings.setGeolocationEnabled(true)
+            settings.cacheMode = android.webkit.WebSettings.LOAD_DEFAULT
+            settings.mixedContentMode = android.webkit.WebSettings.MIXED_CONTENT_NEVER_ALLOW
+            settings.userAgentString = settings.userAgentString + " FAMILIA-NOA-Android/2.0"
+            addJavascriptInterface(NativeBridge(), "FamiliaNoaNative")
         }
-        button("ACTIVAR / REINICIAR PROTECCIÓN") { EmergencyService.start(this); toast("Protección activa") }
-        button("ABRIR FAMILIA NOA") {
-            startActivity(Intent(Intent.ACTION_VIEW, Uri.parse(Config.FAMILY_WEB_URL)))
+        webView = web
+
+        val loading = TextView(this).apply {
+            text = "FAMILIA NOA"
+            textSize = 20f
+            setTextColor(Color.rgb(23, 23, 22))
+            gravity = Gravity.CENTER
+            setBackgroundColor(Color.rgb(246, 243, 237))
+            setOnClickListener { web.reload() }
         }
-        val change = Button(this).apply {
-            text = "Cambiar perfil de este teléfono"
-            setOnClickListener {
-                EmergencyService.stop(this@MainActivity)
-                store.clearAll()
-                recreate()
+        loadingView = loading
+
+        frame.addView(web, FrameLayout.LayoutParams(ViewGroup.LayoutParams.MATCH_PARENT, ViewGroup.LayoutParams.MATCH_PARENT))
+        frame.addView(loading, FrameLayout.LayoutParams(ViewGroup.LayoutParams.MATCH_PARENT, ViewGroup.LayoutParams.MATCH_PARENT))
+        setContentView(frame)
+
+        web.webViewClient = object : WebViewClient() {
+            override fun shouldOverrideUrlLoading(view: WebView, request: WebResourceRequest): Boolean {
+                return openOutsideIfNeeded(request.url)
             }
-        }
-        root.addView(change)
-    }
 
-    private fun renderLogin() {
-        val status = text("Cargando miembros…", 14, false, Color.DKGRAY)
-        loginStatus = status
-        val spinner = Spinner(this)
-        memberSpinner = spinner
-        root.addView(spinner, match())
-        val house = EditText(this).apply {
-            hint = "Número de la casa de Trinidad"
-            inputType = android.text.InputType.TYPE_CLASS_NUMBER
-        }
-        val nickname = EditText(this).apply { hint = "Tu apodo en la familia" }
-        root.addView(house, match())
-        root.addView(nickname, match())
-        val activate = Button(this).apply {
-            text = "CONFIGURAR PROTECCIÓN"
-            isEnabled = false
-        }
-        activateButton = activate
-        root.addView(activate, match())
-
-        activate.setOnClickListener {
-            if (members.isEmpty()) return@setOnClickListener
-            val index = spinner.selectedItemPosition.coerceIn(0, members.lastIndex)
-            val member = members[index]
-            val houseValue = house.text.toString().trim()
-            val nicknameValue = nickname.text.toString().trim()
-            if (houseValue.isBlank() || nicknameValue.isBlank()) {
-                status.text = "Completa los dos datos familiares."
-                return@setOnClickListener
-            }
-            activate.isEnabled = false
-            status.text = "Verificando acceso familiar…"
-            Thread {
-                try {
-                    val session = Api.login(member.id, houseValue, nicknameValue)
-                    store.saveSession(session.memberId, session.memberName, session.accessToken, session.refreshToken, session.expiresAt)
-                    runOnUiThread {
-                        EmergencyService.start(this)
-                        if (Build.VERSION.SDK_INT >= 33 && checkSelfPermission(Manifest.permission.POST_NOTIFICATIONS) != PackageManager.PERMISSION_GRANTED) {
-                            requestPermissions(arrayOf(Manifest.permission.POST_NOTIFICATIONS), 110)
-                        }
-                        recreate()
-                    }
-                } catch (error:Throwable) {
-                    runOnUiThread {
-                        status.text = error.message ?: "No se pudo configurar."
-                        activate.isEnabled = true
-                    }
+            override fun onPageFinished(view: WebView, url: String) {
+                super.onPageFinished(view, url)
+                if (!url.startsWith(Config.FAMILY_WEB_URL)) {
+                    view.visibility = View.VISIBLE
+                    loading.visibility = View.GONE
+                    return
                 }
-            }.start()
-        }
-    }
+                injectNativeSession(view)
+            }
 
-    private fun loadMembers() {
-        Thread {
+            override fun onReceivedError(view: WebView, request: WebResourceRequest, error: WebResourceError) {
+                super.onReceivedError(view, request, error)
+                if (request.isForMainFrame) {
+                    loading.text = "Sin conexión · toca para reintentar"
+                    loading.visibility = View.VISIBLE
+                }
+            }
+        }
+
+        web.webChromeClient = object : WebChromeClient() {
+            override fun onPermissionRequest(request: PermissionRequest) {
+                runOnUiThread { handleWebPermissionRequest(request) }
+            }
+
+            override fun onGeolocationPermissionsShowPrompt(origin: String, callback: GeolocationPermissions.Callback) {
+                if (hasLocationPermission()) {
+                    callback.invoke(origin, true, false)
+                } else {
+                    pendingGeoOrigin = origin
+                    pendingGeoCallback = callback
+                    requestPermissions(
+                        arrayOf(Manifest.permission.ACCESS_FINE_LOCATION, Manifest.permission.ACCESS_COARSE_LOCATION),
+                        REQ_GEOLOCATION
+                    )
+                }
+            }
+
+            override fun onShowFileChooser(
+                webView: WebView,
+                filePathCallback: ValueCallback<Array<Uri>>,
+                fileChooserParams: FileChooserParams
+            ): Boolean {
+                this@MainActivity.filePathCallback?.onReceiveValue(null)
+                this@MainActivity.filePathCallback = filePathCallback
+                captureUri = null
+
+                if (needsCameraCapture(fileChooserParams) && checkSelfPermission(Manifest.permission.CAMERA) != PackageManager.PERMISSION_GRANTED) {
+                    pendingFileChooserParams = fileChooserParams
+                    requestPermissions(arrayOf(Manifest.permission.CAMERA), REQ_CAMERA_FOR_CHOOSER)
+                    return true
+                }
+
+                launchFileChooser(fileChooserParams)
+                return true
+            }
+        }
+
+        web.setDownloadListener { url, _, _, _, _ ->
             try {
-                val loaded = Api.fetchMembers()
-                members = loaded
-                runOnUiThread {
-                    memberSpinner?.adapter = ArrayAdapter(this, android.R.layout.simple_spinner_dropdown_item, loaded.map { it.name })
-                    loginStatus?.text = if (loaded.isEmpty()) "No hay miembros disponibles." else "Elige quién usa este teléfono."
-                    activateButton?.isEnabled = loaded.isNotEmpty()
+                startActivity(Intent(Intent.ACTION_VIEW, Uri.parse(url)))
+            } catch (_: Throwable) {
+                toast("No se pudo abrir el archivo")
+            }
+        }
+
+        web.loadUrl(Config.FAMILY_WEB_URL)
+    }
+
+    private fun injectNativeSession(view: WebView) {
+        val auth = JSONObject()
+            .put("access_token", store.accessToken)
+            .put("refresh_token", store.refreshToken)
+            .put("token_type", "bearer")
+            .put("expires_at", store.expiresAt)
+            .toString()
+        val identity = JSONObject()
+            .put("memberId", store.memberId)
+            .put("name", store.memberName)
+            .toString()
+
+        val script = """
+            (function(){
+              try{
+                var marker='$NATIVE_MARKER';
+                if(!sessionStorage.getItem(marker)){
+                  localStorage.setItem('familia-noa-family-auth', JSON.stringify($auth));
+                  sessionStorage.setItem('familia-noa-identity', JSON.stringify($identity));
+                  sessionStorage.setItem(marker,'1');
+                  location.reload();
+                  return 'reload';
                 }
-            } catch (error:Throwable) {
-                runOnUiThread {
-                    loginStatus?.text = error.message ?: "No se pudo cargar la familia"
-                    activateButton?.isEnabled = false
+                if(!window.__familiaNoaNativeChangeHook){
+                  window.__familiaNoaNativeChangeHook=true;
+                  document.addEventListener('click',function(event){
+                    var target=event.target&&event.target.closest?event.target.closest('#change'):null;
+                    if(!target)return;
+                    event.preventDefault();
+                    event.stopPropagation();
+                    if(event.stopImmediatePropagation)event.stopImmediatePropagation();
+                    if(window.FamiliaNoaNative)window.FamiliaNoaNative.openProtectionSettings();
+                  },true);
+                }
+                document.documentElement.setAttribute('data-familia-noa-native','1');
+                return 'ready';
+              }catch(error){return 'error';}
+            })();
+        """.trimIndent()
+
+        view.evaluateJavascript(script) { result ->
+            if (result?.contains("reload") == true) return@evaluateJavascript
+            view.visibility = View.VISIBLE
+            loadingView?.visibility = View.GONE
+        }
+    }
+
+    private fun openOutsideIfNeeded(uri: Uri): Boolean {
+        val familyHost = Uri.parse(Config.FAMILY_WEB_URL).host
+        if ((uri.scheme == "https" || uri.scheme == "http") && uri.host == familyHost) return false
+        return try {
+            val intent = if (uri.scheme == "intent") Intent.parseUri(uri.toString(), Intent.URI_INTENT_SCHEME)
+            else Intent(Intent.ACTION_VIEW, uri)
+            startActivity(intent)
+            true
+        } catch (_: Throwable) {
+            true
+        }
+    }
+
+    private fun handleWebPermissionRequest(request: PermissionRequest) {
+        val supported = request.resources.filter {
+            it == PermissionRequest.RESOURCE_VIDEO_CAPTURE || it == PermissionRequest.RESOURCE_AUDIO_CAPTURE
+        }.toTypedArray()
+        if (supported.isEmpty()) {
+            request.deny()
+            return
+        }
+
+        val permissions = mutableListOf<String>()
+        if (PermissionRequest.RESOURCE_VIDEO_CAPTURE in supported && checkSelfPermission(Manifest.permission.CAMERA) != PackageManager.PERMISSION_GRANTED) {
+            permissions += Manifest.permission.CAMERA
+        }
+        if (PermissionRequest.RESOURCE_AUDIO_CAPTURE in supported && checkSelfPermission(Manifest.permission.RECORD_AUDIO) != PackageManager.PERMISSION_GRANTED) {
+            permissions += Manifest.permission.RECORD_AUDIO
+        }
+
+        if (permissions.isEmpty()) {
+            request.grant(supported)
+        } else {
+            pendingWebPermissionRequest?.deny()
+            pendingWebPermissionRequest = request
+            pendingWebResources = supported
+            requestPermissions(permissions.distinct().toTypedArray(), REQ_WEB_MEDIA)
+        }
+    }
+
+    private fun hasLocationPermission(): Boolean =
+        checkSelfPermission(Manifest.permission.ACCESS_FINE_LOCATION) == PackageManager.PERMISSION_GRANTED ||
+            checkSelfPermission(Manifest.permission.ACCESS_COARSE_LOCATION) == PackageManager.PERMISSION_GRANTED
+
+    private fun needsCameraCapture(params: WebChromeClient.FileChooserParams): Boolean {
+        if (!params.isCaptureEnabled) return false
+        val accept = params.acceptTypes.joinToString(",").lowercase()
+        return accept.isBlank() || accept.contains("image") || accept.contains("video")
+    }
+
+    private fun launchFileChooser(params: WebChromeClient.FileChooserParams) {
+        pendingFileChooserParams = null
+        val accept = params.acceptTypes.joinToString(",").lowercase()
+
+        if (params.isCaptureEnabled && (accept.isBlank() || accept.contains("image"))) {
+            createCaptureIntent(image = true)?.let {
+                startActivityForResult(it, REQ_FILE_CHOOSER)
+                return
+            }
+        }
+        if (params.isCaptureEnabled && accept.contains("video")) {
+            createCaptureIntent(image = false)?.let {
+                startActivityForResult(it, REQ_FILE_CHOOSER)
+                return
+            }
+        }
+
+        val picker = Intent(Intent.ACTION_GET_CONTENT).apply {
+            addCategory(Intent.CATEGORY_OPENABLE)
+            type = when {
+                accept.contains("image") && !accept.contains("video") -> "image/*"
+                accept.contains("video") && !accept.contains("image") -> "video/*"
+                accept.contains("audio") -> "audio/*"
+                else -> "*/*"
+            }
+            putExtra(Intent.EXTRA_ALLOW_MULTIPLE, params.mode == WebChromeClient.FileChooserParams.MODE_OPEN_MULTIPLE)
+        }
+        try {
+            startActivityForResult(Intent.createChooser(picker, "Seleccionar archivo"), REQ_FILE_CHOOSER)
+        } catch (_: Throwable) {
+            filePathCallback?.onReceiveValue(null)
+            filePathCallback = null
+        }
+    }
+
+    private fun createCaptureIntent(image: Boolean): Intent? {
+        return try {
+            val directory = File(cacheDir, "captures").apply { mkdirs() }
+            val file = File.createTempFile(if (image) "foto_" else "video_", if (image) ".jpg" else ".mp4", directory)
+            val uri = FileProvider.getUriForFile(this, "$packageName.fileprovider", file)
+            captureUri = uri
+            Intent(if (image) MediaStore.ACTION_IMAGE_CAPTURE else MediaStore.ACTION_VIDEO_CAPTURE).apply {
+                putExtra(MediaStore.EXTRA_OUTPUT, uri)
+                addFlags(Intent.FLAG_GRANT_WRITE_URI_PERMISSION or Intent.FLAG_GRANT_READ_URI_PERMISSION)
+                clipData = ClipData.newRawUri("FAMILIA NOA", uri)
+            }.takeIf { it.resolveActivity(packageManager) != null }
+        } catch (_: Throwable) {
+            null
+        }
+    }
+
+    override fun onRequestPermissionsResult(requestCode: Int, permissions: Array<out String>, grantResults: IntArray) {
+        super.onRequestPermissionsResult(requestCode, permissions, grantResults)
+        when (requestCode) {
+            REQ_CAMERA_FOR_CHOOSER -> {
+                val params = pendingFileChooserParams
+                pendingFileChooserParams = null
+                if (grantResults.firstOrNull() == PackageManager.PERMISSION_GRANTED && params != null) {
+                    launchFileChooser(params)
+                } else {
+                    filePathCallback?.onReceiveValue(null)
+                    filePathCallback = null
                 }
             }
-        }.start()
-    }
-
-    private fun renderPermissions() {
-        if (!::permissionBox.isInitialized) return
-        permissionBox.removeAllViews()
-        val notificationsOk = Build.VERSION.SDK_INT < 33 || checkSelfPermission(Manifest.permission.POST_NOTIFICATIONS) == PackageManager.PERMISSION_GRANTED
-        val overlayOk = Settings.canDrawOverlays(this)
-        val nm = getSystemService(NotificationManager::class.java)
-        val fullScreenOk = Build.VERSION.SDK_INT < 34 || nm.canUseFullScreenIntent()
-        val dndOk = nm.isNotificationPolicyAccessGranted
-        val pm = getSystemService(PowerManager::class.java)
-        val batteryOk = pm.isIgnoringBatteryOptimizations(packageName)
-
-        permissionBox.addView(permissionButton("Notificaciones", notificationsOk) {
-            if (Build.VERSION.SDK_INT >= 33) requestPermissions(arrayOf(Manifest.permission.POST_NOTIFICATIONS), 110)
-        })
-        permissionBox.addView(permissionButton("Mostrar sobre otras aplicaciones", overlayOk) {
-            startActivity(Intent(Settings.ACTION_MANAGE_OVERLAY_PERMISSION, Uri.parse("package:$packageName")))
-        })
-        permissionBox.addView(permissionButton("Pantalla completa de emergencia", fullScreenOk) {
-            if (Build.VERSION.SDK_INT >= 34) startActivity(Intent(Settings.ACTION_MANAGE_APP_USE_FULL_SCREEN_INTENT, Uri.parse("package:$packageName")))
-        })
-        permissionBox.addView(permissionButton("Ignorar ahorro de batería", batteryOk) {
-            startActivity(Intent(Settings.ACTION_REQUEST_IGNORE_BATTERY_OPTIMIZATIONS, Uri.parse("package:$packageName")))
-        })
-        permissionBox.addView(permissionButton("Atravesar No molestar", dndOk) {
-            startActivity(Intent(Settings.ACTION_NOTIFICATION_POLICY_ACCESS_SETTINGS))
-        })
-        val all = notificationsOk && overlayOk && fullScreenOk && batteryOk
-        permissionBox.addView(makeText(if (all) "✓ Protección de máxima prioridad lista" else "Activa todos los permisos posibles para que AYUDA tenga la máxima prioridad.", 14, true, if (all) Color.rgb(20,90,48) else Color.rgb(150,35,35)))
-    }
-
-    private fun permissionButton(label:String, ok:Boolean, action:()->Unit): Button = Button(this).apply {
-        text = if (ok) "✓ $label" else "ACTIVAR · $label"
-        setOnClickListener { action() }
-        isAllCaps = false
-    }
-
-    private fun card():LinearLayout {
-        val box = LinearLayout(this).apply {
-            orientation = LinearLayout.VERTICAL
-            setPadding(dp(18), dp(18), dp(18), dp(18))
-            setBackgroundColor(Color.WHITE)
+            REQ_WEB_MEDIA -> {
+                val request = pendingWebPermissionRequest
+                val allowed = pendingWebResources.filter { resource ->
+                    when (resource) {
+                        PermissionRequest.RESOURCE_VIDEO_CAPTURE -> checkSelfPermission(Manifest.permission.CAMERA) == PackageManager.PERMISSION_GRANTED
+                        PermissionRequest.RESOURCE_AUDIO_CAPTURE -> checkSelfPermission(Manifest.permission.RECORD_AUDIO) == PackageManager.PERMISSION_GRANTED
+                        else -> false
+                    }
+                }.toTypedArray()
+                if (request != null) {
+                    if (allowed.isNotEmpty()) request.grant(allowed) else request.deny()
+                }
+                pendingWebPermissionRequest = null
+                pendingWebResources = emptyArray()
+            }
+            REQ_GEOLOCATION -> {
+                val callback = pendingGeoCallback
+                val origin = pendingGeoOrigin
+                callback?.invoke(origin, hasLocationPermission(), false)
+                pendingGeoCallback = null
+                pendingGeoOrigin = null
+            }
         }
-        root.addView(box, LinearLayout.LayoutParams(ViewGroup.LayoutParams.MATCH_PARENT, ViewGroup.LayoutParams.WRAP_CONTENT).apply { bottomMargin = dp(14) })
-        return box
     }
 
-    private fun button(label:String, action:()->Unit) {
-        root.addView(Button(this).apply { text = label; setOnClickListener { action() } }, match())
+    override fun onActivityResult(requestCode: Int, resultCode: Int, data: Intent?) {
+        super.onActivityResult(requestCode, resultCode, data)
+        when (requestCode) {
+            REQ_PROTECTION -> {
+                openingProtection = false
+                if (store.configured) {
+                    if (webView == null) renderWebApp()
+                    else {
+                        loadedMemberId = store.memberId
+                        webView?.evaluateJavascript(
+                            "try{sessionStorage.removeItem('$NATIVE_MARKER');location.reload()}catch(e){}",
+                            null
+                        )
+                    }
+                }
+            }
+            REQ_FILE_CHOOSER -> {
+                val callback = filePathCallback ?: return
+                val result = if (resultCode == RESULT_OK) {
+                    val parsed = WebChromeClient.FileChooserParams.parseResult(resultCode, data)
+                    parsed ?: captureUri?.let { arrayOf(it) }
+                } else null
+                callback.onReceiveValue(result)
+                filePathCallback = null
+                captureUri = null
+            }
+        }
     }
 
-    private fun text(value:String, size:Int, bold:Boolean, color:Int):TextView = makeText(value,size,bold,color).also { root.addView(it, match()) }
-    private fun makeText(value:String,size:Int,bold:Boolean,color:Int)=TextView(this).apply {
-        text=value
-        textSize=size.toFloat()
-        setTextColor(color)
-        if(bold) setTypeface(typeface, android.graphics.Typeface.BOLD)
-        gravity=Gravity.START
-        setPadding(0, dp(5), 0, dp(5))
+    override fun onBackPressed() {
+        val web = webView
+        if (web != null && web.canGoBack()) web.goBack() else super.onBackPressed()
     }
-    private fun spacer(height:Int)=Space(this).also { root.addView(it, LinearLayout.LayoutParams(1,dp(height))) }
-    private fun match()=LinearLayout.LayoutParams(ViewGroup.LayoutParams.MATCH_PARENT, ViewGroup.LayoutParams.WRAP_CONTENT).apply { bottomMargin=dp(8) }
-    private fun dp(value:Int)=(value*resources.displayMetrics.density).toInt()
-    private fun toast(value:String)=Toast.makeText(this,value,Toast.LENGTH_SHORT).show()
+
+    inner class NativeBridge {
+        @JavascriptInterface
+        fun openProtectionSettings() {
+            runOnUiThread { openProtection() }
+        }
+    }
+
+    private fun toast(value: String) = Toast.makeText(this, value, Toast.LENGTH_SHORT).show()
 }

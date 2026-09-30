@@ -1,4 +1,4 @@
-name: Build FAMILIA NOA Emergency APK
+name: Build FAMILIA NOA Unified Android APK
 
 on:
   workflow_dispatch:
@@ -35,14 +35,14 @@ jobs:
         uses: gradle/actions/setup-gradle@v4
         with:
           gradle-version: '8.10.2'
-      - name: Build emergency APK
+      - name: Build unified APK
         shell: bash
         run: |
           gradle --project-dir android-emergency :app:assembleDebug --stacktrace
       - name: Upload APK
         uses: actions/upload-artifact@v4
         with:
-          name: familia-noa-emergency-apk
+          name: familia-noa-unified-apk
           path: android-emergency/app/build/outputs/apk/debug/app-debug.apk
           if-no-files-found: error
           retention-days: 30
