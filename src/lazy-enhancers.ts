@@ -1,4 +1,3 @@
-let biometricLoaded = false
 let profileLoaded = false
 let assistantLoaded = false
 let presenceLoaded = false
@@ -7,17 +6,6 @@ let presumeLoading = false
 let albumsLoaded = false
 let locationLoaded = false
 let deviceOnboardingLoaded = false
-
-const loadBiometric = async () => {
-  if (biometricLoaded || (!document.querySelector('.members') && !document.querySelector('.shell'))) return
-  try {
-    await import('./biometric-enhancer')
-    biometricLoaded = true
-  } catch (error) {
-    biometricLoaded = false
-    console.error('Biometric enhancer failed to load', error)
-  }
-}
 
 const loadPresence = async () => {
   if (presenceLoaded || !document.querySelector('.shell')) return
@@ -124,7 +112,6 @@ const loadLocation = async () => {
 let observer: MutationObserver | null = null
 
 function scan() {
-  void loadBiometric()
   void loadPresence()
   void loadProfile()
   void loadAssistant()
@@ -132,7 +119,7 @@ function scan() {
   void loadDeviceOnboarding()
   void loadAlbums()
   void loadLocation()
-  if (biometricLoaded && profileLoaded && assistantLoaded && presenceLoaded && presumeLoaded && deviceOnboardingLoaded && albumsLoaded && locationLoaded) {
+  if (profileLoaded && assistantLoaded && presenceLoaded && presumeLoaded && deviceOnboardingLoaded && albumsLoaded && locationLoaded) {
     observer?.disconnect()
     observer = null
   }
