@@ -31,9 +31,9 @@ jobs:
       - name: Verify NOA voice code is bundled
         shell: bash
         run: |
-          grep -R -q "es_MX-claude-high" dist
+          grep -R -q "translate.googleapis.com/translate_tts" dist
           grep -R -q "familiaNoaSpeakText" dist
-          grep -R -q "cdn.jsdelivr.net/npm/@realtimex/piper-tts-web@1.1.1/+esm" dist
+          grep -R -q "webview-streamed-voice" dist
       - name: Enforce Cloudflare static asset limit
         shell: bash
         run: |
@@ -54,7 +54,11 @@ jobs:
             echo "Retired voice wrapper found in bundle"
             exit 1
           fi
+          if grep -R -q "piper-tts-web\|es_MX-claude-high\|TTS-ENGINE" dist; then
+            echo "Retired Piper path found in bundle"
+            exit 1
+          fi
           if find dist -type f -name 'ort-wasm*.wasm' | grep -q .; then
-            echo "Oversized ONNX WASM must not be bundled into Cloudflare assets"
+            echo "ONNX WASM must not be bundled into Cloudflare assets"
             exit 1
           fi
