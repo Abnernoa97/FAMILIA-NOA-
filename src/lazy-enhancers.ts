@@ -37,6 +37,7 @@ const loadAssistant = async () => {
     await import('./profile-noa-guard')
     await import('./profile-assistant')
     await import('./noa-minimal.css')
+    await import('./noa-draggable')
     assistantLoaded = true
   } catch (error) {
     assistantLoaded = false
