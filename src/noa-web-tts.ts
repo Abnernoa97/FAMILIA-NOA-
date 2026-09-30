@@ -6,6 +6,9 @@ const hasNativeSpeak=!!nativeBridge&&typeof nativeBridge.speak==='function'
 
 if(nativeAndroid&&!hasNativeSpeak){
   const originalSynth=(window as any).speechSynthesis
+  const originalSpeak=typeof originalSynth?.speak==='function'?originalSynth.speak.bind(originalSynth):null
+  const originalCancel=typeof originalSynth?.cancel==='function'?originalSynth.cancel.bind(originalSynth):null
+  const originalGetVoices=typeof originalSynth?.getVoices==='function'?originalSynth.getVoices.bind(originalSynth):()=>[]
   let audio:HTMLAudioElement|null=null
   let objectUrl=''
   let requestId=0
@@ -47,7 +50,7 @@ if(nativeAndroid&&!hasNativeSpeak){
   }
 
   const trySystemVoice=(utterance:any,text:string)=>{
-    if(!originalSynth||typeof originalSynth.speak!=='function')return false
+    if(!originalSpeak)return false
     try{
       const U=(window as any).SpeechSynthesisUtterance
       if(!U)return false
@@ -55,7 +58,7 @@ if(nativeAndroid&&!hasNativeSpeak){
       fallback.lang='es-MX'
       fallback.rate=.96
       fallback.pitch=1
-      const voices=originalSynth.getVoices?.()||[]
+      const voices=originalGetVoices()||[]
       fallback.voice=voices.find((voice:any)=>String(voice.lang||'').toLowerCase()==='es-mx')||voices.find((voice:any)=>String(voice.lang||'').toLowerCase().startsWith('es'))||null
       fallback.onstart=()=>{
         setStatus('Hablando…')
@@ -69,8 +72,8 @@ if(nativeAndroid&&!hasNativeSpeak){
         setStatus('No pude reproducir la voz · VOICE-DEVICE',3500)
         try{utterance?.onerror?.(new Event('error'))}catch{}
       }
-      originalSynth.cancel?.()
-      originalSynth.speak(fallback)
+      try{originalCancel?.()}catch{}
+      originalSpeak(fallback)
       return true
     }catch{return false}
   }
@@ -140,7 +143,7 @@ if(nativeAndroid&&!hasNativeSpeak){
   const cancel=()=>{
     requestId++
     cleanup()
-    try{originalSynth?.cancel?.()}catch{}
+    try{originalCancel?.()}catch{}
     setStatus('NOA',500)
   }
 
@@ -148,7 +151,7 @@ if(nativeAndroid&&!hasNativeSpeak){
   const localSynth={
     speak:localSpeak,
     cancel,
-    getVoices:()=>{try{return originalSynth?.getVoices?.()||[]}catch{return []}},
+    getVoices:()=>{try{return originalGetVoices()||[]}catch{return []}},
     pause:()=>audio?.pause(),
     resume:()=>{void audio?.play().catch(()=>{})},
     paused:false,
@@ -186,7 +189,7 @@ if(nativeAndroid&&!hasNativeSpeak){
     try{Object.defineProperty(window,'SpeechSynthesisUtterance',{configurable:true,value:NoaUtterance})}catch{}
   }
 
-  document.documentElement.setAttribute('data-noa-voice-build','20260930-workers-ai-melotts')
+  document.documentElement.setAttribute('data-noa-voice-build','20260930-workers-ai-melotts-v2')
 
   ;(window as any).__familiaNoaSpeakText=(text:string)=>{
     const U=(window as any).SpeechSynthesisUtterance
@@ -196,7 +199,7 @@ if(nativeAndroid&&!hasNativeSpeak){
 
   ;(window as any).__familiaNoaLocalTts={
     engine:'cloudflare-workers-ai-melotts',
-    build:'20260930-workers-ai-melotts',
+    build:'20260930-workers-ai-melotts-v2',
     installed,
     cancel,
     test:()=>{void (window as any).__familiaNoaSpeakText?.('Hola. Soy NOA.')},
