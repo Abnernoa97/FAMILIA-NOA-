@@ -1,6 +1,7 @@
 const nativeAndroid=/FAMILIA-NOA-Android/i.test(navigator.userAgent)
 const nativeBridge=(window as any).FamiliaNoaNative
 const hasNativeSpeak=!!nativeBridge&&typeof nativeBridge.speak==='function'
+const PIPER_MODULE='https://cdn.jsdelivr.net/npm/@realtimex/piper-tts-web@1.1.1/+esm'
 
 if(nativeAndroid&&!hasNativeSpeak){
   let audio:HTMLAudioElement|null=null
@@ -30,14 +31,6 @@ if(nativeAndroid&&!hasNativeSpeak){
     if(linger>0){
       statusTimer=window.setTimeout(()=>{el.style.opacity='0'},linger)
     }
-  }
-
-  const hideStatus=(delay=700)=>{
-    if(statusTimer)window.clearTimeout(statusTimer)
-    statusTimer=window.setTimeout(()=>{
-      const el=document.querySelector<HTMLElement>('[data-noa-tts-status]')
-      if(el)el.style.opacity='0'
-    },delay)
   }
 
   const primeAudio=()=>{
@@ -75,7 +68,7 @@ if(nativeAndroid&&!hasNativeSpeak){
   }
 
   const loadEngine=()=>{
-    if(!enginePromise)enginePromise=import('@realtimex/piper-tts-web')
+    if(!enginePromise)enginePromise=import(/* @vite-ignore */ PIPER_MODULE)
     return enginePromise
   }
 
@@ -124,7 +117,7 @@ if(nativeAndroid&&!hasNativeSpeak){
       }
       await audio.play()
     }catch(error){
-      console.warn('NOA local neural voice failed',error)
+      console.warn('NOA neural voice failed',error)
       setStatus('No pude activar la voz',3500)
       try{utterance?.onerror?.(new Event('error'))}catch{}
       cleanup()
@@ -193,7 +186,7 @@ if(nativeAndroid&&!hasNativeSpeak){
     try{Object.defineProperty(window,'SpeechSynthesisUtterance',{configurable:true,value:NoaUtterance})}catch{}
   }
 
-  document.documentElement.setAttribute('data-noa-voice-build','20260930-2118')
+  document.documentElement.setAttribute('data-noa-voice-build','20260930-unified-cloudflare')
 
   ;(window as any).__familiaNoaSpeakText=(text:string)=>{
     const Utterance=(window as any).SpeechSynthesisUtterance
@@ -202,16 +195,16 @@ if(nativeAndroid&&!hasNativeSpeak){
   }
 
   ;(window as any).__familiaNoaLocalTts={
-    engine:'piper',
+    engine:'piper-cdn',
     voice:'es_MX-claude-high',
-    build:'20260930-2118',
+    build:'20260930-unified-cloudflare',
     installed,
     cancel,
     test:()=>{void (window as any).__familiaNoaSpeakText?.('Hola. Soy NOA.')},
   }
 
   if(installed){
-    setStatus('Voz NOA lista',1200)
+    setStatus('Voz NOA lista',1400)
   }else{
     setStatus('Preparando motor de voz…',1800)
   }
