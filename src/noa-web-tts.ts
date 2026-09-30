@@ -12,26 +12,9 @@ if(nativeAndroid&&!hasNativeSpeak){
   let audio:HTMLAudioElement|null=null
   let objectUrl=''
   let requestId=0
-  let statusTimer:number|undefined
 
-  const ensureStatus=()=>{
-    let el=document.querySelector<HTMLElement>('[data-noa-tts-status]')
-    if(el)return el
-    el=document.createElement('div')
-    el.dataset.noaTtsStatus='1'
-    el.style.cssText='position:fixed;left:50%;bottom:calc(104px + env(safe-area-inset-bottom));transform:translateX(-50%);z-index:1600;max-width:calc(100vw - 36px);padding:9px 13px;border-radius:999px;background:rgba(23,23,22,.94);color:#fff;font:700 10px system-ui;letter-spacing:.02em;box-shadow:0 10px 30px rgba(0,0,0,.22);opacity:0;pointer-events:none;transition:opacity .18s ease;text-align:center;white-space:nowrap'
-    document.body.appendChild(el)
-    return el
-  }
-
-  const setStatus=(value:string,linger=0)=>{
-    const label=document.querySelector<HTMLElement>('.noa-voice-label')
-    if(label)label.textContent=value
-    const el=ensureStatus()
-    el.textContent=value
-    el.style.opacity='1'
-    if(statusTimer)window.clearTimeout(statusTimer)
-    if(linger>0)statusTimer=window.setTimeout(()=>{el.style.opacity='0'},linger)
+  const setState=(value:string)=>{
+    document.documentElement.setAttribute('data-noa-tts-state',value)
   }
 
   const cleanup=()=>{
@@ -61,15 +44,15 @@ if(nativeAndroid&&!hasNativeSpeak){
       const voices=originalGetVoices()||[]
       fallback.voice=voices.find((voice:any)=>String(voice.lang||'').toLowerCase()==='es-mx')||voices.find((voice:any)=>String(voice.lang||'').toLowerCase().startsWith('es'))||null
       fallback.onstart=()=>{
-        setStatus('Hablando…')
+        setState('speaking-device')
         try{utterance?.onstart?.(new Event('start'))}catch{}
       }
       fallback.onend=()=>{
-        setStatus('NOA',900)
+        setState('idle')
         try{utterance?.onend?.(new Event('end'))}catch{}
       }
       fallback.onerror=()=>{
-        setStatus('No pude reproducir la voz · VOICE-DEVICE',3500)
+        setState('error-device')
         try{utterance?.onerror?.(new Event('error'))}catch{}
       }
       try{originalCancel?.()}catch{}
@@ -83,7 +66,7 @@ if(nativeAndroid&&!hasNativeSpeak){
     if(!text)return
     const mine=++requestId
     cleanup()
-    setStatus('Preparando voz…')
+    setState('preparing')
 
     try{
       const {data}=await supabase.auth.getSession()
@@ -112,12 +95,12 @@ if(nativeAndroid&&!hasNativeSpeak){
       player.playbackRate=.98
       player.onplay=()=>{
         if(mine!==requestId)return
-        setStatus('Hablando…')
+        setState('speaking')
         try{utterance?.onstart?.(new Event('start'))}catch{}
       }
       player.onended=()=>{
         if(mine!==requestId)return
-        setStatus('NOA',900)
+        setState('idle')
         try{utterance?.onend?.(new Event('end'))}catch{}
         cleanup()
       }
@@ -125,7 +108,7 @@ if(nativeAndroid&&!hasNativeSpeak){
         if(mine!==requestId)return
         cleanup()
         if(trySystemVoice(utterance,text))return
-        setStatus('No pude reproducir la voz · VOICE-PLAY',3500)
+        setState('error-play')
         try{utterance?.onerror?.(new Event('error'))}catch{}
       }
       await player.play()
@@ -135,7 +118,7 @@ if(nativeAndroid&&!hasNativeSpeak){
       const code=String((error as any)?.message||error||'VOICE-CLOUD').slice(0,80)
       document.documentElement.setAttribute('data-noa-tts-error',code)
       if(trySystemVoice(utterance,text))return
-      setStatus(`No pude reproducir la voz · ${code}`,3500)
+      setState(`error:${code}`)
       try{utterance?.onerror?.(new Event('error'))}catch{}
     }
   }
@@ -144,7 +127,7 @@ if(nativeAndroid&&!hasNativeSpeak){
     requestId++
     cleanup()
     try{originalCancel?.()}catch{}
-    setStatus('NOA',500)
+    setState('idle')
   }
 
   const localSpeak=(utterance:any)=>{void speakCloud(utterance)}
@@ -189,7 +172,7 @@ if(nativeAndroid&&!hasNativeSpeak){
     try{Object.defineProperty(window,'SpeechSynthesisUtterance',{configurable:true,value:NoaUtterance})}catch{}
   }
 
-  document.documentElement.setAttribute('data-noa-voice-build','20260930-workers-ai-melotts-v2')
+  document.documentElement.setAttribute('data-noa-voice-build','20260930-workers-ai-melotts-v3-clean-ui')
 
   ;(window as any).__familiaNoaSpeakText=(text:string)=>{
     const U=(window as any).SpeechSynthesisUtterance
@@ -199,12 +182,12 @@ if(nativeAndroid&&!hasNativeSpeak){
 
   ;(window as any).__familiaNoaLocalTts={
     engine:'cloudflare-workers-ai-melotts',
-    build:'20260930-workers-ai-melotts-v2',
+    build:'20260930-workers-ai-melotts-v3-clean-ui',
     installed,
     cancel,
     test:()=>{void (window as any).__familiaNoaSpeakText?.('Hola. Soy NOA.')},
   }
 
-  setStatus(installed?'Voz NOA lista':'Preparando voz…',1200)
+  setState('ready')
   window.addEventListener('beforeunload',cleanup,{once:true})
 }
