@@ -1,3 +1,5 @@
+import { supabase } from './supabase'
+
 const nativeAndroid=/FAMILIA-NOA-Android/i.test(navigator.userAgent)
 const nativeBridge=(window as any).FamiliaNoaNative
 const hasNativeSpeak=!!nativeBridge&&typeof nativeBridge.speak==='function'
@@ -5,13 +7,9 @@ const hasNativeSpeak=!!nativeBridge&&typeof nativeBridge.speak==='function'
 if(nativeAndroid&&!hasNativeSpeak){
   const originalSynth=(window as any).speechSynthesis
   let audio:HTMLAudioElement|null=null
+  let objectUrl=''
   let requestId=0
   let statusTimer:number|undefined
-
-  const providers=[
-    (text:string)=>`https://translate.googleapis.com/translate_tts?ie=UTF-8&client=gtx&tl=es-MX&q=${encodeURIComponent(text)}`,
-    (text:string)=>`https://translate.google.com/translate_tts?ie=UTF-8&client=tw-ob&tl=es-MX&q=${encodeURIComponent(text)}`,
-  ]
 
   const ensureStatus=()=>{
     let el=document.querySelector<HTMLElement>('[data-noa-tts-status]')
@@ -42,26 +40,10 @@ if(nativeAndroid&&!hasNativeSpeak){
       audio.onerror=null
       audio=null
     }
-  }
-
-  const chunks=(value:string)=>{
-    const text=String(value||'').replace(/\s+/g,' ').trim().slice(0,1200)
-    if(!text)return []
-    const out:string[]=[]
-    let rest=text
-    while(rest.length>170){
-      let cut=Math.max(
-        rest.lastIndexOf('. ',170),
-        rest.lastIndexOf(', ',170),
-        rest.lastIndexOf('; ',170),
-        rest.lastIndexOf(' ',170),
-      )
-      if(cut<70)cut=170
-      out.push(rest.slice(0,cut+1).trim())
-      rest=rest.slice(cut+1).trim()
+    if(objectUrl){
+      try{URL.revokeObjectURL(objectUrl)}catch{}
+      objectUrl=''
     }
-    if(rest)out.push(rest)
-    return out
   }
 
   const trySystemVoice=(utterance:any,text:string)=>{
@@ -93,72 +75,66 @@ if(nativeAndroid&&!hasNativeSpeak){
     }catch{return false}
   }
 
-  const speakRemote=async(utterance:any)=>{
-    const text=String(utterance?.text||'').trim()
+  const speakCloud=async(utterance:any)=>{
+    const text=String(utterance?.text||'').replace(/\s+/g,' ').trim().slice(0,900)
     if(!text)return
     const mine=++requestId
     cleanup()
     setStatus('Preparando voz…')
-    const parts=chunks(text)
-    if(!parts.length)return
 
-    let started=false
-    const playPart=(index:number,providerIndex=0)=>{
+    try{
+      const {data}=await supabase.auth.getSession()
+      const token=data.session?.access_token||''
+      if(!token)throw new Error('VOICE-AUTH')
+
+      const response=await fetch('/api/noa-voice',{
+        method:'POST',
+        headers:{
+          'Content-Type':'application/json',
+          'Authorization':`Bearer ${token}`,
+        },
+        body:JSON.stringify({text}),
+        cache:'no-store',
+      })
       if(mine!==requestId)return
-      if(index>=parts.length){
-        setStatus('NOA',900)
-        try{utterance?.onend?.(new Event('end'))}catch{}
-        cleanup()
-        return
-      }
-      if(providerIndex>=providers.length){
-        cleanup()
-        if(trySystemVoice(utterance,text))return
-        document.documentElement.setAttribute('data-noa-tts-error','VOICE-NET')
-        setStatus('No pude reproducir la voz · VOICE-NET',3500)
-        try{utterance?.onerror?.(new Event('error'))}catch{}
-        return
-      }
+      if(!response.ok)throw new Error(`VOICE-HTTP-${response.status}`)
 
-      const player=new Audio()
+      const blob=await response.blob()
+      if(!blob.size)throw new Error('VOICE-EMPTY')
+      objectUrl=URL.createObjectURL(blob)
+      const player=new Audio(objectUrl)
       audio=player
       player.preload='auto'
       player.volume=1
-      player.playbackRate=.97
-      player.src=providers[providerIndex](parts[index])
+      player.playbackRate=.98
       player.onplay=()=>{
         if(mine!==requestId)return
         setStatus('Hablando…')
-        if(!started){
-          started=true
-          try{utterance?.onstart?.(new Event('start'))}catch{}
-        }
+        try{utterance?.onstart?.(new Event('start'))}catch{}
       }
       player.onended=()=>{
         if(mine!==requestId)return
-        audio=null
-        playPart(index+1,0)
+        setStatus('NOA',900)
+        try{utterance?.onend?.(new Event('end'))}catch{}
+        cleanup()
       }
       player.onerror=()=>{
         if(mine!==requestId)return
-        try{player.pause()}catch{}
-        player.src=''
-        if(audio===player)audio=null
-        playPart(index,providerIndex+1)
+        cleanup()
+        if(trySystemVoice(utterance,text))return
+        setStatus('No pude reproducir la voz · VOICE-PLAY',3500)
+        try{utterance?.onerror?.(new Event('error'))}catch{}
       }
-      const promise=player.play()
-      if(promise&&typeof promise.catch==='function'){
-        promise.catch(()=>{
-          if(mine!==requestId)return
-          try{player.pause()}catch{}
-          player.src=''
-          if(audio===player)audio=null
-          playPart(index,providerIndex+1)
-        })
-      }
+      await player.play()
+    }catch(error){
+      if(mine!==requestId)return
+      cleanup()
+      const code=String((error as any)?.message||error||'VOICE-CLOUD').slice(0,80)
+      document.documentElement.setAttribute('data-noa-tts-error',code)
+      if(trySystemVoice(utterance,text))return
+      setStatus(`No pude reproducir la voz · ${code}`,3500)
+      try{utterance?.onerror?.(new Event('error'))}catch{}
     }
-
-    playPart(0,0)
   }
 
   const cancel=()=>{
@@ -168,7 +144,7 @@ if(nativeAndroid&&!hasNativeSpeak){
     setStatus('NOA',500)
   }
 
-  const localSpeak=(utterance:any)=>{void speakRemote(utterance)}
+  const localSpeak=(utterance:any)=>{void speakCloud(utterance)}
   const localSynth={
     speak:localSpeak,
     cancel,
@@ -210,23 +186,22 @@ if(nativeAndroid&&!hasNativeSpeak){
     try{Object.defineProperty(window,'SpeechSynthesisUtterance',{configurable:true,value:NoaUtterance})}catch{}
   }
 
-  document.documentElement.setAttribute('data-noa-voice-build','20260930-webview-stream-v1')
+  document.documentElement.setAttribute('data-noa-voice-build','20260930-workers-ai-melotts')
 
   ;(window as any).__familiaNoaSpeakText=(text:string)=>{
     const U=(window as any).SpeechSynthesisUtterance
     const utterance=U?new U(String(text||'')):{text:String(text||'')}
-    return speakRemote(utterance)
+    return speakCloud(utterance)
   }
 
   ;(window as any).__familiaNoaLocalTts={
-    engine:'webview-streamed-voice',
-    build:'20260930-webview-stream-v1',
+    engine:'cloudflare-workers-ai-melotts',
+    build:'20260930-workers-ai-melotts',
     installed,
     cancel,
     test:()=>{void (window as any).__familiaNoaSpeakText?.('Hola. Soy NOA.')},
   }
 
   setStatus(installed?'Voz NOA lista':'Preparando voz…',1200)
-
   window.addEventListener('beforeunload',cleanup,{once:true})
 }
