@@ -39,6 +39,7 @@ const loadAssistant = async () => {
     await import('./noa-action-router')
     await import('./noa-web-tts')
     await import('./profile-assistant')
+    await import('./noa-conversation-mode')
     await import('./noa-minimal.css')
     await import('./noa-draggable')
     await import('./noa-quick-prompts')
