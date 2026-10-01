@@ -8,6 +8,7 @@ let resumeTimer:number|undefined
 let expiryTimer:number|undefined
 let closing=false
 let wrappedSpeech=false
+let autoResumeClick=false
 
 function clearTimers(){
   if(resumeTimer){window.clearTimeout(resumeTimer);resumeTimer=undefined}
@@ -70,7 +71,14 @@ function resumeListening(delay=RESUME_AFTER_SPEECH_MS,refreshWindow=false){
       resumeListening(350,false)
       return
     }
-    try{button.click()}catch(error){console.warn('NOA conversation resume failed',error)}
+    try{
+      autoResumeClick=true
+      button.click()
+    }catch(error){
+      console.warn('NOA conversation resume failed',error)
+    }finally{
+      autoResumeClick=false
+    }
   },delay)
 }
 
@@ -95,7 +103,7 @@ function wrapSpeech(){
     return originalSpeak(utterance)
   }
   wrappedSpeech=true
-  document.documentElement.setAttribute('data-noa-conversation-build','20261001-v1')
+  document.documentElement.setAttribute('data-noa-conversation-build','20261001-v2')
 }
 
 function isVoiceStart(target:Element|null){
@@ -112,7 +120,7 @@ document.addEventListener('click',event=>{
     if(!closing)endSession(false)
     return
   }
-  if(isVoiceStart(target))markActive()
+  if(isVoiceStart(target)&&!autoResumeClick)markActive()
 },true)
 
 const voiceObserver=new MutationObserver(()=>{
