@@ -21,6 +21,7 @@ const loadPresence = async () => {
 const loadProfile = async () => {
   if (profileLoaded || !document.querySelector('.shell')) return
   try {
+    await import('./profile-native-bridge-fix')
     await import('./profile-enhancer')
     await import('./profile-featured-media')
     await import('./profile-realtime')
