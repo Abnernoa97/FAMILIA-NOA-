@@ -65,7 +65,7 @@ function resumeListening(delay=RESUME_AFTER_SPEECH_MS,refreshWindow=false){
   resumeTimer=window.setTimeout(()=>{
     resumeTimer=undefined
     if(!active||Date.now()>=idleDeadline){endSession(true);return}
-    if(document.hidden){endSession(false);return}
+    if(document.hidden){endSession(true);return}
     const button=launcherButton()
     if(!button){
       resumeListening(350,false)
@@ -103,7 +103,7 @@ function wrapSpeech(){
     return originalSpeak(utterance)
   }
   wrappedSpeech=true
-  document.documentElement.setAttribute('data-noa-conversation-build','20261001-v2')
+  document.documentElement.setAttribute('data-noa-conversation-build','20261001-v3')
 }
 
 function isVoiceStart(target:Element|null){
@@ -142,9 +142,9 @@ const speechObserver=new MutationObserver(()=>wrapSpeech())
 speechObserver.observe(document.documentElement,{childList:true,subtree:true})
 wrapSpeech()
 
-function stopWhenHidden(){if(document.hidden)endSession(false)}
+function stopWhenHidden(){if(document.hidden)endSession(true)}
 document.addEventListener('visibilitychange',stopWhenHidden)
-window.addEventListener('pagehide',()=>endSession(false))
+window.addEventListener('pagehide',()=>endSession(true))
 
 ;(window as any).__familiaNoaConversation={
   start:()=>markActive(),
