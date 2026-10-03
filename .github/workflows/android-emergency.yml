@@ -45,4 +45,4 @@ jobs:
           name: familia-noa-unified-apk
           path: android-emergency/app/build/outputs/apk/debug/app-debug.apk
           if-no-files-found: error
-          retention-days: 30
+          retention-days: 1
