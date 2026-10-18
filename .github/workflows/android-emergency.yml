@@ -8,12 +8,6 @@ on:
       - android-emergency/**
       - .github/workflows/android-emergency.yml
   workflow_dispatch:
-    inputs:
-      signed_release:
-        description: Build the permanent signed migration APK
-        required: true
-        type: boolean
-        default: false
 
 permissions:
   contents: read
@@ -47,39 +41,49 @@ jobs:
           gradle --project-dir android-emergency :app:assembleDebug --stacktrace
 
   signed-release:
-    if: ${{ github.event_name == 'workflow_dispatch' && inputs.signed_release }}
     runs-on: ubuntu-latest
     needs: verify-android
     env:
       FAMILIA_NOA_ANDROID_KEYSTORE_PASSWORD: ${{ secrets.FAMILIA_NOA_ANDROID_KEYSTORE_PASSWORD }}
     steps:
+      - name: Detect permanent signing configuration
+        id: signing
+        env:
+          KEYSTORE_BASE64: ${{ secrets.FAMILIA_NOA_ANDROID_KEYSTORE_BASE64 }}
+        shell: bash
+        run: |
+          if [ -n "$KEYSTORE_BASE64" ] && [ -n "$FAMILIA_NOA_ANDROID_KEYSTORE_PASSWORD" ]; then
+            echo "available=true" >> "$GITHUB_OUTPUT"
+          else
+            echo "available=false" >> "$GITHUB_OUTPUT"
+            echo "Permanent signing secrets are not configured yet; signed release skipped."
+          fi
       - name: Checkout
+        if: steps.signing.outputs.available == 'true'
         uses: actions/checkout@v5
       - name: Java 17
+        if: steps.signing.outputs.available == 'true'
         uses: actions/setup-java@v5
         with:
           distribution: temurin
           java-version: '17'
       - name: Accept Android SDK licenses
+        if: steps.signing.outputs.available == 'true'
         shell: bash
         run: |
           yes | /usr/local/lib/android/sdk/cmdline-tools/latest/bin/sdkmanager --licenses >/dev/null || true
       - name: Install Android SDK 35
+        if: steps.signing.outputs.available == 'true'
         shell: bash
         run: |
           /usr/local/lib/android/sdk/cmdline-tools/latest/bin/sdkmanager 'platforms;android-35' 'build-tools;35.0.0' 'platform-tools'
       - name: Gradle 8.10.2
+        if: steps.signing.outputs.available == 'true'
         uses: gradle/actions/setup-gradle@v4
         with:
           gradle-version: '8.10.2'
-      - name: Verify permanent signing secrets
-        env:
-          KEYSTORE_BASE64: ${{ secrets.FAMILIA_NOA_ANDROID_KEYSTORE_BASE64 }}
-        shell: bash
-        run: |
-          test -n "$KEYSTORE_BASE64" || (echo "Missing FAMILIA_NOA_ANDROID_KEYSTORE_BASE64" && exit 1)
-          test -n "$FAMILIA_NOA_ANDROID_KEYSTORE_PASSWORD" || (echo "Missing FAMILIA_NOA_ANDROID_KEYSTORE_PASSWORD" && exit 1)
       - name: Restore permanent signing key
+        if: steps.signing.outputs.available == 'true'
         env:
           KEYSTORE_BASE64: ${{ secrets.FAMILIA_NOA_ANDROID_KEYSTORE_BASE64 }}
         shell: bash
@@ -89,6 +93,7 @@ jobs:
           chmod 600 "$RUNNER_TEMP/familia-noa-signing/familia-noa-release.jks"
           echo "FAMILIA_NOA_ANDROID_KEYSTORE_PATH=$RUNNER_TEMP/familia-noa-signing/familia-noa-release.jks" >> "$GITHUB_ENV"
       - name: Verify signing certificate identity
+        if: steps.signing.outputs.available == 'true'
         shell: bash
         run: |
           EXPECTED="$(tr -d '\r\n ' < android-emergency/signing-certificate.sha256)"
@@ -96,10 +101,12 @@ jobs:
           test "$ACTUAL" = "$EXPECTED" || (echo "Signing certificate mismatch" && exit 1)
           echo "Permanent signing certificate verified: $ACTUAL"
       - name: Build permanent signed release
+        if: steps.signing.outputs.available == 'true'
         shell: bash
         run: |
           gradle --project-dir android-emergency :app:assembleRelease --stacktrace
       - name: Verify signed APK
+        if: steps.signing.outputs.available == 'true'
         shell: bash
         run: |
           APK="android-emergency/app/build/outputs/apk/release/app-release.apk"
@@ -107,6 +114,7 @@ jobs:
           /usr/local/lib/android/sdk/build-tools/35.0.0/apksigner verify --verbose --print-certs "$APK"
           sha256sum "$APK" > "$APK.sha256"
       - name: Upload permanent signed APK
+        if: steps.signing.outputs.available == 'true'
         uses: actions/upload-artifact@v4
         with:
           name: familia-noa-permanent-signed-apk
