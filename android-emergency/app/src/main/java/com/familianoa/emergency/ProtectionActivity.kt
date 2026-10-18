@@ -211,8 +211,9 @@ class ProtectionActivity : Activity() {
         val camera: Boolean,
         val microphone: Boolean,
         val location: Boolean,
+        val backgroundLocation: Boolean,
     ) {
-        val allReady: Boolean get() = notifications && overlay && fullScreen && battery && dnd && camera && microphone && location
+        val allReady: Boolean get() = notifications && overlay && fullScreen && battery && dnd && camera && microphone && location && backgroundLocation
     }
 
     private fun permissions(): PermissionState {
@@ -230,6 +231,7 @@ class ProtectionActivity : Activity() {
             camera = checkSelfPermission(Manifest.permission.CAMERA) == PackageManager.PERMISSION_GRANTED,
             microphone = checkSelfPermission(Manifest.permission.RECORD_AUDIO) == PackageManager.PERMISSION_GRANTED,
             location = checkSelfPermission(Manifest.permission.ACCESS_FINE_LOCATION) == PackageManager.PERMISSION_GRANTED || checkSelfPermission(Manifest.permission.ACCESS_COARSE_LOCATION) == PackageManager.PERMISSION_GRANTED,
+            backgroundLocation = Build.VERSION.SDK_INT < 29 || checkSelfPermission(Manifest.permission.ACCESS_BACKGROUND_LOCATION) == PackageManager.PERMISSION_GRANTED,
         )
     }
 
@@ -250,6 +252,7 @@ class ProtectionActivity : Activity() {
         card.addView(statusRow("No molestar", if (state.dnd) 1 else 0, 1))
         card.addView(statusRow("Cámara y voz", media.count { it }, media.size))
         card.addView(statusRow("Ubicación", if (state.location) 1 else 0, 1))
+        card.addView(statusRow("Ubicación en segundo plano", if (state.backgroundLocation) 1 else 0, 1))
 
         val action = Button(this).apply {
             text = if (state.allReady) "✓ TELÉFONO LISTO" else "ACTIVAR LO QUE FALTA"
@@ -299,6 +302,11 @@ class ProtectionActivity : Activity() {
                 requestPermissions(missing.toTypedArray(), REQ_MEDIA)
             }
             !state.location -> requestPermissions(arrayOf(Manifest.permission.ACCESS_FINE_LOCATION, Manifest.permission.ACCESS_COARSE_LOCATION), REQ_LOCATION)
+            !state.backgroundLocation && Build.VERSION.SDK_INT == 29 -> requestPermissions(arrayOf(Manifest.permission.ACCESS_BACKGROUND_LOCATION), REQ_LOCATION)
+            !state.backgroundLocation && Build.VERSION.SDK_INT >= 30 -> {
+                toast("En Ubicación, permite 'Todo el tiempo' para mantener FAMILIA NOA activa en segundo plano.")
+                startActivity(Intent(Settings.ACTION_APPLICATION_DETAILS_SETTINGS, Uri.parse("package:$packageName")))
+            }
             else -> toast("Este teléfono ya está listo")
         }
     }
