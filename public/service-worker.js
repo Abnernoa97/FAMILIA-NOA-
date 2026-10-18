@@ -1,4 +1,4 @@
-const CACHE = 'familia-noa-v86-realtime-map-layout';
+const CACHE = 'familia-noa-v87-single-map-popup';
 const BASE = new URL(self.registration.scope).pathname;
 const STATIC = [
   BASE,
