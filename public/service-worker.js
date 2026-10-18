@@ -1,4 +1,4 @@
-const CACHE = 'familia-noa-v85-foreground-location-sync';
+const CACHE = 'familia-noa-v86-realtime-map-layout';
 const BASE = new URL(self.registration.scope).pathname;
 const STATIC = [
   BASE,
