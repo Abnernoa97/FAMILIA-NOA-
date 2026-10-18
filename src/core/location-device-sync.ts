@@ -34,6 +34,17 @@ function nativeSharingEnabled(bridge=nativeBridge()){
   try{return bridge.isLocationSharingEnabled()===true}catch{return false}
 }
 
+function verifyNativeStart(memberId:string,bridge:NativeLocationBridge){
+  window.setTimeout(()=>{
+    if(activeMemberId!==memberId)return
+    if(nativeSharingEnabled(bridge)){
+      stopWebWatch()
+      return
+    }
+    startWebWatch()
+  },1800)
+}
+
 function valid(position:GeolocationPosition){
   const {latitude,longitude}=position.coords
   return Number.isFinite(latitude)&&Number.isFinite(longitude)&&
@@ -124,6 +135,7 @@ export function startOwnLocationRealtime(memberId=getMemberId(),activateNative=t
       try{
         if(bridge.startLocationSharing()===true){
           stopWebWatch()
+          verifyNativeStart(memberId,bridge)
           return
         }
       }catch(error){
