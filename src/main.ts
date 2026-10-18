@@ -443,31 +443,50 @@ function renderLocationList(state:LocationState){
   const element=document.querySelector<HTMLElement>('#familylocations')
   if(!element)return
   if(!state.updatedAt&&!state.error){
-    element.innerHTML='<div class="location-section-title"><b>Familia</b><span>Se actualiza cuando alguien comparte</span></div><div class="loading">Cargando ubicaciones…</div>'
+    element.innerHTML='<div class="location-section-title"><div><b>Familia</b><span>Quién está compartiendo ahora</span></div><small>Cargando…</small></div><div class="loading">Cargando ubicaciones…</div>'
     return
   }
   if(state.error&&!state.updatedAt){
-    element.innerHTML='<div class="location-section-title"><b>Familia</b><span>Se actualiza cuando alguien comparte</span></div><div class="empty">No se pudieron cargar las ubicaciones. Inténtalo de nuevo.</div>'
+    element.innerHTML='<div class="location-section-title"><div><b>Familia</b><span>Quién está compartiendo ahora</span></div><small>Sin conexión</small></div><div class="empty">No se pudieron cargar las ubicaciones. Inténtalo de nuevo.</div>'
     return
   }
 
   const rows=state.locations
   const byMember=new Map(rows.map(row=>[row.member_id,row]))
   const sourceMembers=state.members.length?state.members:members
-  const ordered=[...sourceMembers].sort((a,b)=>a.id===memberId?-1:b.id===memberId?1:0)
+  const ordered=[...sourceMembers].sort((a,b)=>{
+    const aHas=byMember.has(a.id)?0:1
+    const bHas=byMember.has(b.id)?0:1
+    if(aHas!==bHas)return aHas-bHas
+    if(a.id===memberId)return -1
+    if(b.id===memberId)return 1
+    return a.name.localeCompare(b.name,'es')
+  })
+  const sharingCount=rows.length
+  const summary=sharingCount===0
+    ?'Nadie comparte ahora'
+    :`${sharingCount} compartiendo`
   const cards=ordered.map(member=>{
     const item=byMember.get(member.id)
     const mine=member.id===memberId
+    const initial=esc(member.name.charAt(0).toUpperCase()||'•')
     if(!item){
-      return `<div class="locationrow locationrow-empty"><div class="location-person"><span class="location-dot"></span><div><b>${esc(member.name)}${mine?' · tú':''}</b><small>${member.must_share_location?'Ubicación obligatoria pendiente':'Aún no ha compartido ubicación'}</small></div></div></div>`
+      return `<article class="locationrow locationrow-empty" data-location-member="${esc(member.id)}"><div class="location-person"><span class="location-avatar-fallback">${initial}</span><div><b>${esc(member.name)}${mine?' · tú':''}</b><small>${member.must_share_location?'Ubicación obligatoria pendiente':'Sin ubicación compartida'}</small></div></div><span class="location-state-pill muted">Sin ubicación</span></article>`
     }
     const ageMs=Date.now()-new Date(item.updated_at).getTime()
     const stale=Number.isFinite(ageMs)&&ageMs>60*60*1000
+    const veryFresh=Number.isFinite(ageMs)&&ageMs<5*60*1000
     const accuracy=Number.isFinite(item.accuracy)?` · ±${Math.round(item.accuracy as number)} m`:''
-    const href=`https://www.google.com/maps/search/?api=1&query=${encodeURIComponent(`${item.latitude},${item.longitude}`)}`
-    return `<div class="locationrow${stale?' stale':''}"><div class="location-person"><span class="location-dot"></span><div><b>${esc(member.name)}${mine?' · tú':''}</b><small>${stale?'Última ubicación · ':''}${locationAge(item.updated_at)}${accuracy}</small></div></div><a target="_blank" rel="noopener noreferrer" href="${href}">Ver mapa ›</a></div>`
+    const status=veryFresh?'Ahora':stale?'Última':'Reciente'
+    return `<article class="locationrow locationrow-active${stale?' stale':''}" data-location-member="${esc(member.id)}"><button type="button" class="location-focus" data-focus-location="${esc(member.id)}" aria-label="Ver a ${esc(member.name)} en el mapa"><span class="location-avatar-fallback">${initial}</span><span class="location-person"><span><b>${esc(member.name)}${mine?' · tú':''}</b><small>${stale?'Última ubicación · ':''}${locationAge(item.updated_at)}${accuracy}</small></span></span><span class="location-state-pill${veryFresh?' live':''}">${status}</span><span class="location-chevron">›</span></button></article>`
   }).join('')
-  element.innerHTML=`<div class="location-section-title"><b>Familia</b><span>Se actualiza cuando alguien comparte</span></div>${cards||'<div class="empty">Aún no hay ubicaciones compartidas.</div>'}`
+  element.innerHTML=`<div class="location-section-title"><div><b>Familia</b><span>Quién está compartiendo ahora</span></div><small>${summary}</small></div>${cards||'<div class="empty">Aún no hay ubicaciones compartidas.</div>'}`
+  element.querySelectorAll<HTMLButtonElement>('[data-focus-location]').forEach(button=>{
+    button.addEventListener('click',()=>{
+      window.dispatchEvent(new CustomEvent('familia-noa:focus-location',{detail:{memberId:button.dataset.focusLocation||''}}))
+      document.querySelector<HTMLElement>('[data-family-map]')?.scrollIntoView({behavior:'smooth',block:'center'})
+    })
+  })
 }
 
 async function loadLocations(force=false){
