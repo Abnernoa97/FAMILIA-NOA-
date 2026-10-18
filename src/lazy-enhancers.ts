@@ -109,6 +109,7 @@ const loadLocation = async () => {
   try {
     await import('./location-map-enhancer')
     await import('./location-privacy-enhancer')
+    await import('./location-live-enhancer')
     locationLoaded = true
   } catch (error) {
     locationLoaded = false
