@@ -7,7 +7,7 @@ import { initNavigation, enterView, replaceView, backView, type AppView } from '
 import { closeMediaViewer, isMediaViewerOpen } from './core/media-viewer'
 import { clearPrivateMediaCache } from './core/private-media'
 import { getLocationState, refreshLocationState, saveOwnLocation, subscribeLocationState, type LocationState } from './core/location-store'
-import { ensureOwnLocationAutoSync, refreshMemberLocation, startOwnLocationAutoSync } from './core/location-device-sync'
+import { ensureOwnLocationRealtime, refreshMemberLocation, startOwnLocationRealtime } from './core/location-device-sync'
 
 type Member = { id: string; name: string; active: boolean; must_share_location: boolean }
 type FamilySessionResponse = {
@@ -369,7 +369,7 @@ async function renderLocation(push = true) {
   locationViewUnsubscribe=null
   const current = currentMember()
   const mandatory = !!current?.must_share_location
-  app.innerHTML = `<main class="page location-page"><header class="pagehead"><button id="back" aria-label="Volver">‹</button><div><p class="eyebrow">FAMILIA NOA</p><h1>Ubicación</h1></div></header><section class="locationbox"><div class="pin">⌖</div><div><p class="eyebrow">TU UBICACIÓN</p><h2>${mandatory?'Mantener ubicación al día':'Compartir ubicación'}</h2><p id="locationtext">${mandatory?'La ubicación es obligatoria para este perfil y se verifica cada vez que entras a la app.':'Comparte tu ubicación con la familia cuando quieras.'}</p></div><button class="primary" id="sharelocation">Actualizar ubicación</button></section><section class="family-locations" id="familylocations"><div class="location-section-title"><b>Familia</b><span>Se actualiza cuando alguien comparte</span></div><div class="loading">Cargando…</div></section></main>`
+  app.innerHTML = `<main class="page location-page"><header class="pagehead"><button id="back" aria-label="Volver">‹</button><div><p class="eyebrow">FAMILIA NOA</p><h1>Ubicación</h1></div></header><section class="locationbox"><div class="pin">⌖</div><div><p class="eyebrow">TU UBICACIÓN</p><h2>${mandatory?'Mantener ubicación al día':'Compartir ubicación'}</h2><p id="locationtext">${mandatory?'La ubicación es obligatoria para este perfil y se verifica cada vez que entras a la app.':'Comparte tu ubicación con la familia cuando quieras.'}</p></div><button class="primary" id="sharelocation">Activar ubicación</button></section><section class="family-locations" id="familylocations"><div class="location-section-title"><b>Familia</b><span>Se actualiza cuando alguien comparte</span></div><div class="loading">Cargando…</div></section></main>`
   document.querySelector('#back')!.addEventListener('click', () => backView())
   document.querySelector('#sharelocation')!.addEventListener('click', () => void shareLocation())
   locationViewUnsubscribe=subscribeLocationState(state=>renderLocationList(state))
@@ -421,7 +421,7 @@ async function shareLocation() {
       longitude,
       accuracy:Number.isFinite(accuracy)?accuracy:null,
     })
-    startOwnLocationAutoSync(memberId)
+    startOwnLocationRealtime(memberId)
     text.textContent=`Ubicación actualizada ahora${Number.isFinite(accuracy)?` · precisión aproximada ${Math.round(accuracy)} m`:''}.`
     mandatoryLocationVerified=true
     await loadLocations()
@@ -436,7 +436,7 @@ async function shareLocation() {
   }finally{
     if(document.contains(button)){
       button.disabled=false
-      button.textContent=mandatoryLocationGateActive?'Activar ubicación y continuar':'Actualizar ubicación'
+      button.textContent=mandatoryLocationGateActive?'Activar ubicación y continuar':'Activar ubicación'
     }
   }
 }
@@ -464,7 +464,7 @@ function renderLocationList(state:LocationState){
     if(b.id===memberId)return 1
     return a.name.localeCompare(b.name,'es')
   })
-  if(byMember.has(memberId))ensureOwnLocationAutoSync()
+  if(byMember.has(memberId))ensureOwnLocationRealtime()
   const sharingCount=rows.length
   const summary=sharingCount===0
     ?'Nadie comparte ahora'
