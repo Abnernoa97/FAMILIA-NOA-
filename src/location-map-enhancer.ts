@@ -235,7 +235,7 @@ async function applyState(state:LocationState){
   if(!shell)return
   const run=++generation
 
-  if(state.loading&&!state.updatedAt){
+  if(!state.updatedAt&&!state.error){
     showOverlay(shell,'loading')
     return
   }
