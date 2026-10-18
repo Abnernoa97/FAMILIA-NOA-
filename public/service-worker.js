@@ -1,4 +1,4 @@
-const CACHE = 'familia-noa-v84-stable-location-baseline';
+const CACHE = 'familia-noa-v85-foreground-location-sync';
 const BASE = new URL(self.registration.scope).pathname;
 const STATIC = [
   BASE,
