@@ -9,6 +9,7 @@ let scheduled:number|null=null
 let periodicTimer:number|null=null
 let stateUnsubscribe:(()=>void)|null=null
 let latestState=getLocationState()
+let observedPage:HTMLElement|null=null
 
 function setText(element:HTMLElement|null|undefined,value:string){
   if(element&&element.textContent!==value)element.textContent=value
@@ -255,13 +256,21 @@ function schedule(){
   scheduled=window.setTimeout(enhance,60)
 }
 
+function scanPage(){
+  const page=document.querySelector<HTMLElement>('.location-page')
+  if(page===observedPage)return
+  observedPage=page
+  schedule()
+}
+
 injectStyles()
-observer=new MutationObserver(schedule)
+observer=new MutationObserver(scanPage)
 observer.observe(document.body,{childList:true,subtree:true})
 stateUnsubscribe=subscribeLocationState(state=>{
   latestState=state
   schedule()
 })
+scanPage()
 periodicTimer=window.setInterval(()=>{
   if(document.querySelector('.location-page'))schedule()
 },60*1000)
