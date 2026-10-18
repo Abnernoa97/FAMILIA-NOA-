@@ -10,6 +10,14 @@ let periodicTimer:number|null=null
 let stateUnsubscribe:(()=>void)|null=null
 let latestState=getLocationState()
 
+function setText(element:HTMLElement|null|undefined,value:string){
+  if(element&&element.textContent!==value)element.textContent=value
+}
+
+function setHtml(element:HTMLElement|null|undefined,value:string){
+  if(element&&element.innerHTML!==value)element.innerHTML=value
+}
+
 function injectStyles(){
   if(document.querySelector('#location-privacy-css'))return
   const style=document.createElement('style')
@@ -58,7 +66,7 @@ function ensurePrivacyNote(page:HTMLElement){
   const note=document.createElement('div')
   note.className='location-privacy-note'
   note.dataset.locationPrivacyNote='1'
-  note.textContent='La app no rastrea en segundo plano. Se muestra la última ubicación compartida y cuándo fue actualizada.'
+  note.textContent='La ubicación en vivo se actualiza mientras FAMILIA NOA siga activa. Si Android la suspende, deja de mostrarse EN VIVO automáticamente.'
   box.insertAdjacentElement('afterend',note)
 }
 
@@ -145,17 +153,17 @@ function syncOwnSharingCard(page:HTMLElement,state:LocationState){
       badge.innerHTML=`<i></i> ${live?'EN VIVO':'Compartiendo'}`
       box.querySelector('.pin')?.insertAdjacentElement('afterend',badge)
     }
-    if(badge)badge.innerHTML=`<i></i> ${live?'EN VIVO':'Compartiendo'}`
-    if(title)title.textContent=live?'Ubicación en vivo':'Compartiendo ahora'
+    setHtml(badge,`<i></i> ${live?'EN VIVO':'Compartiendo'}`)
+    setText(title,live?'Ubicación en vivo':'Compartiendo ahora')
     const accuracy=Number.isFinite(mine.accuracy)?` · ±${Math.round(mine.accuracy as number)} m`:''
-    if(text)text.textContent=live
+    setText(text,live
       ?`Actualizando automáticamente · ${locationAgeShort(mine.updated_at)}${accuracy}`
-      :`${locationAgeShort(mine.updated_at)}${accuracy}`
+      :`${locationAgeShort(mine.updated_at)}${accuracy}`)
   }else{
     page.classList.remove('location-sharing-active')
     badge?.remove()
-    if(title)title.textContent='Compartir ubicación'
-    if(text&&!text.textContent?.includes('No se pudo'))text.textContent='Comparte tu ubicación con la familia cuando quieras.'
+    setText(title,'Compartir ubicación')
+    if(text&&!text.textContent?.includes('No se pudo'))setText(text,'Comparte tu ubicación con la familia cuando quieras.')
   }
 
   let sync=page.querySelector<HTMLElement>('[data-location-sync-note]')
@@ -167,13 +175,13 @@ function syncOwnSharingCard(page:HTMLElement,state:LocationState){
   }
   if(sync){
     sync.dataset.status=state.syncStatus
-    sync.textContent=state.syncStatus==='offline'
+    setText(sync,state.syncStatus==='offline'
       ? 'Sin conexión · mostrando la última ubicación guardada'
       : state.syncStatus==='reconnecting'
         ? 'Reconectando ubicación…'
         : state.syncStatus==='connecting'
           ? 'Conectando ubicación…'
-          : 'Ubicación sincronizada con la familia'
+          : 'Ubicación sincronizada con la familia')
   }
 }
 
