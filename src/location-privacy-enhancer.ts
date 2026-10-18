@@ -1,5 +1,5 @@
 import { getIdentity } from './core/identity'
-import { getLocationState, refreshLocationState, stopSharingOwnLocation, subscribeLocationState, type LocationState } from './core/location-store'
+import { getLocationState, isLocationLive, refreshLocationState, stopSharingOwnLocation, subscribeLocationState, type LocationState } from './core/location-store'
 
 const STALE_AFTER_MS=60*60*1000
 
@@ -39,8 +39,7 @@ function injectStyles(){
 
 function isOptionalLocationPage(page:HTMLElement){
   const gated=!!page.querySelector('#sharelocation')?.textContent?.toLowerCase().includes('continuar')
-  const title=page.querySelector<HTMLElement>('.locationbox h2')?.textContent?.trim().toLowerCase()||''
-  return !gated&&title==='compartir ubicación'
+  return !gated&&!!page.querySelector('#back')
 }
 
 function rowName(row:HTMLElement){
@@ -137,17 +136,21 @@ function syncOwnSharingCard(page:HTMLElement,state:LocationState){
   let badge=box?.querySelector<HTMLElement>('[data-location-share-status]')||null
 
   if(mine){
+    const live=isLocationLive(mine)
     page.classList.add('location-sharing-active')
     if(!badge&&box){
       badge=document.createElement('span')
       badge.className='location-share-status'
       badge.dataset.locationShareStatus='1'
-      badge.innerHTML='<i></i> Compartiendo'
+      badge.innerHTML=`<i></i> ${live?'EN VIVO':'Compartiendo'}`
       box.querySelector('.pin')?.insertAdjacentElement('afterend',badge)
     }
-    if(title)title.textContent='Compartiendo ahora'
+    if(badge)badge.innerHTML=`<i></i> ${live?'EN VIVO':'Compartiendo'}`
+    if(title)title.textContent=live?'Ubicación en vivo':'Compartiendo ahora'
     const accuracy=Number.isFinite(mine.accuracy)?` · ±${Math.round(mine.accuracy as number)} m`:''
-    if(text)text.textContent=`${locationAgeShort(mine.updated_at)}${accuracy}`
+    if(text)text.textContent=live
+      ?`Actualizando automáticamente · ${locationAgeShort(mine.updated_at)}${accuracy}`
+      :`${locationAgeShort(mine.updated_at)}${accuracy}`
   }else{
     page.classList.remove('location-sharing-active')
     badge?.remove()
@@ -182,7 +185,13 @@ function syncStopButton(page:HTMLElement,state:LocationState){
   }
 
   const identity=getIdentity()
-  const sharing=!!identity?.memberId&&state.locations.some(location=>location.member_id===identity.memberId)
+  const mine=identity?.memberId?state.locations.find(location=>location.member_id===identity.memberId):null
+  const live=!!mine&&isLocationLive(mine)
+  if(live){
+    existing?.remove()
+    return
+  }
+  const sharing=!!mine
   if(!sharing){
     existing?.remove()
     return
