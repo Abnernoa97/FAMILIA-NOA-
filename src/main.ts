@@ -442,7 +442,7 @@ async function shareLocation() {
 function renderLocationList(state:LocationState){
   const element=document.querySelector<HTMLElement>('#familylocations')
   if(!element)return
-  if(state.loading&&!state.updatedAt){
+  if(!state.updatedAt&&!state.error){
     element.innerHTML='<div class="location-section-title"><b>Familia</b><span>Se actualiza cuando alguien comparte</span></div><div class="loading">Cargando ubicaciones…</div>'
     return
   }
