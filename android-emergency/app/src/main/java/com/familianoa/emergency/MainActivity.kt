@@ -2,8 +2,11 @@ package com.familianoa.emergency
 
 import android.Manifest
 import android.app.Activity
+import android.content.BroadcastReceiver
 import android.content.ClipData
+import android.content.Context
 import android.content.Intent
+import android.content.IntentFilter
 import android.content.pm.PackageManager
 import android.graphics.Color
 import android.net.Uri
@@ -35,6 +38,7 @@ class MainActivity : Activity() {
         private const val REQ_CAMERA_FOR_CHOOSER = 212
         private const val REQ_WEB_MEDIA = 213
         private const val REQ_GEOLOCATION = 214
+        private const val REQ_LIVE_LOCATION = 215
         private const val NATIVE_MARKER = "familia-noa-native-bootstrapped"
     }
 
@@ -52,10 +56,27 @@ class MainActivity : Activity() {
     private var pendingWebResources: Array<String> = emptyArray()
     private var pendingGeoOrigin: String? = null
     private var pendingGeoCallback: GeolocationPermissions.Callback? = null
+    private var pendingLiveDurationMinutes: Int? = null
+
+    private val liveLocationReceiver = object : BroadcastReceiver() {
+        override fun onReceive(context: Context?, intent: Intent?) {
+            if (intent?.action == LiveLocationService.ACTION_STATUS) dispatchLiveLocationState()
+        }
+    }
 
     override fun onCreate(savedInstanceState: Bundle?) {
         super.onCreate(savedInstanceState)
         store = SessionStore(this)
+        if (android.os.Build.VERSION.SDK_INT >= 33) {
+            registerReceiver(
+                liveLocationReceiver,
+                IntentFilter(LiveLocationService.ACTION_STATUS),
+                RECEIVER_NOT_EXPORTED
+            )
+        } else {
+            @Suppress("DEPRECATION")
+            registerReceiver(liveLocationReceiver, IntentFilter(LiveLocationService.ACTION_STATUS))
+        }
         window.statusBarColor = Color.rgb(246, 243, 237)
         window.navigationBarColor = Color.BLACK
         window.decorView.systemUiVisibility = View.SYSTEM_UI_FLAG_LIGHT_STATUS_BAR
@@ -100,6 +121,7 @@ class MainActivity : Activity() {
             destroy()
         }
         webView = null
+        runCatching { unregisterReceiver(liveLocationReceiver) }
         super.onDestroy()
     }
 
@@ -127,7 +149,7 @@ class MainActivity : Activity() {
             settings.setGeolocationEnabled(true)
             settings.cacheMode = android.webkit.WebSettings.LOAD_DEFAULT
             settings.mixedContentMode = android.webkit.WebSettings.MIXED_CONTENT_NEVER_ALLOW
-            settings.userAgentString = settings.userAgentString + " FAMILIA-NOA-Android/2.0"
+            settings.userAgentString = settings.userAgentString + " FAMILIA-NOA-Android/6.0"
             addJavascriptInterface(NativeBridge(), "FamiliaNoaNative")
         }
         webView = web
@@ -402,6 +424,16 @@ class MainActivity : Activity() {
                 pendingGeoCallback = null
                 pendingGeoOrigin = null
             }
+            REQ_LIVE_LOCATION -> {
+                val duration = pendingLiveDurationMinutes
+                pendingLiveDurationMinutes = null
+                if (duration != null && hasLocationPermission()) {
+                    LiveLocationService.start(this, duration)
+                    webView?.postDelayed({ dispatchLiveLocationState("starting") }, 350L)
+                } else {
+                    dispatchLiveLocationState("permission-denied")
+                }
+            }
         }
     }
 
@@ -439,10 +471,85 @@ class MainActivity : Activity() {
         if (web != null && web.canGoBack()) web.goBack() else super.onBackPressed()
     }
 
+    private fun liveLocationStateJson(status:String = "ready"): String {
+        val now = System.currentTimeMillis()
+        val active = store.liveLocationActive && (store.liveLocationEndsAt <= 0L || store.liveLocationEndsAt > now)
+        return JSONObject()
+            .put("ok", true)
+            .put("capability", "android-foreground-location-v1")
+            .put("status", status)
+            .put("active", active)
+            .put("startedAt", store.liveLocationStartedAt)
+            .put("endsAt", store.liveLocationEndsAt)
+            .put("remainingMs", store.liveLocationRemainingMs(now))
+            .toString()
+    }
+
+    private fun dispatchLiveLocationState(status:String = "ready") {
+        val detail = liveLocationStateJson(status)
+        webView?.post {
+            webView?.evaluateJavascript(
+                "try{window.dispatchEvent(new CustomEvent('familia-noa:live-location-native',{detail:$detail}))}catch(e){}",
+                null
+            )
+        }
+    }
+
     inner class NativeBridge {
         @JavascriptInterface
         fun openProtectionSettings() {
             runOnUiThread { openProtection() }
+        }
+
+        @JavascriptInterface
+        fun liveLocationCapability(): String = "android-foreground-location-v1"
+
+        @JavascriptInterface
+        fun getLiveLocationState(): String = liveLocationStateJson()
+
+        @JavascriptInterface
+        fun startLiveLocation(durationMinutes: Int): String {
+            if (!store.configured) {
+                return JSONObject().put("ok", false).put("status", "not-configured").toString()
+            }
+            val duration = durationMinutes.coerceAtLeast(0)
+            if (!hasLocationPermission()) {
+                pendingLiveDurationMinutes = duration
+                runOnUiThread {
+                    requestPermissions(
+                        arrayOf(Manifest.permission.ACCESS_FINE_LOCATION, Manifest.permission.ACCESS_COARSE_LOCATION),
+                        REQ_LIVE_LOCATION
+                    )
+                }
+                return JSONObject()
+                    .put("ok", false)
+                    .put("status", "permission-required")
+                    .put("capability", "android-foreground-location-v1")
+                    .toString()
+            }
+            runOnUiThread {
+                LiveLocationService.start(this@MainActivity, duration)
+                webView?.postDelayed({ dispatchLiveLocationState("starting") }, 350L)
+            }
+            return JSONObject()
+                .put("ok", true)
+                .put("status", "starting")
+                .put("durationMinutes", duration)
+                .put("capability", "android-foreground-location-v1")
+                .toString()
+        }
+
+        @JavascriptInterface
+        fun stopLiveLocation(): String {
+            runOnUiThread {
+                LiveLocationService.stop(this@MainActivity)
+                webView?.postDelayed({ dispatchLiveLocationState("stopping") }, 250L)
+            }
+            return JSONObject()
+                .put("ok", true)
+                .put("status", "stopping")
+                .put("capability", "android-foreground-location-v1")
+                .toString()
         }
     }
 
