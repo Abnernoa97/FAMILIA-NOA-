@@ -6,6 +6,7 @@ import { startHomeChatUnread, stopHomeChatUnread } from './chat-features'
 import { initNavigation, enterView, replaceView, backView, type AppView } from './core/navigation'
 import { closeMediaViewer, isMediaViewerOpen } from './core/media-viewer'
 import { clearPrivateMediaCache } from './core/private-media'
+import { getLocationState, refreshLocationState, saveOwnLocation, subscribeLocationState, type LocationState } from './core/location-store'
 
 type Member = { id: string; name: string; active: boolean; must_share_location: boolean }
 type FamilySessionResponse = {
@@ -54,6 +55,7 @@ let settingsChannel: ReturnType<typeof supabase.channel> | null = null
 let familySyncChannel: ReturnType<typeof supabase.channel> | null = null
 let mandatoryLocationVerified = false
 let mandatoryLocationGateActive = false
+let locationViewUnsubscribe:(()=>void)|null=null
 const app = document.querySelector<HTMLDivElement>('#app')!
 document.title = 'FAMILIA NOA'
 
@@ -110,6 +112,8 @@ function requiresMandatoryLocation(){
 function stopActiveViews() {
   closeChat()
   stopHomeChatUnread()
+  locationViewUnsubscribe?.()
+  locationViewUnsubscribe=null
 }
 
 async function clearFamilySession() {
@@ -246,9 +250,6 @@ function startFamilyRealtime() {
       }
       if(current.must_share_location&&!mandatoryLocationVerified)renderMandatoryLocation()
     })
-    .on('postgres_changes', { event:'*', schema:'public', table:'locations' }, () => {
-      if (document.querySelector('.family-locations')) void loadLocations()
-    })
     .subscribe()
 }
 
@@ -349,9 +350,12 @@ function renderMandatoryLocation(){
   replaceView('location')
   stopHomeChatUnread()
   closeChat()
+  locationViewUnsubscribe?.()
+  locationViewUnsubscribe=null
   app.innerHTML=`<main class="page location-page"><header class="pagehead"><div style="width:42px"></div><div><p class="eyebrow">FAMILIA NOA</p><h1>Ubicación requerida</h1></div></header><section class="locationbox"><div class="pin">⌖</div><div><p class="eyebrow">OBLIGATORIO</p><h2>Comparte tu ubicación para continuar</h2><p id="locationtext">Para ${esc(memberName)}, la ubicación debe estar activa y actualizarse al entrar a la app.</p></div><button class="primary" id="sharelocation">Activar ubicación y continuar</button></section><section class="family-locations" id="familylocations"><div class="location-section-title"><b>Familia</b><span>Se actualiza cuando alguien comparte</span></div><div class="loading">Cargando…</div></section></main>`
   document.querySelector('#sharelocation')!.addEventListener('click',()=>void shareLocation())
-  void loadLocations()
+  locationViewUnsubscribe=subscribeLocationState(state=>renderLocationList(state))
+  void loadLocations(true)
 }
 
 async function renderLocation(push = true) {
@@ -360,12 +364,15 @@ async function renderLocation(push = true) {
   if (push) enterView('location')
   stopHomeChatUnread()
   closeChat()
+  locationViewUnsubscribe?.()
+  locationViewUnsubscribe=null
   const current = currentMember()
   const mandatory = !!current?.must_share_location
   app.innerHTML = `<main class="page location-page"><header class="pagehead"><button id="back" aria-label="Volver">‹</button><div><p class="eyebrow">FAMILIA NOA</p><h1>Ubicación</h1></div></header><section class="locationbox"><div class="pin">⌖</div><div><p class="eyebrow">TU UBICACIÓN</p><h2>${mandatory?'Mantener ubicación al día':'Compartir ubicación'}</h2><p id="locationtext">${mandatory?'La ubicación es obligatoria para este perfil y se verifica cada vez que entras a la app.':'Comparte tu ubicación con la familia cuando quieras.'}</p></div><button class="primary" id="sharelocation">Actualizar ubicación</button></section><section class="family-locations" id="familylocations"><div class="location-section-title"><b>Familia</b><span>Se actualiza cuando alguien comparte</span></div><div class="loading">Cargando…</div></section></main>`
   document.querySelector('#back')!.addEventListener('click', () => backView())
   document.querySelector('#sharelocation')!.addEventListener('click', () => void shareLocation())
-  await loadLocations()
+  locationViewUnsubscribe=subscribeLocationState(state=>renderLocationList(state))
+  await loadLocations(true)
 }
 
 function geolocationErrorText(error:unknown){
@@ -407,14 +414,12 @@ async function shareLocation() {
       throw new Error('INVALID_LOCATION')
     }
     button.textContent='Guardando…'
-    const {error}=await supabase.from('locations').upsert({
-      member_id:memberId,
+    await saveOwnLocation({
+      memberId,
       latitude,
       longitude,
       accuracy:Number.isFinite(accuracy)?accuracy:null,
-      updated_at:new Date().toISOString()
-    },{onConflict:'member_id'})
-    if(error)throw error
+    })
     text.textContent=`Ubicación actualizada ahora${Number.isFinite(accuracy)?` · precisión aproximada ${Math.round(accuracy)} m`:''}.`
     mandatoryLocationVerified=true
     await loadLocations()
@@ -434,19 +439,22 @@ async function shareLocation() {
   }
 }
 
-async function loadLocations() {
-  const element = document.querySelector<HTMLElement>('#familylocations')
-  if (!element) return
-  const { data,error } = await supabase.from('locations').select('member_id,latitude,longitude,accuracy,updated_at').order('updated_at', { ascending:false })
-  if(error){
-    console.error('Family locations load failed',error)
+function renderLocationList(state:LocationState){
+  const element=document.querySelector<HTMLElement>('#familylocations')
+  if(!element)return
+  if(state.loading&&!state.updatedAt){
+    element.innerHTML='<div class="location-section-title"><b>Familia</b><span>Se actualiza cuando alguien comparte</span></div><div class="loading">Cargando ubicaciones…</div>'
+    return
+  }
+  if(state.error&&!state.updatedAt){
     element.innerHTML='<div class="location-section-title"><b>Familia</b><span>Se actualiza cuando alguien comparte</span></div><div class="empty">No se pudieron cargar las ubicaciones. Inténtalo de nuevo.</div>'
     return
   }
 
-  const rows=(data||[]) as FamilyLocation[]
+  const rows=state.locations
   const byMember=new Map(rows.map(row=>[row.member_id,row]))
-  const ordered=[...members].sort((a,b)=>a.id===memberId?-1:b.id===memberId?1:0)
+  const sourceMembers=state.members.length?state.members:members
+  const ordered=[...sourceMembers].sort((a,b)=>a.id===memberId?-1:b.id===memberId?1:0)
   const cards=ordered.map(member=>{
     const item=byMember.get(member.id)
     const mine=member.id===memberId
@@ -460,6 +468,11 @@ async function loadLocations() {
     return `<div class="locationrow${stale?' stale':''}"><div class="location-person"><span class="location-dot"></span><div><b>${esc(member.name)}${mine?' · tú':''}</b><small>${stale?'Última ubicación · ':''}${locationAge(item.updated_at)}${accuracy}</small></div></div><a target="_blank" rel="noopener noreferrer" href="${href}">Ver mapa ›</a></div>`
   }).join('')
   element.innerHTML=`<div class="location-section-title"><b>Familia</b><span>Se actualiza cuando alguien comparte</span></div>${cards||'<div class="empty">Aún no hay ubicaciones compartidas.</div>'}`
+}
+
+async function loadLocations(force=false){
+  const state=await refreshLocationState({force})
+  renderLocationList(state)
 }
 
 function sheet(title: string, text: string) {
