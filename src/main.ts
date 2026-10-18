@@ -487,8 +487,9 @@ function renderLocationList(state:LocationState){
   element.innerHTML=`<div class="location-section-title"><div><b>Familia</b><span>Quién está compartiendo ahora</span></div><small>${summary}</small></div>${cards||'<div class="empty">Aún no hay ubicaciones compartidas.</div>'}`
   element.querySelectorAll<HTMLButtonElement>('[data-focus-location]').forEach(button=>{
     button.addEventListener('click',()=>{
-      window.dispatchEvent(new CustomEvent('familia-noa:focus-location',{detail:{memberId:button.dataset.focusLocation||''}}))
-      document.querySelector<HTMLElement>('[data-family-map]')?.scrollIntoView({behavior:'smooth',block:'center'})
+      window.dispatchEvent(new CustomEvent('familia-noa:focus-location',{
+        detail:{memberId:button.dataset.focusLocation||'',source:'list'}
+      }))
     })
   })
 }
