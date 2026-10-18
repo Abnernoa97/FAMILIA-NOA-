@@ -29,6 +29,7 @@ let lastMemberSignature=''
 let activePage:Element|null=null
 let pageObserver:MutationObserver|null=null
 let stateUnsubscribe:(()=>void)|null=null
+let resizeObserver:ResizeObserver|null=null
 let generation=0
 
 function esc(value:string){return value.replace(/[&<>"']/g,char=>({'&':'&amp;','<':'&lt;','>':'&gt;','"':'&quot;',"'":'&#039;'}[char]||char))}
@@ -93,6 +94,8 @@ function clearMarkers(){
 
 function destroyMap(){
   generation++
+  resizeObserver?.disconnect()
+  resizeObserver=null
   clearMarkers()
   currentLocations=[]
   lastLocationSignature=''
@@ -316,6 +319,11 @@ async function applyState(state:LocationState){
       })
       map.addControl(new MapLibre.NavigationControl({showZoom:false,showCompass:true,visualizePitch:true}),'top-right')
       map.addControl(new MapLibre.AttributionControl({compact:true}),'bottom-right')
+      if('ResizeObserver' in window){
+        resizeObserver?.disconnect()
+        resizeObserver=new ResizeObserver(()=>{try{map?.resize()}catch{}})
+        resizeObserver.observe(shell)
+      }
       map.on('load',()=>{
         add3dBuildings(map)
         renderMarkers(MapLibre)
