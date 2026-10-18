@@ -1,6 +1,7 @@
 import { getMemberId } from './core/identity'
 import { mediaUrl, primeMedia } from './core/private-media'
 import { getLocationState, refreshLocationState, subscribeLocationState, type LocationState } from './core/location-store'
+import { refreshMemberLocation } from './core/location-device-sync'
 
 const MAPLIBRE_JS='https://unpkg.com/maplibre-gl@6.10.0/dist/maplibre-gl.mjs'
 const MAPLIBRE_CSS='https://unpkg.com/maplibre-gl@6.10.0/dist/maplibre-gl.css'
@@ -24,6 +25,7 @@ let map:any=null
 let markers:any[]=[]
 let currentLocations:MapLocation[]=[]
 let lastLocationSignature=''
+let lastMemberSignature=''
 let activePage:Element|null=null
 let pageObserver:MutationObserver|null=null
 let stateUnsubscribe:(()=>void)|null=null
@@ -94,6 +96,7 @@ function destroyMap(){
   clearMarkers()
   currentLocations=[]
   lastLocationSignature=''
+  lastMemberSignature=''
   if(map){try{map.remove()}catch{}}
   map=null
 }
@@ -110,10 +113,20 @@ function ensurePanel(page:HTMLElement){
   const gated=!!page.querySelector('#sharelocation')?.textContent?.toLowerCase().includes('continuar')
   if(gated)locationBox.insertAdjacentElement('afterend',shell)
   else locationBox.insertAdjacentElement('beforebegin',shell)
-  shell.querySelector('[data-map-all]')?.addEventListener('click',fitAll)
+  shell.querySelector('[data-map-all]')?.addEventListener('click',()=>{
+    void(async()=>{
+      await refreshLocationState({force:true})
+      fitAll()
+    })()
+  })
   shell.querySelector('[data-map-mine]')?.addEventListener('click',()=>{
-    const mine=currentLocations.find(item=>item.mine)
-    if(mine)focus(mine,true)
+    void(async()=>{
+      const mine=currentLocations.find(item=>item.mine)
+      if(!mine)return
+      await refreshMemberLocation(mine.member_id)
+      const fresh=currentLocations.find(item=>item.member_id===mine.member_id)||mine
+      focus(fresh,true)
+    })()
   })
   return shell
 }
@@ -198,8 +211,12 @@ function renderPeople(){
   root.innerHTML=currentLocations.map(item=>`<button type="button" class="family-map-chip${item.mine?' mine':''}" data-map-member="${esc(item.member_id)}"><span class="family-map-chip-avatar">${avatarMarkup(item)}</span><span>${esc(item.name)}${item.mine?' · tú':''}</span><small>${esc(age(item.updated_at))}</small></button>`).join('')
   bindAvatarFallback(root)
   root.querySelectorAll<HTMLButtonElement>('[data-map-member]').forEach(button=>button.addEventListener('click',()=>{
-    const item=currentLocations.find(location=>location.member_id===button.dataset.mapMember)
-    if(item)focus(item,true)
+    void(async()=>{
+      const memberId=button.dataset.mapMember||''
+      await refreshMemberLocation(memberId)
+      const item=currentLocations.find(location=>location.member_id===memberId)
+      if(item)focus(item,true)
+    })()
   }))
 }
 
@@ -215,7 +232,11 @@ function renderMarkers(MapLibre:any){
     bindAvatarFallback(element)
     element.addEventListener('click',event=>{
       event.stopPropagation()
-      focus(item,true)
+      void(async()=>{
+        await refreshMemberLocation(item.member_id)
+        const fresh=currentLocations.find(location=>location.member_id===item.member_id)||item
+        focus(fresh,true)
+      })()
     })
     markers.push(new MapLibre.Marker({element,anchor:'bottom'}).setLngLat([item.longitude,item.latitude]).addTo(map))
   })
@@ -265,11 +286,14 @@ async function applyState(state:LocationState){
     .map(item=>[item.member_id,item.latitude.toFixed(6),item.longitude.toFixed(6),item.updated_at,item.avatarPath||''].join(':'))
     .sort()
     .join('|')
+  const memberSignature=locations.map(item=>item.member_id).sort().join('|')
   const changed=signature!==lastLocationSignature
+  const membersChanged=memberSignature!==lastMemberSignature
   currentLocations=locations
 
   if(!locations.length){
     lastLocationSignature=''
+    lastMemberSignature=''
     clearMarkers()
     showOverlay(shell,'empty')
     return
@@ -281,7 +305,7 @@ async function applyState(state:LocationState){
     return
   }
 
-  showOverlay(shell,'loading')
+  if(!map)showOverlay(shell,'loading')
   try{
     const MapLibre=await loadMapLibre()
     if(run!==generation||!document.contains(shell))return
@@ -306,6 +330,7 @@ async function applyState(state:LocationState){
         add3dBuildings(map)
         renderMarkers(MapLibre)
         lastLocationSignature=signature
+        lastMemberSignature=memberSignature
         fitAll()
         hideOverlay(shell)
       })
@@ -315,7 +340,8 @@ async function applyState(state:LocationState){
 
     renderMarkers(MapLibre)
     lastLocationSignature=signature
-    fitAll()
+    lastMemberSignature=memberSignature
+    if(membersChanged)fitAll()
     hideOverlay(shell)
     setTimeout(()=>{try{map.resize()}catch{}},40)
   }catch(error){
