@@ -6,6 +6,7 @@ import okhttp3.Request
 import okhttp3.RequestBody.Companion.toRequestBody
 import org.json.JSONArray
 import org.json.JSONObject
+import java.time.Instant
 import java.util.concurrent.TimeUnit
 
 data class FamilyMember(val id:String, val name:String)
@@ -102,6 +103,31 @@ object Api {
                 refreshToken = json.optString("refresh_token", refreshToken),
                 expiresAt = expiresAt,
             )
+        }
+    }
+
+    fun upsertFamilyLocation(
+        accessToken:String,
+        memberId:String,
+        latitude:Double,
+        longitude:Double,
+        accuracy:Float?,
+    ) {
+        val body = JSONObject()
+            .put("member_id", memberId)
+            .put("latitude", latitude)
+            .put("longitude", longitude)
+            .put("accuracy", accuracy?.toDouble() ?: JSONObject.NULL)
+            .put("updated_at", Instant.now().toString())
+        val request = Request.Builder()
+            .url("${Config.SUPABASE_URL}/rest/v1/locations?on_conflict=member_id")
+            .header("apikey", Config.PUBLISHABLE_KEY)
+            .header("Authorization", "Bearer $accessToken")
+            .header("Prefer", "resolution=merge-duplicates,return=minimal")
+            .post(body.toString().toRequestBody(jsonType))
+            .build()
+        http.newCall(request).execute().use { response ->
+            if (!response.isSuccessful) error("No se pudo actualizar la ubicación (${response.code})")
         }
     }
 
