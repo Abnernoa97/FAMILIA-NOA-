@@ -1,16 +1,14 @@
-import { supabase } from './supabase'
 import { getIdentity } from './core/identity'
+import { getLocationState, refreshLocationState, stopSharingOwnLocation, subscribeLocationState, type LocationState } from './core/location-store'
 
 const STALE_AFTER_MS=60*60*1000
-const FRESHNESS_FETCH_TTL_MS=30*1000
 
 let observer:MutationObserver|null=null
 let busy=false
 let scheduled:number|null=null
-let freshnessLoading=false
-let lastFreshnessFetch=0
 let periodicTimer:number|null=null
-const updatedByName=new Map<string,number>()
+let stateUnsubscribe:(()=>void)|null=null
+let latestState=getLocationState()
 
 function injectStyles(){
   if(document.querySelector('#location-privacy-css'))return
@@ -35,22 +33,8 @@ function isOptionalLocationPage(page:HTMLElement){
   return !gated&&title==='compartir ubicación'
 }
 
-function ownLocationRow(page:HTMLElement){
-  return [...page.querySelectorAll<HTMLElement>('.locationrow')].find(row=>
-    row.querySelector('b')?.textContent?.includes('· tú')
-  )||null
-}
-
 function rowName(row:HTMLElement){
   return (row.querySelector('b')?.textContent||'').replace(/\s*·\s*tú\s*$/i,'').trim()
-}
-
-function staleNames(page:HTMLElement){
-  return new Set(
-    [...page.querySelectorAll<HTMLElement>('.locationrow.stale')]
-      .map(row=>rowName(row))
-      .filter(Boolean)
-  )
 }
 
 function chipName(chip:HTMLElement){
@@ -69,12 +53,32 @@ function ensurePrivacyNote(page:HTMLElement){
   box.insertAdjacentElement('afterend',note)
 }
 
-function applyFreshness(page:HTMLElement){
+function staleNameSet(state:LocationState){
+  const names=new Map(state.members.map(member=>[member.id,member.name]))
+  return new Set(
+    state.locations
+      .filter(location=>{
+        const updated=new Date(location.updated_at).getTime()
+        return Number.isFinite(updated)&&Date.now()-updated>STALE_AFTER_MS
+      })
+      .map(location=>names.get(location.member_id)||'')
+      .filter(Boolean)
+  )
+}
+
+function applyFreshness(page:HTMLElement,state:LocationState){
+  const names=new Map(state.members.map(member=>[member.id,member.name]))
+  const locationByName=new Map(
+    state.locations.map(location=>[names.get(location.member_id)||'',location])
+  )
+  const staleNames=staleNameSet(state)
+
   page.querySelectorAll<HTMLElement>('.locationrow').forEach(row=>{
     if(row.classList.contains('locationrow-empty'))return
     const name=rowName(row)
-    const updated=updatedByName.get(name)
-    const stale=typeof updated==='number'&&Number.isFinite(updated)?Date.now()-updated>STALE_AFTER_MS:row.classList.contains('stale')
+    const location=locationByName.get(name)
+    const updated=location?new Date(location.updated_at).getTime():NaN
+    const stale=Number.isFinite(updated)&&Date.now()-updated>STALE_AFTER_MS
     row.classList.toggle('stale',stale)
     row.dataset.locationFreshness=stale?'stale':'fresh'
     const small=row.querySelector<HTMLElement>('small')
@@ -86,72 +90,37 @@ function applyFreshness(page:HTMLElement){
     }
   })
 
-  const stale=staleNames(page)
   page.querySelectorAll<HTMLElement>('.family-map-marker').forEach(marker=>{
     const label=marker.querySelector<HTMLElement>('.family-map-marker-label')
     const name=(label?.textContent||'').replace(/\s*·\s*última\s*$/i,'').trim()
-    const isStale=stale.has(name)
-    marker.classList.toggle('location-stale',isStale)
+    const stale=staleNames.has(name)
+    marker.classList.toggle('location-stale',stale)
     if(label){
-      const next=isStale?`${name} · última`:name
+      const next=stale?`${name} · última`:name
       if(label.textContent!==next)label.textContent=next
     }
   })
 
   page.querySelectorAll<HTMLElement>('.family-map-chip').forEach(chip=>{
-    chip.classList.toggle('location-stale',stale.has(chipName(chip)))
+    chip.classList.toggle('location-stale',staleNames.has(chipName(chip)))
   })
-
-  const mapTitle=page.querySelector<HTMLElement>('[data-family-map] .family-map-head b')
-  if(mapTitle&&mapTitle.textContent!=='Últimas ubicaciones')mapTitle.textContent='Últimas ubicaciones'
-  const listTitle=page.querySelector<HTMLElement>('.location-section-title span')
-  if(listTitle&&listTitle.textContent!=='Se actualiza cuando alguien comparte')listTitle.textContent='Se actualiza cuando alguien comparte'
 }
 
-async function refreshFreshness(force=false){
-  const page=document.querySelector<HTMLElement>('.location-page')
-  if(!page||freshnessLoading||!getIdentity()?.memberId)return
-  if(!force&&Date.now()-lastFreshnessFetch<FRESHNESS_FETCH_TTL_MS){applyFreshness(page);return}
-  freshnessLoading=true
-  try{
-    const [membersResult,locationsResult]=await Promise.all([
-      supabase.from('family_members').select('id,name,active').eq('active',true),
-      supabase.from('locations').select('member_id,updated_at')
-    ])
-    if(membersResult.error)throw membersResult.error
-    if(locationsResult.error)throw locationsResult.error
-    const names=new Map((membersResult.data||[]).map((member:any)=>[String(member.id),String(member.name||'')]))
-    updatedByName.clear()
-    ;(locationsResult.data||[]).forEach((row:any)=>{
-      const name=names.get(String(row.member_id))
-      const time=new Date(String(row.updated_at||'')).getTime()
-      if(name&&Number.isFinite(time))updatedByName.set(name,time)
-    })
-    lastFreshnessFetch=Date.now()
-  }catch(error){
-    console.warn('Location freshness check failed',error)
-  }finally{
-    freshnessLoading=false
-    const current=document.querySelector<HTMLElement>('.location-page')
-    if(current)applyFreshness(current)
-  }
-}
-
-function syncStopButton(page:HTMLElement){
+function syncStopButton(page:HTMLElement,state:LocationState){
   const existing=page.querySelector<HTMLButtonElement>('[data-stop-location]')
   if(!isOptionalLocationPage(page)){
     existing?.remove()
     return
   }
 
-  const row=ownLocationRow(page)
-  const sharing=!!row&&!row.classList.contains('locationrow-empty')&&!!row.querySelector('a')
+  const identity=getIdentity()
+  const sharing=!!identity?.memberId&&state.locations.some(location=>location.member_id===identity.memberId)
   if(!sharing){
     existing?.remove()
     return
   }
-
   if(existing)return
+
   const primary=page.querySelector<HTMLButtonElement>('#sharelocation')
   if(!primary)return
   const button=document.createElement('button')
@@ -168,15 +137,11 @@ function syncStopButton(page:HTMLElement){
       button.disabled=true
       button.textContent='Dejando de compartir…'
       try{
-        const identity=getIdentity()
-        if(!identity?.memberId)throw new Error('FAMILY_SESSION_REQUIRED')
-        const {error}=await supabase.rpc('stop_sharing_family_location')
-        if(error)throw error
+        if(!getIdentity()?.memberId)throw new Error('FAMILY_SESSION_REQUIRED')
+        await stopSharingOwnLocation()
         const text=page.querySelector<HTMLElement>('#locationtext')
         if(text)text.textContent='Ya no compartes tu ubicación con la familia.'
         button.remove()
-        lastFreshnessFetch=0
-        void refreshFreshness(true)
       }catch(error){
         console.error('Stop family location sharing failed',error)
         button.disabled=false
@@ -195,24 +160,36 @@ function enhance(){
   const page=document.querySelector<HTMLElement>('.location-page')
   if(!page)return
   ensurePrivacyNote(page)
-  applyFreshness(page)
-  syncStopButton(page)
-  void refreshFreshness()
+  applyFreshness(page,latestState)
+  syncStopButton(page,latestState)
 }
 
 function schedule(){
   if(scheduled!==null)return
-  scheduled=window.setTimeout(enhance,80)
+  scheduled=window.setTimeout(enhance,60)
 }
 
 injectStyles()
 observer=new MutationObserver(schedule)
 observer.observe(document.body,{childList:true,subtree:true})
-periodicTimer=window.setInterval(()=>{if(document.querySelector('.location-page')){lastFreshnessFetch=0;schedule()}},60*1000)
-document.addEventListener('visibilitychange',()=>{if(!document.hidden&&document.querySelector('.location-page')){lastFreshnessFetch=0;schedule()}})
+stateUnsubscribe=subscribeLocationState(state=>{
+  latestState=state
+  schedule()
+})
+periodicTimer=window.setInterval(()=>{
+  if(document.querySelector('.location-page'))schedule()
+},60*1000)
+document.addEventListener('visibilitychange',()=>{
+  if(!document.hidden&&document.querySelector('.location-page')){
+    void refreshLocationState({force:true})
+    schedule()
+  }
+})
 window.addEventListener('beforeunload',()=>{
   observer?.disconnect()
   observer=null
+  stateUnsubscribe?.()
+  stateUnsubscribe=null
   if(scheduled!==null)window.clearTimeout(scheduled)
   if(periodicTimer!==null)window.clearInterval(periodicTimer)
 },{once:true})
