@@ -1,5 +1,6 @@
 import { getIdentity } from './core/identity'
 import { getLocationState, refreshLocationState, stopSharingOwnLocation, subscribeLocationState, type LocationState } from './core/location-store'
+import { stopOwnLocationAutoSync } from './core/location-device-sync'
 
 const STALE_AFTER_MS=60*60*1000
 
@@ -207,6 +208,7 @@ function syncStopButton(page:HTMLElement,state:LocationState){
       try{
         if(!getIdentity()?.memberId)throw new Error('FAMILY_SESSION_REQUIRED')
         await stopSharingOwnLocation()
+        stopOwnLocationAutoSync()
         const text=page.querySelector<HTMLElement>('#locationtext')
         if(text)text.textContent='Ya no compartes tu ubicación con la familia.'
         button.remove()
