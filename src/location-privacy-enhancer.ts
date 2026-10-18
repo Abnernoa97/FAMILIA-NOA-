@@ -1,5 +1,5 @@
 import { getIdentity } from './core/identity'
-import { getLocationState, isLocationLive, refreshLocationState, stopSharingOwnLocation, subscribeLocationState, type LocationState } from './core/location-store'
+import { getLocationState, refreshLocationState, stopSharingOwnLocation, subscribeLocationState, type LocationState } from './core/location-store'
 
 const STALE_AFTER_MS=60*60*1000
 
@@ -9,15 +9,6 @@ let scheduled:number|null=null
 let periodicTimer:number|null=null
 let stateUnsubscribe:(()=>void)|null=null
 let latestState=getLocationState()
-let observedPage:HTMLElement|null=null
-
-function setText(element:HTMLElement|null|undefined,value:string){
-  if(element&&element.textContent!==value)element.textContent=value
-}
-
-function setHtml(element:HTMLElement|null|undefined,value:string){
-  if(element&&element.innerHTML!==value)element.innerHTML=value
-}
 
 function injectStyles(){
   if(document.querySelector('#location-privacy-css'))return
@@ -48,7 +39,8 @@ function injectStyles(){
 
 function isOptionalLocationPage(page:HTMLElement){
   const gated=!!page.querySelector('#sharelocation')?.textContent?.toLowerCase().includes('continuar')
-  return !gated&&!!page.querySelector('#back')
+  const title=page.querySelector<HTMLElement>('.locationbox h2')?.textContent?.trim().toLowerCase()||''
+  return !gated&&title==='compartir ubicación'
 }
 
 function rowName(row:HTMLElement){
@@ -67,7 +59,7 @@ function ensurePrivacyNote(page:HTMLElement){
   const note=document.createElement('div')
   note.className='location-privacy-note'
   note.dataset.locationPrivacyNote='1'
-  note.textContent='La ubicación en vivo se actualiza mientras FAMILIA NOA siga activa. Si Android la suspende, deja de mostrarse EN VIVO automáticamente.'
+  note.textContent='La app no rastrea en segundo plano. Se muestra la última ubicación compartida y cuándo fue actualizada.'
   box.insertAdjacentElement('afterend',note)
 }
 
@@ -145,26 +137,22 @@ function syncOwnSharingCard(page:HTMLElement,state:LocationState){
   let badge=box?.querySelector<HTMLElement>('[data-location-share-status]')||null
 
   if(mine){
-    const live=isLocationLive(mine)
     page.classList.add('location-sharing-active')
     if(!badge&&box){
       badge=document.createElement('span')
       badge.className='location-share-status'
       badge.dataset.locationShareStatus='1'
-      badge.innerHTML=`<i></i> ${live?'EN VIVO':'Compartiendo'}`
+      badge.innerHTML='<i></i> Compartiendo'
       box.querySelector('.pin')?.insertAdjacentElement('afterend',badge)
     }
-    setHtml(badge,`<i></i> ${live?'EN VIVO':'Compartiendo'}`)
-    setText(title,live?'Ubicación en vivo':'Compartiendo ahora')
+    if(title)title.textContent='Compartiendo ahora'
     const accuracy=Number.isFinite(mine.accuracy)?` · ±${Math.round(mine.accuracy as number)} m`:''
-    setText(text,live
-      ?`Actualizando automáticamente · ${locationAgeShort(mine.updated_at)}${accuracy}`
-      :`${locationAgeShort(mine.updated_at)}${accuracy}`)
+    if(text)text.textContent=`${locationAgeShort(mine.updated_at)}${accuracy}`
   }else{
     page.classList.remove('location-sharing-active')
     badge?.remove()
-    setText(title,'Compartir ubicación')
-    if(text&&!text.textContent?.includes('No se pudo'))setText(text,'Comparte tu ubicación con la familia cuando quieras.')
+    if(title)title.textContent='Compartir ubicación'
+    if(text&&!text.textContent?.includes('No se pudo'))text.textContent='Comparte tu ubicación con la familia cuando quieras.'
   }
 
   let sync=page.querySelector<HTMLElement>('[data-location-sync-note]')
@@ -176,13 +164,13 @@ function syncOwnSharingCard(page:HTMLElement,state:LocationState){
   }
   if(sync){
     sync.dataset.status=state.syncStatus
-    setText(sync,state.syncStatus==='offline'
+    sync.textContent=state.syncStatus==='offline'
       ? 'Sin conexión · mostrando la última ubicación guardada'
       : state.syncStatus==='reconnecting'
         ? 'Reconectando ubicación…'
         : state.syncStatus==='connecting'
           ? 'Conectando ubicación…'
-          : 'Ubicación sincronizada con la familia')
+          : 'Ubicación sincronizada con la familia'
   }
 }
 
@@ -194,13 +182,7 @@ function syncStopButton(page:HTMLElement,state:LocationState){
   }
 
   const identity=getIdentity()
-  const mine=identity?.memberId?state.locations.find(location=>location.member_id===identity.memberId):null
-  const live=!!mine&&isLocationLive(mine)
-  if(live){
-    existing?.remove()
-    return
-  }
-  const sharing=!!mine
+  const sharing=!!identity?.memberId&&state.locations.some(location=>location.member_id===identity.memberId)
   if(!sharing){
     existing?.remove()
     return
@@ -256,21 +238,13 @@ function schedule(){
   scheduled=window.setTimeout(enhance,60)
 }
 
-function scanPage(){
-  const page=document.querySelector<HTMLElement>('.location-page')
-  if(page===observedPage)return
-  observedPage=page
-  schedule()
-}
-
 injectStyles()
-observer=new MutationObserver(scanPage)
+observer=new MutationObserver(schedule)
 observer.observe(document.body,{childList:true,subtree:true})
 stateUnsubscribe=subscribeLocationState(state=>{
   latestState=state
   schedule()
 })
-scanPage()
 periodicTimer=window.setInterval(()=>{
   if(document.querySelector('.location-page'))schedule()
 },60*1000)
