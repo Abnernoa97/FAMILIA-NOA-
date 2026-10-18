@@ -23,6 +23,7 @@ let maplibrePromise:Promise<any>|null=null
 let map:any=null
 let markers:any[]=[]
 let currentLocations:MapLocation[]=[]
+let lastLocationSignature=''
 let activePage:Element|null=null
 let pageObserver:MutationObserver|null=null
 let stateUnsubscribe:(()=>void)|null=null
@@ -92,6 +93,7 @@ function destroyMap(){
   generation++
   clearMarkers()
   currentLocations=[]
+  lastLocationSignature=''
   if(map){try{map.remove()}catch{}}
   map=null
 }
@@ -246,11 +248,23 @@ async function applyState(state:LocationState){
 
   const locations=await locationsFromState(state)
   if(run!==generation||!document.contains(shell))return
+  const signature=locations
+    .map(item=>[item.member_id,item.latitude.toFixed(6),item.longitude.toFixed(6),item.updated_at,item.avatarPath||''].join(':'))
+    .sort()
+    .join('|')
+  const changed=signature!==lastLocationSignature
   currentLocations=locations
 
   if(!locations.length){
+    lastLocationSignature=''
     clearMarkers()
     showOverlay(shell,'empty')
+    return
+  }
+
+  if(map&&!changed){
+    hideOverlay(shell)
+    setTimeout(()=>{try{map.resize()}catch{}},20)
     return
   }
 
@@ -278,6 +292,7 @@ async function applyState(state:LocationState){
       map.on('load',()=>{
         add3dBuildings(map)
         renderMarkers(MapLibre)
+        lastLocationSignature=signature
         fitAll()
         hideOverlay(shell)
       })
@@ -286,6 +301,7 @@ async function applyState(state:LocationState){
     }
 
     renderMarkers(MapLibre)
+    lastLocationSignature=signature
     fitAll()
     hideOverlay(shell)
     setTimeout(()=>{try{map.resize()}catch{}},40)
