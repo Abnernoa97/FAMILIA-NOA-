@@ -28,7 +28,7 @@ let pageObserver:MutationObserver|null=null
 let stateUnsubscribe:(()=>void)|null=null
 let generation=0
 
-function esc(value:string){return value.replace(/[&<>"']/g,char=>({'&':'&amp;','<':'&lt;','>':'&gt;','"':'&quot',"'":'&#039;'}[char]||char))}
+function esc(value:string){return value.replace(/[&<>"']/g,char=>({'&':'&amp;','<':'&lt;','>':'&gt;','"':'&quot;',"'":'&#039;'}[char]||char))}
 function initial(item:MapLocation){return item.name.charAt(0).toUpperCase()||'•'}
 function avatarMarkup(item:MapLocation){
   if(!item.avatarUrl)return esc(initial(item))
