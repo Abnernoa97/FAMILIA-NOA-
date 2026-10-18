@@ -5,11 +5,34 @@ const MIN_WRITE_GAP_MS=4_000
 const MAX_SILENCE_MS=20_000
 const MIN_MOVE_METERS=2.5
 
+type NativeLocationBridge={
+  locationCapability?:()=>string
+  isLocationSharingEnabled?:()=>boolean
+  startLocationSharing?:()=>boolean
+  stopLocationSharing?:()=>boolean
+  refreshLocationSharing?:()=>boolean
+}
+
 let activeMemberId=''
 let watchId:number|null=null
 let lastPosition:GeolocationPosition|null=null
 let lastWriteAt=0
 let writing=false
+
+function nativeBridge():NativeLocationBridge|null{
+  const value=(window as any).FamiliaNoaNative as NativeLocationBridge|undefined
+  if(!value||typeof value.locationCapability!=='function')return null
+  try{
+    return value.locationCapability()==='native-background-location-v1'?value:null
+  }catch{
+    return null
+  }
+}
+
+function nativeSharingEnabled(bridge=nativeBridge()){
+  if(!bridge||typeof bridge.isLocationSharingEnabled!=='function')return false
+  try{return bridge.isLocationSharingEnabled()===true}catch{return false}
+}
 
 function valid(position:GeolocationPosition){
   const {latitude,longitude}=position.coords
@@ -63,7 +86,7 @@ async function persist(position:GeolocationPosition,force=false){
   }
 }
 
-function startWatch(){
+function startWebWatch(){
   if(!activeMemberId||watchId!==null||!navigator.geolocation)return
   watchId=navigator.geolocation.watchPosition(
     position=>{void persist(position,false)},
@@ -72,41 +95,83 @@ function startWatch(){
   )
 }
 
-function stopWatch(){
+function stopWebWatch(){
   if(watchId!==null&&navigator.geolocation){
     navigator.geolocation.clearWatch(watchId)
     watchId=null
   }
 }
 
-export function startOwnLocationRealtime(memberId=getMemberId()){
+function useNativeIfAlreadyEnabled(memberId:string){
+  const bridge=nativeBridge()
+  if(!bridge||!nativeSharingEnabled(bridge))return false
+  activeMemberId=memberId
+  stopWebWatch()
+  return true
+}
+
+export function startOwnLocationRealtime(memberId=getMemberId(),activateNative=true){
   if(!memberId)return
-  if(activeMemberId!==memberId){
-    stopWatch()
-    activeMemberId=memberId
-    lastPosition=null
-    lastWriteAt=0
+  activeMemberId=memberId
+
+  const bridge=nativeBridge()
+  if(bridge){
+    if(nativeSharingEnabled(bridge)){
+      stopWebWatch()
+      return
+    }
+    if(activateNative&&typeof bridge.startLocationSharing==='function'){
+      try{
+        if(bridge.startLocationSharing()===true){
+          stopWebWatch()
+          return
+        }
+      }catch(error){
+        console.warn('Native background location start failed',error)
+      }
+    }
   }
-  startWatch()
+
+  startWebWatch()
 }
 
 export function ensureOwnLocationRealtime(){
   const memberId=getMemberId()
   if(!memberId)return
   const sharing=getLocationState().locations.some(location=>location.member_id===memberId)
-  if(sharing)startOwnLocationRealtime(memberId)
+  if(!sharing)return
+
+  if(useNativeIfAlreadyEnabled(memberId))return
+  startOwnLocationRealtime(memberId,false)
 }
 
 export function stopOwnLocationRealtime(){
-  stopWatch()
+  const bridge=nativeBridge()
+  if(bridge&&typeof bridge.stopLocationSharing==='function'){
+    try{bridge.stopLocationSharing()}catch(error){console.warn('Native background location stop failed',error)}
+  }
+  stopWebWatch()
   activeMemberId=''
   lastPosition=null
   lastWriteAt=0
 }
 
 export async function syncOwnLocationNow(memberId=getMemberId()){
-  if(!memberId||!navigator.geolocation)return false
-  startOwnLocationRealtime(memberId)
+  if(!memberId)return false
+
+  const bridge=nativeBridge()
+  if(bridge&&nativeSharingEnabled(bridge)&&typeof bridge.refreshLocationSharing==='function'){
+    try{
+      bridge.refreshLocationSharing()
+      void refreshLocationState({force:true})
+      return true
+    }catch(error){
+      console.warn('Native location refresh failed',error)
+    }
+  }
+
+  if(!navigator.geolocation)return false
+  startOwnLocationRealtime(memberId,false)
   return new Promise<boolean>(resolve=>{
     navigator.geolocation.getCurrentPosition(
       position=>{
@@ -131,12 +196,23 @@ export async function refreshMemberLocation(memberId:string){
 
 document.addEventListener('visibilitychange',()=>{
   if(document.hidden)return
+  const memberId=getMemberId()
+  if(!memberId)return
+
+  if(useNativeIfAlreadyEnabled(memberId)){
+    const bridge=nativeBridge()
+    try{bridge?.refreshLocationSharing?.()}catch{}
+    return
+  }
+
   if(activeMemberId){
-    startWatch()
+    startWebWatch()
     void syncOwnLocationNow(activeMemberId)
   }else{
     ensureOwnLocationRealtime()
   }
 })
 
-window.addEventListener('beforeunload',stopOwnLocationRealtime,{once:true})
+window.addEventListener('beforeunload',()=>{
+  stopWebWatch()
+},{once:true})
