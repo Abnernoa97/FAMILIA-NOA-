@@ -1,4 +1,4 @@
-const CACHE = 'familia-noa-v79-location-wow';
+const CACHE = 'familia-noa-v80-live-location';;
 const BASE = new URL(self.registration.scope).pathname;
 const STATIC = [
   BASE,
