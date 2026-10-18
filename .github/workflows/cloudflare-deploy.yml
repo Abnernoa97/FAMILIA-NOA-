@@ -32,7 +32,6 @@ jobs:
       - uses: actions/setup-node@v5
         with:
           node-version: 22
-          cache: npm
 
       - name: Verify Cloudflare deploy credential
         shell: bash
@@ -45,7 +44,7 @@ jobs:
           fi
 
       - name: Install dependencies
-        run: npm ci
+        run: npm install
 
       - name: Build
         run: npm run build
