@@ -3,9 +3,6 @@ plugins {
     id("org.jetbrains.kotlin.android")
 }
 
-val releaseKeystorePath = System.getenv("FAMILIA_NOA_KEYSTORE_PATH")
-val releaseKeystorePassword = System.getenv("FAMILIA_NOA_KEYSTORE_PASSWORD")
-
 android {
     namespace = "com.familianoa.emergency"
     compileSdk = 35
@@ -14,25 +11,13 @@ android {
         applicationId = "com.familianoa.emergency"
         minSdk = 26
         targetSdk = 35
-        versionCode = 7
-        versionName = "7.0.0"
-    }
-
-    signingConfigs {
-        create("release") {
-            if (!releaseKeystorePath.isNullOrBlank() && !releaseKeystorePassword.isNullOrBlank()) {
-                storeFile = file(releaseKeystorePath)
-                storePassword = releaseKeystorePassword
-                keyAlias = "familia-noa-release"
-                keyPassword = releaseKeystorePassword
-            }
-        }
+        versionCode = 5
+        versionName = "5.0.0"
     }
 
     buildTypes {
         release {
             isMinifyEnabled = false
-            signingConfig = signingConfigs.getByName("release")
         }
     }
 
