@@ -1,3 +1,6 @@
+val permanentKeystorePath = System.getenv("FAMILIA_NOA_ANDROID_KEYSTORE_PATH")
+val permanentKeystorePassword = System.getenv("FAMILIA_NOA_ANDROID_KEYSTORE_PASSWORD")
+
 plugins {
     id("com.android.application")
     id("org.jetbrains.kotlin.android")
@@ -11,13 +14,25 @@ android {
         applicationId = "com.familianoa.emergency"
         minSdk = 26
         targetSdk = 35
-        versionCode = 5
-        versionName = "5.0.0"
+        versionCode = 6
+        versionName = "6.0.0"
+    }
+
+    signingConfigs {
+        if (!permanentKeystorePath.isNullOrBlank() && !permanentKeystorePassword.isNullOrBlank()) {
+            create("permanentRelease") {
+                storeFile = file(permanentKeystorePath)
+                storePassword = permanentKeystorePassword
+                keyAlias = "familia-noa"
+                keyPassword = permanentKeystorePassword
+            }
+        }
     }
 
     buildTypes {
         release {
             isMinifyEnabled = false
+            signingConfig = signingConfigs.findByName("permanentRelease")
         }
     }
 
