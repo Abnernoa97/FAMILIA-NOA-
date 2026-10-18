@@ -265,7 +265,7 @@ export async function saveLiveLocation(input:{
 
 export async function stopLiveLocation(memberId:string){
   const {error}=await supabase.from('locations')
-    .update({live_active:false,live_until:null})
+    .update({live_active:false,live_started_at:null,live_until:null})
     .eq('member_id',memberId)
   if(error)throw error
   return refreshLocationState({force:true})
