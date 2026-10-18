@@ -1,92 +1,141 @@
 import { getMemberId } from './identity'
 import { getLocationState, refreshLocationState, saveOwnLocation } from './location-store'
 
-const AUTO_SYNC_MS=30_000
+const MIN_WRITE_GAP_MS=4_000
+const MIN_MOVE_METERS=2.5
 
 let activeMemberId=''
-let timer:number|null=null
-let syncing=false
+let watchId:number|null=null
+let lastPosition:GeolocationPosition|null=null
+let lastWriteAt=0
+let writing=false
 
-function currentPosition(){
-  return new Promise<GeolocationPosition>((resolve,reject)=>{
-    if(!navigator.geolocation){
-      reject(new Error('GEOLOCATION_UNAVAILABLE'))
-      return
-    }
-    navigator.geolocation.getCurrentPosition(
-      resolve,
-      reject,
-      {enableHighAccuracy:true,timeout:20_000,maximumAge:5_000}
-    )
-  })
+function valid(position:GeolocationPosition){
+  const {latitude,longitude}=position.coords
+  return Number.isFinite(latitude)&&Number.isFinite(longitude)&&
+    latitude>=-90&&latitude<=90&&longitude>=-180&&longitude<=180
 }
 
-export async function syncOwnLocationNow(memberId=getMemberId()){
-  if(!memberId||syncing||document.hidden)return false
-  syncing=true
+function distanceMeters(a:GeolocationPosition,b:GeolocationPosition){
+  const rad=(value:number)=>value*Math.PI/180
+  const lat1=rad(a.coords.latitude)
+  const lat2=rad(b.coords.latitude)
+  const dLat=lat2-lat1
+  const dLon=rad(b.coords.longitude-a.coords.longitude)
+  const h=Math.sin(dLat/2)**2+
+    Math.cos(lat1)*Math.cos(lat2)*Math.sin(dLon/2)**2
+  return 6371000*2*Math.atan2(Math.sqrt(h),Math.sqrt(1-h))
+}
+
+async function persist(position:GeolocationPosition,force=false){
+  if(!activeMemberId||writing||!valid(position))return false
+
+  const now=Date.now()
+  const moved=!lastPosition||distanceMeters(lastPosition,position)>=MIN_MOVE_METERS
+  const accuracyImproved=!!lastPosition&&
+    Number.isFinite(position.coords.accuracy)&&
+    Number.isFinite(lastPosition.coords.accuracy)&&
+    position.coords.accuracy+5<lastPosition.coords.accuracy
+
+  if(!force&&now-lastWriteAt<MIN_WRITE_GAP_MS)return false
+  if(!force&&lastPosition&&!moved&&!accuracyImproved){
+    lastPosition=position
+    return false
+  }
+
+  lastPosition=position
+  writing=true
   try{
-    const position=await currentPosition()
-    const latitude=position.coords.latitude
-    const longitude=position.coords.longitude
-    const accuracy=position.coords.accuracy
-    if(!Number.isFinite(latitude)||!Number.isFinite(longitude)||latitude<-90||latitude>90||longitude<-180||longitude>180){
-      return false
-    }
     await saveOwnLocation({
-      memberId,
-      latitude,
-      longitude,
-      accuracy:Number.isFinite(accuracy)?accuracy:null,
+      memberId:activeMemberId,
+      latitude:position.coords.latitude,
+      longitude:position.coords.longitude,
+      accuracy:Number.isFinite(position.coords.accuracy)?position.coords.accuracy:null,
     })
+    lastWriteAt=Date.now()
     return true
   }catch(error){
-    console.warn('Automatic family location sync failed',error)
+    console.warn('Realtime family location update failed',error)
     return false
   }finally{
-    syncing=false
+    writing=false
   }
 }
 
-function clearTimer(){
-  if(timer!==null){
-    window.clearInterval(timer)
-    timer=null
+function startWatch(){
+  if(!activeMemberId||watchId!==null||!navigator.geolocation)return
+  watchId=navigator.geolocation.watchPosition(
+    position=>{void persist(position,false)},
+    error=>console.warn('Realtime family GPS watch failed',error),
+    {enableHighAccuracy:true,maximumAge:0,timeout:30_000}
+  )
+}
+
+function stopWatch(){
+  if(watchId!==null&&navigator.geolocation){
+    navigator.geolocation.clearWatch(watchId)
+    watchId=null
   }
 }
 
 export function startOwnLocationAutoSync(memberId=getMemberId()){
   if(!memberId)return
-  activeMemberId=memberId
-  clearTimer()
-  void syncOwnLocationNow(activeMemberId)
-  timer=window.setInterval(()=>{
-    if(!document.hidden&&activeMemberId)void syncOwnLocationNow(activeMemberId)
-  },AUTO_SYNC_MS)
+  if(activeMemberId!==memberId){
+    stopWatch()
+    activeMemberId=memberId
+    lastPosition=null
+    lastWriteAt=0
+  }
+  startWatch()
 }
 
 export function ensureOwnLocationAutoSync(){
   const memberId=getMemberId()
   if(!memberId)return
   const sharing=getLocationState().locations.some(location=>location.member_id===memberId)
-  if(sharing&&activeMemberId!==memberId)startOwnLocationAutoSync(memberId)
+  if(sharing)startOwnLocationAutoSync(memberId)
 }
 
 export function stopOwnLocationAutoSync(){
+  stopWatch()
   activeMemberId=''
-  clearTimer()
+  lastPosition=null
+  lastWriteAt=0
+}
+
+export async function syncOwnLocationNow(memberId=getMemberId()){
+  if(!memberId||!navigator.geolocation)return false
+  startOwnLocationAutoSync(memberId)
+  return new Promise<boolean>(resolve=>{
+    navigator.geolocation.getCurrentPosition(
+      position=>{
+        void persist(position,true).then(resolve)
+      },
+      error=>{
+        console.warn('Immediate family location refresh failed',error)
+        resolve(false)
+      },
+      {enableHighAccuracy:true,timeout:20_000,maximumAge:0}
+    )
+  })
 }
 
 export async function refreshMemberLocation(memberId:string){
   const ownId=getMemberId()
   if(memberId&&memberId===ownId){
-    await syncOwnLocationNow(ownId)
-    return refreshLocationState({force:true})
+    void syncOwnLocationNow(ownId)
   }
   return refreshLocationState({force:true})
 }
 
 document.addEventListener('visibilitychange',()=>{
-  if(!document.hidden&&activeMemberId)void syncOwnLocationNow(activeMemberId)
+  if(document.hidden)return
+  if(activeMemberId){
+    startWatch()
+    void syncOwnLocationNow(activeMemberId)
+  }else{
+    ensureOwnLocationAutoSync()
+  }
 })
 
 window.addEventListener('beforeunload',stopOwnLocationAutoSync,{once:true})
