@@ -25,6 +25,7 @@ type MapLocation={
 let maplibrePromise:Promise<any>|null=null
 let map:any=null
 let markers:any[]=[]
+let activePopup:any=null
 let currentLocations:MapLocation[]=[]
 let lastLocationSignature=''
 let activePage:Element|null=null
@@ -88,6 +89,7 @@ function loadMapLibre(){
 function clearMarkers(){
   markers.forEach(marker=>{try{marker.remove()}catch{}})
   markers=[]
+  if(activePopup){try{activePopup.remove()}catch{};activePopup=null}
   const people=document.querySelector<HTMLElement>('[data-map-people]')
   if(people)people.innerHTML=''
 }
@@ -178,16 +180,26 @@ function fitAll(){
   map.fitBounds(bounds,{padding:{top:95,right:55,bottom:120,left:55},maxZoom:13.4,duration:900})
 }
 
-function focus(item:MapLocation,showPopup=false){
+function focus(item:MapLocation,showPopup=false,instant=false){
   if(!map)return
-  map.flyTo({center:[item.longitude,item.latitude],zoom:17.4,pitch:70,bearing:-32,duration:1050,curve:1.38,essential:true,padding:{top:60,right:25,bottom:120,left:25}})
+  try{map.stop()}catch{}
+  const camera={
+    center:[item.longitude,item.latitude],
+    zoom:17.4,
+    pitch:70,
+    bearing:-32,
+    padding:{top:60,right:25,bottom:120,left:25},
+  }
+  if(instant)map.jumpTo(camera)
+  else map.easeTo({...camera,duration:520,essential:true})
   const title=document.querySelector<HTMLElement>('[data-map-title]')
-  if(title)title.textContent=item.mine?'Tu ubicación':item.name
+  if(title&&title.textContent!==(item.mine?'Tu ubicación':item.name))title.textContent=item.mine?'Tu ubicación':item.name
   document.querySelectorAll<HTMLElement>('.family-map-chip').forEach(chip=>chip.classList.toggle('selected',chip.dataset.mapMember===item.member_id))
   if(showPopup){
     const MapLibre=(window as any).__familiaMapLibre
     if(MapLibre){
-      new MapLibre.Popup({offset:36,className:'family-map-popup',closeButton:true})
+      if(activePopup){try{activePopup.remove()}catch{}}
+      activePopup=new MapLibre.Popup({offset:36,className:'family-map-popup',closeButton:true})
         .setLngLat([item.longitude,item.latitude])
         .setHTML(`<b>${esc(item.name)}${item.mine?' · tú':''}</b><small>${isLocationLive(item)?'EN VIVO · ':''}${esc(age(item.updated_at))}${Number.isFinite(item.accuracy)?` · ±${Math.round(item.accuracy as number)} m`:''}</small>`)
         .addTo(map)
@@ -329,11 +341,21 @@ async function applyState(state:LocationState){
 }
 
 function handleFocusEvent(event:Event){
-  const custom=event as CustomEvent<{memberId?:string}>
+  const custom=event as CustomEvent<{memberId?:string;source?:string}>
   const memberId=String(custom.detail?.memberId||'')
   if(!memberId)return
   const item=currentLocations.find(location=>location.member_id===memberId)
-  if(item)focus(item,true)
+  if(!item)return
+  const shell=document.querySelector<HTMLElement>('[data-family-map]')
+  if(custom.detail?.source==='list'&&shell){
+    shell.scrollIntoView({behavior:'auto',block:'center'})
+    requestAnimationFrame(()=>requestAnimationFrame(()=>{
+      focus(item,false,true)
+      try{map?.resize()}catch{}
+    }))
+    return
+  }
+  focus(item,true)
 }
 
 window.addEventListener('familia-noa:focus-location',handleFocusEvent as EventListener)
