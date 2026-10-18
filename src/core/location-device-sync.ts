@@ -34,14 +34,33 @@ function nativeSharingEnabled(bridge=nativeBridge()){
   try{return bridge.isLocationSharingEnabled()===true}catch{return false}
 }
 
+export function hasNativeLocationCapability(){
+  return nativeBridge()!==null
+}
+
+export function isNativeLocationSharingEnabled(){
+  return nativeSharingEnabled()
+}
+
+function publishNativeLocationState(){
+  window.dispatchEvent(new CustomEvent('familia-noa:native-location-state',{
+    detail:{
+      available:hasNativeLocationCapability(),
+      enabled:isNativeLocationSharingEnabled(),
+    },
+  }))
+}
+
 function verifyNativeStart(memberId:string,bridge:NativeLocationBridge){
   window.setTimeout(()=>{
     if(activeMemberId!==memberId)return
     if(nativeSharingEnabled(bridge)){
       stopWebWatch()
+      publishNativeLocationState()
       return
     }
     startWebWatch()
+    publishNativeLocationState()
   },1800)
 }
 
@@ -166,6 +185,7 @@ export function stopOwnLocationRealtime(){
   activeMemberId=''
   lastPosition=null
   lastWriteAt=0
+  publishNativeLocationState()
 }
 
 export async function syncOwnLocationNow(memberId=getMemberId()){
