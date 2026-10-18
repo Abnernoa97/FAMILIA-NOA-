@@ -6,6 +6,7 @@ import okhttp3.Request
 import okhttp3.RequestBody.Companion.toRequestBody
 import org.json.JSONArray
 import org.json.JSONObject
+import java.time.Instant
 import java.util.concurrent.TimeUnit
 
 data class FamilyMember(val id:String, val name:String)
@@ -102,6 +103,53 @@ object Api {
                 refreshToken = json.optString("refresh_token", refreshToken),
                 expiresAt = expiresAt,
             )
+        }
+    }
+
+    fun upsertLiveLocation(
+        accessToken:String,
+        memberId:String,
+        latitude:Double,
+        longitude:Double,
+        accuracy:Float?,
+        liveActive:Boolean,
+        liveStartedAtMs:Long,
+        liveUntilMs:Long,
+    ) {
+        val body = JSONObject()
+            .put("member_id", memberId)
+            .put("latitude", latitude)
+            .put("longitude", longitude)
+            .put("accuracy", accuracy?.toDouble() ?: JSONObject.NULL)
+            .put("updated_at", Instant.now().toString())
+            .put("live_active", liveActive)
+            .put("live_started_at", if (liveStartedAtMs > 0L) Instant.ofEpochMilli(liveStartedAtMs).toString() else JSONObject.NULL)
+            .put("live_until", if (liveUntilMs > 0L) Instant.ofEpochMilli(liveUntilMs).toString() else JSONObject.NULL)
+        val request = Request.Builder()
+            .url("${Config.SUPABASE_URL}/rest/v1/locations?on_conflict=member_id")
+            .header("apikey", Config.PUBLISHABLE_KEY)
+            .header("Authorization", "Bearer $accessToken")
+            .header("Prefer", "resolution=merge-duplicates,return=minimal")
+            .post(body.toString().toRequestBody(jsonType))
+            .build()
+        http.newCall(request).execute().use { response ->
+            if (!response.isSuccessful) error("No se pudo actualizar ubicación en vivo (${response.code})")
+        }
+    }
+
+    fun deactivateLiveLocation(accessToken:String, memberId:String) {
+        val body = JSONObject()
+            .put("live_active", false)
+            .put("live_until", JSONObject.NULL)
+        val request = Request.Builder()
+            .url("${Config.SUPABASE_URL}/rest/v1/locations?member_id=eq.$memberId")
+            .header("apikey", Config.PUBLISHABLE_KEY)
+            .header("Authorization", "Bearer $accessToken")
+            .header("Prefer", "return=minimal")
+            .patch(body.toString().toRequestBody(jsonType))
+            .build()
+        http.newCall(request).execute().use { response ->
+            if (!response.isSuccessful) error("No se pudo detener ubicación en vivo (${response.code})")
         }
     }
 
