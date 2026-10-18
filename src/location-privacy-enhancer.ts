@@ -23,6 +23,16 @@ function injectStyles(){
   .family-map-marker.location-stale .family-map-marker-dot{opacity:.58;filter:grayscale(.35)}
   .family-map-marker.location-stale .family-map-marker-label{background:rgba(92,86,77,.86)}
   .family-map-chip.location-stale{opacity:.68}
+  .location-sharing-active .locationbox{padding:20px 20px 18px;margin-top:14px;border-radius:22px;box-shadow:0 12px 32px rgba(35,31,25,.06)}
+  .location-sharing-active .locationbox .pin{font-size:28px;margin-bottom:8px}
+  .location-sharing-active .locationbox h2{font-size:27px;margin-bottom:5px}
+  .location-sharing-active .locationbox p{margin:0;color:#79746c;font-size:13px}
+  .location-sharing-active .locationbox .primary{margin-top:14px}
+  .location-share-status{display:inline-flex;align-items:center;gap:7px;margin:0 0 10px;padding:6px 9px;border-radius:999px;background:#eef6ef;color:#2f6d45;font-size:9px;font-weight:800;letter-spacing:.08em;text-transform:uppercase}
+  .location-share-status i{width:7px;height:7px;border-radius:50%;background:#48a06a;box-shadow:0 0 0 4px rgba(72,160,106,.11)}
+  .location-sync-note{display:flex;align-items:center;gap:7px;margin:8px 16px 0;padding:8px 11px;border-radius:13px;background:#efeae1;color:#756f67;font-size:10px}
+  .location-sync-note[data-status="connected"]{background:#eef6ef;color:#38634a}
+  .location-sync-note[data-status="offline"]{background:#f6ece8;color:#8a5145}
   `
   document.head.appendChild(style)
 }
@@ -106,6 +116,64 @@ function applyFreshness(page:HTMLElement,state:LocationState){
   })
 }
 
+function locationAgeShort(value:string){
+  const ms=Date.now()-new Date(value).getTime()
+  if(!Number.isFinite(ms)||ms<60000)return 'Ahora'
+  const minutes=Math.floor(ms/60000)
+  if(minutes<60)return `Hace ${minutes} min`
+  const hours=Math.floor(minutes/60)
+  if(hours<24)return `Hace ${hours} h`
+  const days=Math.floor(hours/24)
+  return `Hace ${days} día${days===1?'':'s'}`
+}
+
+function syncOwnSharingCard(page:HTMLElement,state:LocationState){
+  if(!isOptionalLocationPage(page))return
+  const identity=getIdentity()
+  const mine=identity?.memberId?state.locations.find(location=>location.member_id===identity.memberId):null
+  const box=page.querySelector<HTMLElement>('.locationbox')
+  const title=box?.querySelector<HTMLElement>('h2')
+  const text=page.querySelector<HTMLElement>('#locationtext')
+  let badge=box?.querySelector<HTMLElement>('[data-location-share-status]')||null
+
+  if(mine){
+    page.classList.add('location-sharing-active')
+    if(!badge&&box){
+      badge=document.createElement('span')
+      badge.className='location-share-status'
+      badge.dataset.locationShareStatus='1'
+      badge.innerHTML='<i></i> Compartiendo'
+      box.querySelector('.pin')?.insertAdjacentElement('afterend',badge)
+    }
+    if(title)title.textContent='Compartiendo ahora'
+    const accuracy=Number.isFinite(mine.accuracy)?` · ±${Math.round(mine.accuracy as number)} m`:''
+    if(text)text.textContent=`${locationAgeShort(mine.updated_at)}${accuracy}`
+  }else{
+    page.classList.remove('location-sharing-active')
+    badge?.remove()
+    if(title)title.textContent='Compartir ubicación'
+    if(text&&!text.textContent?.includes('No se pudo'))text.textContent='Comparte tu ubicación con la familia cuando quieras.'
+  }
+
+  let sync=page.querySelector<HTMLElement>('[data-location-sync-note]')
+  if(!sync){
+    sync=document.createElement('div')
+    sync.className='location-sync-note'
+    sync.dataset.locationSyncNote='1'
+    box?.insertAdjacentElement('afterend',sync)
+  }
+  if(sync){
+    sync.dataset.status=state.syncStatus
+    sync.textContent=state.syncStatus==='offline'
+      ? 'Sin conexión · mostrando la última ubicación guardada'
+      : state.syncStatus==='reconnecting'
+        ? 'Reconectando ubicación…'
+        : state.syncStatus==='connecting'
+          ? 'Conectando ubicación…'
+          : 'Ubicación sincronizada con la familia'
+  }
+}
+
 function syncStopButton(page:HTMLElement,state:LocationState){
   const existing=page.querySelector<HTMLButtonElement>('[data-stop-location]')
   if(!isOptionalLocationPage(page)){
@@ -160,6 +228,7 @@ function enhance(){
   const page=document.querySelector<HTMLElement>('.location-page')
   if(!page)return
   ensurePrivacyNote(page)
+  syncOwnSharingCard(page,latestState)
   applyFreshness(page,latestState)
   syncStopButton(page,latestState)
 }
