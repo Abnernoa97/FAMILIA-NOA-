@@ -18,6 +18,7 @@ class FamilyLocationTracker(
     companion object {
         private const val MIN_UPDATE_MS = 4_000L
         private const val MAX_SILENCE_MS = 20_000L
+        private const val MAX_LAST_KNOWN_AGE_MS = 60_000L
         private const val MIN_DISTANCE_M = 2.5f
     }
 
@@ -62,7 +63,9 @@ class FamilyLocationTracker(
             }
 
             running = true
-            if (lastKnown != null) upload(lastKnown, force = true)
+            if (lastKnown != null && System.currentTimeMillis() - lastKnown.time <= MAX_LAST_KNOWN_AGE_MS) {
+                upload(lastKnown, force = true)
+            }
             true
         } catch (_: SecurityException) {
             running = false
@@ -112,6 +115,20 @@ class FamilyLocationTracker(
             location.hasAccuracy() &&
             previous.hasAccuracy() &&
             location.accuracy + 5f < previous.accuracy
+        val muchWorseAccuracy = previous != null &&
+            location.hasAccuracy() &&
+            previous.hasAccuracy() &&
+            location.accuracy > maxOf(previous.accuracy * 2f, previous.accuracy + 30f)
+        val newerThanPrevious = previous == null || location.time + 5_000L >= previous.time
+
+        if (!newerThanPrevious) {
+            uploading.set(false)
+            return
+        }
+        if (!force && previous != null && muchWorseAccuracy && previous.distanceTo(location) < location.accuracy && now - lastUploadAt < MAX_SILENCE_MS) {
+            uploading.set(false)
+            return
+        }
 
         if (!force && now - lastUploadAt < MIN_UPDATE_MS) {
             uploading.set(false)
