@@ -20,6 +20,8 @@ export type LocationProfile={
   avatar_path:string|null
 }
 
+export type LocationSyncStatus='connecting'|'connected'|'reconnecting'|'offline'
+
 export type LocationState={
   members:LocationMember[]
   locations:FamilyLocation[]
@@ -28,6 +30,7 @@ export type LocationState={
   error:string|null
   updatedAt:number
   revision:number
+  syncStatus:LocationSyncStatus
 }
 
 type Listener=(state:LocationState)=>void
@@ -40,10 +43,13 @@ let state:LocationState={
   error:null,
   updatedAt:0,
   revision:0,
+  syncStatus:navigator.onLine?'connecting':'offline',
 }
 let inflight:Promise<LocationState>|null=null
 let channel:ReturnType<typeof supabase.channel>|null=null
 let refreshTimer:number|null=null
+let reconnectTimer:number|null=null
+let reconnectAttempt=0
 const listeners=new Set<Listener>()
 const CACHE_TTL_MS=10_000
 
@@ -68,21 +74,66 @@ function validCoordinate(row:FamilyLocation){
     row.latitude>=-90&&row.latitude<=90&&row.longitude>=-180&&row.longitude<=180
 }
 
+function setSyncStatus(syncStatus:LocationSyncStatus){
+  if(state.syncStatus===syncStatus)return
+  state={...state,syncStatus,revision:state.revision+1}
+  publish()
+}
+
 function scheduleRealtimeRefresh(){
   if(refreshTimer!==null)window.clearTimeout(refreshTimer)
   refreshTimer=window.setTimeout(()=>{
     refreshTimer=null
     void refreshLocationState({force:true})
-  },80)
+  },90)
+}
+
+function teardownRealtime(){
+  if(channel){
+    try{void channel.unsubscribe()}catch{}
+    channel=null
+  }
+}
+
+function scheduleReconnect(){
+  if(!navigator.onLine){
+    setSyncStatus('offline')
+    return
+  }
+  if(reconnectTimer!==null)return
+  reconnectAttempt=Math.min(reconnectAttempt+1,6)
+  const delay=Math.min(1000*(2**(reconnectAttempt-1)),15000)
+  setSyncStatus('reconnecting')
+  reconnectTimer=window.setTimeout(()=>{
+    reconnectTimer=null
+    teardownRealtime()
+    startRealtime()
+  },delay)
 }
 
 function startRealtime(){
-  if(channel)return
+  if(channel||!listeners.size)return
+  if(!navigator.onLine){
+    setSyncStatus('offline')
+    return
+  }
+  setSyncStatus(reconnectAttempt?'reconnecting':'connecting')
   channel=supabase.channel('familia-noa-location-state')
     .on('postgres_changes',{event:'*',schema:'public',table:'locations'},scheduleRealtimeRefresh)
     .on('postgres_changes',{event:'*',schema:'public',table:'family_members'},scheduleRealtimeRefresh)
     .on('postgres_changes',{event:'*',schema:'public',table:'family_profiles'},scheduleRealtimeRefresh)
-    .subscribe()
+    .subscribe(status=>{
+      if(status==='SUBSCRIBED'){
+        reconnectAttempt=0
+        if(reconnectTimer!==null){window.clearTimeout(reconnectTimer);reconnectTimer=null}
+        setSyncStatus('connected')
+        void refreshLocationState({force:true})
+        return
+      }
+      if(status==='CHANNEL_ERROR'||status==='TIMED_OUT'||status==='CLOSED'){
+        scheduleReconnect()
+      }
+    })
 }
 
 export function subscribeLocationState(listener:Listener){
@@ -92,6 +143,10 @@ export function subscribeLocationState(listener:Listener){
   if(!state.updatedAt&&!state.loading)void refreshLocationState()
   return ()=>{
     listeners.delete(listener)
+    if(!listeners.size){
+      if(reconnectTimer!==null){window.clearTimeout(reconnectTimer);reconnectTimer=null}
+      teardownRealtime()
+    }
   }
 }
 
@@ -129,6 +184,7 @@ export async function refreshLocationState(options:{force?:boolean}={}):Promise<
         error:null,
         updatedAt:Date.now(),
         revision:state.revision+1,
+        syncStatus:navigator.onLine?'connected':'offline',
       }
       publish()
       return getLocationState()
@@ -139,8 +195,10 @@ export async function refreshLocationState(options:{force?:boolean}={}):Promise<
         loading:false,
         error:error instanceof Error?error.message:'LOCATION_REFRESH_FAILED',
         revision:state.revision+1,
+        syncStatus:navigator.onLine?state.syncStatus:'offline',
       }
       publish()
+      if(navigator.onLine)scheduleReconnect()
       return getLocationState()
     }finally{
       inflight=null
@@ -174,5 +232,22 @@ export async function stopSharingOwnLocation(){
 }
 
 document.addEventListener('visibilitychange',()=>{
-  if(!document.hidden&&listeners.size)void refreshLocationState({force:true})
+  if(!document.hidden&&listeners.size){
+    startRealtime()
+    void refreshLocationState({force:true})
+  }
+})
+
+window.addEventListener('online',()=>{
+  setSyncStatus('reconnecting')
+  if(reconnectTimer!==null){window.clearTimeout(reconnectTimer);reconnectTimer=null}
+  teardownRealtime()
+  startRealtime()
+  if(listeners.size)void refreshLocationState({force:true})
+})
+
+window.addEventListener('offline',()=>{
+  if(reconnectTimer!==null){window.clearTimeout(reconnectTimer);reconnectTimer=null}
+  teardownRealtime()
+  setSyncStatus('offline')
 })
