@@ -60,7 +60,7 @@ function ensurePrivacyNote(page:HTMLElement){
   const note=document.createElement('div')
   note.className='location-privacy-note'
   note.dataset.locationPrivacyNote='1'
-  note.textContent='La app no rastrea en segundo plano. Se muestra la última ubicación compartida y cuándo fue actualizada.'
+  note.textContent='Mientras FAMILIA NOA está abierta y ya compartes ubicación, tu GPS se actualiza automáticamente cada 30 segundos.'
   box.insertAdjacentElement('afterend',note)
 }
 
