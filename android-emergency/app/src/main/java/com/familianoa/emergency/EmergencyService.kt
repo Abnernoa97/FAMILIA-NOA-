@@ -89,7 +89,7 @@ class EmergencyService : Service() {
             ACTION_LOCATION_START -> {
                 if (hasLocationPermission()) {
                     store.setLocationSharingEnabled(true)
-                    startLocationTracking()
+                    if (!startLocationTracking()) store.setLocationSharingEnabled(false)
                 }
             }
             ACTION_LOCATION_STOP -> {
