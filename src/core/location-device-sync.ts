@@ -2,6 +2,7 @@ import { getMemberId } from './identity'
 import { getLocationState, refreshLocationState, saveOwnLocation } from './location-store'
 
 const MIN_WRITE_GAP_MS=4_000
+const MAX_SILENCE_MS=20_000
 const MIN_MOVE_METERS=2.5
 
 let activeMemberId=''
@@ -38,7 +39,7 @@ async function persist(position:GeolocationPosition,force=false){
     position.coords.accuracy+5<lastPosition.coords.accuracy
 
   if(!force&&now-lastWriteAt<MIN_WRITE_GAP_MS)return false
-  if(!force&&lastPosition&&!moved&&!accuracyImproved){
+  if(!force&&lastPosition&&!moved&&!accuracyImproved&&now-lastWriteAt<MAX_SILENCE_MS){
     lastPosition=position
     return false
   }
