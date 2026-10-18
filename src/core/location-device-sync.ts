@@ -78,7 +78,7 @@ function stopWatch(){
   }
 }
 
-export function startOwnLocationAutoSync(memberId=getMemberId()){
+export function startOwnLocationRealtime(memberId=getMemberId()){
   if(!memberId)return
   if(activeMemberId!==memberId){
     stopWatch()
@@ -89,14 +89,14 @@ export function startOwnLocationAutoSync(memberId=getMemberId()){
   startWatch()
 }
 
-export function ensureOwnLocationAutoSync(){
+export function ensureOwnLocationRealtime(){
   const memberId=getMemberId()
   if(!memberId)return
   const sharing=getLocationState().locations.some(location=>location.member_id===memberId)
-  if(sharing)startOwnLocationAutoSync(memberId)
+  if(sharing)startOwnLocationRealtime(memberId)
 }
 
-export function stopOwnLocationAutoSync(){
+export function stopOwnLocationRealtime(){
   stopWatch()
   activeMemberId=''
   lastPosition=null
@@ -105,7 +105,7 @@ export function stopOwnLocationAutoSync(){
 
 export async function syncOwnLocationNow(memberId=getMemberId()){
   if(!memberId||!navigator.geolocation)return false
-  startOwnLocationAutoSync(memberId)
+  startOwnLocationRealtime(memberId)
   return new Promise<boolean>(resolve=>{
     navigator.geolocation.getCurrentPosition(
       position=>{
@@ -134,8 +134,8 @@ document.addEventListener('visibilitychange',()=>{
     startWatch()
     void syncOwnLocationNow(activeMemberId)
   }else{
-    ensureOwnLocationAutoSync()
+    ensureOwnLocationRealtime()
   }
 })
 
-window.addEventListener('beforeunload',stopOwnLocationAutoSync,{once:true})
+window.addEventListener('beforeunload',stopOwnLocationRealtime,{once:true})
