@@ -13,6 +13,9 @@ export type FamilyLocation={
   longitude:number
   accuracy:number|null
   updated_at:string
+  live_active:boolean
+  live_started_at:string|null
+  live_until:string|null
 }
 
 export type LocationProfile={
@@ -67,6 +70,16 @@ export function getLocationState():LocationState{
     locations:[...state.locations],
     profiles:[...state.profiles],
   }
+}
+
+export function isLocationLive(row:FamilyLocation,now=Date.now()){
+  if(!row.live_active)return false
+  const until=row.live_until?new Date(row.live_until).getTime():0
+  if(until>0&&until<=now)return false
+  const updated=new Date(row.updated_at).getTime()
+  if(!Number.isFinite(updated))return false
+  if(!row.live_until&&now-updated>150_000)return false
+  return true
 }
 
 function validCoordinate(row:FamilyLocation){
@@ -162,7 +175,7 @@ export async function refreshLocationState(options:{force?:boolean}={}):Promise<
     try{
       const [membersResult,locationsResult,profilesResult]=await Promise.all([
         supabase.from('family_members').select('id,name,active,must_share_location').eq('active',true).order('created_at'),
-        supabase.from('locations').select('member_id,latitude,longitude,accuracy,updated_at').order('updated_at',{ascending:false}),
+        supabase.from('locations').select('member_id,latitude,longitude,accuracy,updated_at,live_active,live_started_at,live_until').order('updated_at',{ascending:false}),
         supabase.from('family_profiles').select('member_id,avatar_path'),
       ])
       if(membersResult.error)throw membersResult.error
@@ -220,6 +233,9 @@ export async function saveOwnLocation(input:{
     longitude:input.longitude,
     accuracy:input.accuracy,
     updated_at:new Date().toISOString(),
+    live_active:false,
+    live_started_at:null,
+    live_until:null,
   },{onConflict:'member_id'})
   if(error)throw error
   return refreshLocationState({force:true})
