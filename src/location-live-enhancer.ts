@@ -33,17 +33,28 @@ function render(){
   if(!page||!b||!page.querySelector('#back'))return
   const box=page.querySelector<HTMLElement>('.locationbox');const primary=page.querySelector<HTMLButtonElement>('#sharelocation')
   if(!box||!primary)return
-  box.querySelector('[data-live-root]')?.remove()
-  const root=document.createElement('div');root.dataset.liveRoot='1'
-  if(active()){
+  const live=active()
+  const mode=live?'active':'idle'
+  let root=box.querySelector<HTMLElement>('[data-live-root]')
+  if(root?.dataset.mode===mode){
+    primary.hidden=live
+    if(live){
+      const label=root.querySelector<HTMLElement>('[data-live-remaining]')
+      if(label)label.textContent=remaining()
+    }
+    return
+  }
+  root?.remove()
+  root=document.createElement('div');root.dataset.liveRoot='1';root.dataset.mode=mode
+  if(live){
     primary.hidden=true
     root.className='location-live-active'
-    root.innerHTML=`<div><small>UBICACIÓN EN VIVO</small><b>Compartiendo con la familia</b><span>${remaining()}</span></div><button type="button" class="location-live-stop" data-live-stop>Detener</button>`
+    root.innerHTML=`<div><small>UBICACIÓN EN VIVO</small><b>Compartiendo con la familia</b><span data-live-remaining>${remaining()}</span></div><button type="button" class="location-live-stop" data-live-stop>Detener</button>`
     root.querySelector('[data-live-stop]')?.addEventListener('click',stopLive)
   }else{
     primary.hidden=false
     root.innerHTML='<button type="button" class="location-live-open" data-live-open>Compartir ubicación en vivo</button><div class="location-live-options" data-live-options hidden><button data-min="15">15 min</button><button data-min="60">1 hora</button><button data-min="0">Hasta apagar</button></div>'
-    root.querySelector('[data-live-open]')?.addEventListener('click',()=>{const options=root.querySelector<HTMLElement>('[data-live-options]');if(options)options.hidden=!options.hidden})
+    root.querySelector('[data-live-open]')?.addEventListener('click',()=>{const options=root?.querySelector<HTMLElement>('[data-live-options]');if(options)options.hidden=!options.hidden})
     root.querySelectorAll<HTMLButtonElement>('[data-min]').forEach(button=>button.addEventListener('click',()=>startLive(Number(button.dataset.min||15))))
   }
   box.appendChild(root)
