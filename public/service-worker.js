@@ -1,4 +1,4 @@
-const CACHE = 'familia-noa-v81-web-live-location';
+const CACHE = 'familia-noa-v82-location-freeze-fix';
 const BASE = new URL(self.registration.scope).pathname;
 const STATIC = [
   BASE,
