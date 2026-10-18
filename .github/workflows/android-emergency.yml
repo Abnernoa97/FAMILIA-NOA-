@@ -16,7 +16,7 @@ jobs:
   build-apk:
     runs-on: ubuntu-latest
     env:
-      EXPECTED_CERT_SHA256: "2C:56:46:10:C1:D7:C7:B4:72:8C:69:D4:FD:E7:76:FE:2D:89:DF:4E:DE:B2:06:95:33:75:DA:E9:C0:B7:AC:EF"
+      EXPECTED_CERT_SHA256: "E9:7F:B6:18:36:05:7F:5D:7D:E3:CF:E4:10:D5:74:E0:2D:21:32:12:20:03:FE:7D:AB:1B:90:87:71:2F:78:75"
       FAMILIA_NOA_KEYSTORE_PATH: "${{ github.workspace }}/familia-noa-release.p12"
       FAMILIA_NOA_KEYSTORE_PASSWORD: "${{ secrets.FAMILIA_NOA_ANDROID_SIGNING_PASSWORD }}"
     steps:
