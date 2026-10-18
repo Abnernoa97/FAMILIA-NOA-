@@ -78,7 +78,7 @@ export function isLocationLive(row:FamilyLocation,now=Date.now()){
   if(until>0&&until<=now)return false
   const updated=new Date(row.updated_at).getTime()
   if(!Number.isFinite(updated))return false
-  if(!row.live_until&&now-updated>150_000)return false
+  if(now-updated>150_000)return false
   return true
 }
 
@@ -237,6 +237,36 @@ export async function saveOwnLocation(input:{
     live_started_at:null,
     live_until:null,
   },{onConflict:'member_id'})
+  if(error)throw error
+  return refreshLocationState({force:true})
+}
+
+export async function saveLiveLocation(input:{
+  memberId:string
+  latitude:number
+  longitude:number
+  accuracy:number|null
+  startedAt:string
+  until:string|null
+}){
+  const {error}=await supabase.from('locations').upsert({
+    member_id:input.memberId,
+    latitude:input.latitude,
+    longitude:input.longitude,
+    accuracy:input.accuracy,
+    updated_at:new Date().toISOString(),
+    live_active:true,
+    live_started_at:input.startedAt,
+    live_until:input.until,
+  },{onConflict:'member_id'})
+  if(error)throw error
+  return refreshLocationState({force:true})
+}
+
+export async function stopLiveLocation(memberId:string){
+  const {error}=await supabase.from('locations')
+    .update({live_active:false,live_until:null})
+    .eq('member_id',memberId)
   if(error)throw error
   return refreshLocationState({force:true})
 }
