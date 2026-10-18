@@ -444,6 +444,32 @@ class MainActivity : Activity() {
         fun openProtectionSettings() {
             runOnUiThread { openProtection() }
         }
+
+        @JavascriptInterface
+        fun locationCapability(): String = "native-background-location-v1"
+
+        @JavascriptInterface
+        fun isLocationSharingEnabled(): Boolean = store.locationSharingEnabled
+
+        @JavascriptInterface
+        fun startLocationSharing(): Boolean {
+            if (!store.configured || !hasLocationPermission()) return false
+            runOnUiThread { EmergencyService.startLocationSharing(this@MainActivity) }
+            return true
+        }
+
+        @JavascriptInterface
+        fun stopLocationSharing(): Boolean {
+            runOnUiThread { EmergencyService.stopLocationSharing(this@MainActivity) }
+            return true
+        }
+
+        @JavascriptInterface
+        fun refreshLocationSharing(): Boolean {
+            if (!store.configured || !hasLocationPermission()) return false
+            runOnUiThread { EmergencyService.refreshLocationSharing(this@MainActivity) }
+            return true
+        }
     }
 
     private fun toast(value: String) = Toast.makeText(this, value, Toast.LENGTH_SHORT).show()
