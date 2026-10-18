@@ -6,7 +6,7 @@ import { startHomeChatUnread, stopHomeChatUnread } from './chat-features'
 import { initNavigation, enterView, replaceView, backView, type AppView } from './core/navigation'
 import { closeMediaViewer, isMediaViewerOpen } from './core/media-viewer'
 import { clearPrivateMediaCache } from './core/private-media'
-import { getLocationState, refreshLocationState, saveOwnLocation, subscribeLocationState, type LocationState } from './core/location-store'
+import { getLocationState, isLocationLive, refreshLocationState, saveOwnLocation, subscribeLocationState, type LocationState } from './core/location-store'
 
 type Member = { id: string; name: string; active: boolean; must_share_location: boolean }
 type FamilySessionResponse = {
@@ -462,10 +462,13 @@ function renderLocationList(state:LocationState){
     if(b.id===memberId)return 1
     return a.name.localeCompare(b.name,'es')
   })
+  const liveCount=rows.filter(item=>isLocationLive(item)).length
   const sharingCount=rows.length
   const summary=sharingCount===0
     ?'Nadie comparte ahora'
-    :`${sharingCount} compartiendo`
+    :liveCount>0
+      ?`${liveCount} en vivo · ${sharingCount} con ubicación`
+      :`${sharingCount} con ubicación`
   const cards=ordered.map(member=>{
     const item=byMember.get(member.id)
     const mine=member.id===memberId
@@ -476,9 +479,10 @@ function renderLocationList(state:LocationState){
     const ageMs=Date.now()-new Date(item.updated_at).getTime()
     const stale=Number.isFinite(ageMs)&&ageMs>60*60*1000
     const veryFresh=Number.isFinite(ageMs)&&ageMs<5*60*1000
+    const live=isLocationLive(item)
     const accuracy=Number.isFinite(item.accuracy)?` · ±${Math.round(item.accuracy as number)} m`:''
-    const status=veryFresh?'Ahora':stale?'Última':'Reciente'
-    return `<article class="locationrow locationrow-active${stale?' stale':''}" data-location-member="${esc(member.id)}"><button type="button" class="location-focus" data-focus-location="${esc(member.id)}" aria-label="Ver a ${esc(member.name)} en el mapa"><span class="location-avatar-fallback">${initial}</span><span class="location-person"><span><b>${esc(member.name)}${mine?' · tú':''}</b><small>${stale?'Última ubicación · ':''}${locationAge(item.updated_at)}${accuracy}</small></span></span><span class="location-state-pill${veryFresh?' live':''}">${status}</span><span class="location-chevron">›</span></button></article>`
+    const status=live?'EN VIVO':veryFresh?'Ahora':stale?'Última':'Reciente'
+    return `<article class="locationrow locationrow-active${stale?' stale':''}${live?' locationrow-live':''}" data-location-member="${esc(member.id)}"><button type="button" class="location-focus" data-focus-location="${esc(member.id)}" aria-label="Ver a ${esc(member.name)} en el mapa"><span class="location-avatar-fallback">${initial}</span><span class="location-person"><span><b>${esc(member.name)}${mine?' · tú':''}</b><small>${live?'Actualizando en vivo · ':stale?'Última ubicación · ':''}${locationAge(item.updated_at)}${accuracy}</small></span></span><span class="location-state-pill${live||veryFresh?' live':''}">${status}</span><span class="location-chevron">›</span></button></article>`
   }).join('')
   element.innerHTML=`<div class="location-section-title"><div><b>Familia</b><span>Quién está compartiendo ahora</span></div><small>${summary}</small></div>${cards||'<div class="empty">Aún no hay ubicaciones compartidas.</div>'}`
   element.querySelectorAll<HTMLButtonElement>('[data-focus-location]').forEach(button=>{
