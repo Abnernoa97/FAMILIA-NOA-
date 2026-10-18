@@ -1,8 +1,10 @@
 package com.familianoa.emergency
 
+import android.Manifest
 import android.app.*
 import android.content.Context
 import android.content.Intent
+import android.content.pm.PackageManager
 import android.content.pm.ServiceInfo
 import android.graphics.Color
 import android.graphics.PixelFormat
@@ -23,6 +25,9 @@ import java.util.concurrent.atomic.AtomicInteger
 class EmergencyService : Service() {
     companion object {
         const val ACTION_LOCAL_RESOLVED = "com.familianoa.emergency.LOCAL_RESOLVED"
+        const val ACTION_LOCATION_START = "com.familianoa.emergency.LOCATION_START"
+        const val ACTION_LOCATION_STOP = "com.familianoa.emergency.LOCATION_STOP"
+        const val ACTION_LOCATION_REFRESH = "com.familianoa.emergency.LOCATION_REFRESH"
         private const val EXTRA_ALERT_ID = "alert_id"
         private const val PROTECTION_CHANNEL = "familia_noa_protection"
         private const val EMERGENCY_CHANNEL = "familia_noa_emergency"
@@ -34,6 +39,16 @@ class EmergencyService : Service() {
             if (Build.VERSION.SDK_INT >= 26) context.startForegroundService(intent) else context.startService(intent)
         }
         fun stop(context:Context) = context.stopService(Intent(context, EmergencyService::class.java))
+        fun startLocationSharing(context:Context) {
+            val intent = Intent(context, EmergencyService::class.java).setAction(ACTION_LOCATION_START)
+            if (Build.VERSION.SDK_INT >= 26) context.startForegroundService(intent) else context.startService(intent)
+        }
+        fun stopLocationSharing(context:Context) {
+            context.startService(Intent(context, EmergencyService::class.java).setAction(ACTION_LOCATION_STOP))
+        }
+        fun refreshLocationSharing(context:Context) {
+            context.startService(Intent(context, EmergencyService::class.java).setAction(ACTION_LOCATION_REFRESH))
+        }
         fun resolved(context:Context, alertId:String) {
             val intent = Intent(context, EmergencyService::class.java).setAction(ACTION_LOCAL_RESOLVED).putExtra(EXTRA_ALERT_ID, alertId)
             if (Build.VERSION.SDK_INT >= 26) context.startForegroundService(intent) else context.startService(intent)
@@ -50,12 +65,14 @@ class EmergencyService : Service() {
     private var heartbeat:Runnable? = null
     private var refreshTask:Runnable? = null
     private var vibrator:android.os.Vibrator? = null
+    private lateinit var locationTracker: FamilyLocationTracker
 
     override fun onCreate() {
         super.onCreate()
         store = SessionStore(this)
+        locationTracker = FamilyLocationTracker(this, store) { validAccessToken() }
         createChannels()
-        startAsForeground("Preparando protección…")
+        startAsForeground("Preparando protección…", includeLocation = false)
     }
 
     override fun onStartCommand(intent: Intent?, flags: Int, startId: Int): Int {
@@ -63,9 +80,34 @@ class EmergencyService : Service() {
             clearEmergency(intent.getStringExtra(EXTRA_ALERT_ID).orEmpty())
         }
         if (!store.configured) {
+            locationTracker.stop()
             updateProtection("Abre la app para configurar este teléfono")
             return START_STICKY
         }
+
+        when (intent?.action) {
+            ACTION_LOCATION_START -> {
+                if (hasLocationPermission()) {
+                    store.setLocationSharingEnabled(true)
+                    startLocationTracking()
+                }
+            }
+            ACTION_LOCATION_STOP -> {
+                store.setLocationSharingEnabled(false)
+                locationTracker.stop()
+                startAsForeground("Conectado · AYUDA vigilada en tiempo real", includeLocation = false)
+            }
+            ACTION_LOCATION_REFRESH -> {
+                if (store.locationSharingEnabled) {
+                    if (!locationTracker.running) startLocationTracking()
+                    locationTracker.refreshNow()
+                }
+            }
+            else -> {
+                if (store.locationSharingEnabled && hasLocationPermission()) startLocationTracking()
+            }
+        }
+
         ensureConnected()
         return START_STICKY
     }
@@ -108,17 +150,43 @@ class EmergencyService : Service() {
             .build()
     }
 
-    private fun startAsForeground(state:String) {
-        val notification = protectionNotification(state)
+    private fun startAsForeground(state:String, includeLocation:Boolean = locationTracker.running) {
+        val text = if (includeLocation) "$state · ubicación en tiempo real" else state
+        val notification = protectionNotification(text)
         if (Build.VERSION.SDK_INT >= 34) {
-            startForeground(PROTECTION_NOTIFICATION, notification, ServiceInfo.FOREGROUND_SERVICE_TYPE_SPECIAL_USE)
+            val type = ServiceInfo.FOREGROUND_SERVICE_TYPE_SPECIAL_USE or
+                (if (includeLocation) ServiceInfo.FOREGROUND_SERVICE_TYPE_LOCATION else 0)
+            startForeground(PROTECTION_NOTIFICATION, notification, type)
         } else {
             startForeground(PROTECTION_NOTIFICATION, notification)
         }
     }
 
     private fun updateProtection(state:String) {
-        getSystemService(NotificationManager::class.java).notify(PROTECTION_NOTIFICATION, protectionNotification(state))
+        val text = if (::locationTracker.isInitialized && locationTracker.running) "$state · ubicación en tiempo real" else state
+        getSystemService(NotificationManager::class.java).notify(PROTECTION_NOTIFICATION, protectionNotification(text))
+    }
+
+    private fun hasLocationPermission():Boolean =
+        checkSelfPermission(Manifest.permission.ACCESS_FINE_LOCATION) == PackageManager.PERMISSION_GRANTED ||
+            checkSelfPermission(Manifest.permission.ACCESS_COARSE_LOCATION) == PackageManager.PERMISSION_GRANTED
+
+    private fun startLocationTracking():Boolean {
+        if (!store.locationSharingEnabled || !hasLocationPermission()) return false
+        return try {
+            startAsForeground("Conectado · AYUDA vigilada en tiempo real", includeLocation = true)
+            val started = locationTracker.start()
+            if (!started) {
+                startAsForeground("Conectado · AYUDA vigilada en tiempo real", includeLocation = false)
+            } else {
+                updateProtection("Conectado · AYUDA vigilada en tiempo real")
+            }
+            started
+        } catch (_:Throwable) {
+            locationTracker.stop()
+            startAsForeground("Conectado · AYUDA vigilada en tiempo real", includeLocation = false)
+            false
+        }
     }
 
     @Synchronized private fun ensureConnected() {
@@ -139,7 +207,11 @@ class EmergencyService : Service() {
         }.start()
     }
 
-    private fun refreshSession():String {
+    @Synchronized private fun validAccessToken():String {
+        return if (store.needsRefresh()) refreshSession() else store.accessToken
+    }
+
+    @Synchronized private fun refreshSession():String {
         val refreshed = Api.refreshSession(store.refreshToken)
         val memberId = refreshed.memberId.ifBlank { store.memberId }
         store.saveSession(memberId, store.memberName, refreshed.accessToken, refreshed.refreshToken, refreshed.expiresAt)
@@ -390,6 +462,7 @@ class EmergencyService : Service() {
         cancelHeartbeat()
         refreshTask?.let(handler::removeCallbacks)
         refreshTask = null
+        locationTracker.stop()
         removeOverlay()
         vibrator?.cancel()
         super.onDestroy()
