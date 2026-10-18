@@ -7,6 +7,7 @@ import { initNavigation, enterView, replaceView, backView, type AppView } from '
 import { closeMediaViewer, isMediaViewerOpen } from './core/media-viewer'
 import { clearPrivateMediaCache } from './core/private-media'
 import { getLocationState, refreshLocationState, saveOwnLocation, subscribeLocationState, type LocationState } from './core/location-store'
+import { ensureOwnLocationAutoSync, refreshMemberLocation, startOwnLocationAutoSync } from './core/location-device-sync'
 
 type Member = { id: string; name: string; active: boolean; must_share_location: boolean }
 type FamilySessionResponse = {
@@ -420,6 +421,7 @@ async function shareLocation() {
       longitude,
       accuracy:Number.isFinite(accuracy)?accuracy:null,
     })
+    startOwnLocationAutoSync(memberId)
     text.textContent=`Ubicación actualizada ahora${Number.isFinite(accuracy)?` · precisión aproximada ${Math.round(accuracy)} m`:''}.`
     mandatoryLocationVerified=true
     await loadLocations()
@@ -462,6 +464,7 @@ function renderLocationList(state:LocationState){
     if(b.id===memberId)return 1
     return a.name.localeCompare(b.name,'es')
   })
+  if(byMember.has(memberId))ensureOwnLocationAutoSync()
   const sharingCount=rows.length
   const summary=sharingCount===0
     ?'Nadie comparte ahora'
@@ -483,8 +486,17 @@ function renderLocationList(state:LocationState){
   element.innerHTML=`<div class="location-section-title"><div><b>Familia</b><span>Quién está compartiendo ahora</span></div><small>${summary}</small></div>${cards||'<div class="empty">Aún no hay ubicaciones compartidas.</div>'}`
   element.querySelectorAll<HTMLButtonElement>('[data-focus-location]').forEach(button=>{
     button.addEventListener('click',()=>{
-      window.dispatchEvent(new CustomEvent('familia-noa:focus-location',{detail:{memberId:button.dataset.focusLocation||''}}))
-      document.querySelector<HTMLElement>('[data-family-map]')?.scrollIntoView({behavior:'smooth',block:'center'})
+      void(async()=>{
+        const targetId=button.dataset.focusLocation||''
+        button.disabled=true
+        try{
+          await refreshMemberLocation(targetId)
+          window.dispatchEvent(new CustomEvent('familia-noa:focus-location',{detail:{memberId:targetId}}))
+          document.querySelector<HTMLElement>('[data-family-map]')?.scrollIntoView({behavior:'smooth',block:'center'})
+        }finally{
+          if(document.contains(button))button.disabled=false
+        }
+      })()
     })
   })
 }
