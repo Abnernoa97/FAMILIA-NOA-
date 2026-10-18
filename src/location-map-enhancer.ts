@@ -66,12 +66,12 @@ function ensureAssets(){
   const style=document.createElement('style')
   style.id='family-map-styles'
   style.textContent=`
-  .family-map-shell{position:relative;height:min(58dvh,510px);min-height:390px;margin:16px;border-radius:30px;overflow:hidden;background:#ddd8ce;border:1px solid rgba(218,211,198,.9);box-shadow:0 18px 45px rgba(35,31,25,.12);isolation:isolate}.family-map-canvas{position:absolute;inset:0}.family-map-canvas .maplibregl-canvas{outline:none}.family-map-shell::after{content:"";position:absolute;inset:0;pointer-events:none;background:linear-gradient(180deg,rgba(12,12,12,.18),transparent 30%,transparent 68%,rgba(12,12,12,.34));z-index:2}
-  .family-map-head{position:absolute;left:16px;right:16px;top:16px;z-index:4;display:flex;align-items:flex-start;justify-content:space-between;gap:12px;pointer-events:none}.family-map-head>div{padding:10px 13px;border-radius:17px;background:rgba(250,248,242,.91);backdrop-filter:blur(16px);-webkit-backdrop-filter:blur(16px);box-shadow:0 5px 20px #0001}.family-map-head small{display:block;font-size:9px;letter-spacing:.16em;font-weight:800;color:#77736b}.family-map-head b{display:block;margin-top:2px;font:500 18px var(--display-font,Georgia,serif);color:#171716}.family-map-all{pointer-events:auto;height:42px;padding:0 15px;border:0;border-radius:21px;background:rgba(23,23,22,.9);color:#fff;font-weight:700;font-size:12px;backdrop-filter:blur(14px);-webkit-backdrop-filter:blur(14px)}
-  .family-map-people{position:absolute;z-index:4;left:12px;right:12px;bottom:12px;display:flex;gap:7px;overflow-x:auto;padding:2px 2px max(2px,env(safe-area-inset-bottom));scrollbar-width:none}.family-map-people::-webkit-scrollbar{display:none}.family-map-chip{flex:0 0 auto;display:flex;align-items:center;gap:7px;height:43px;padding:0 12px 0 7px;border:1px solid rgba(255,255,255,.45);border-radius:22px;background:rgba(250,248,242,.92);color:#171716;font-size:12px;font-weight:700;box-shadow:0 5px 18px #0002;backdrop-filter:blur(16px);-webkit-backdrop-filter:blur(16px)}.family-map-chip-avatar{width:29px;height:29px;flex:0 0 29px;border-radius:50%;overflow:hidden;display:grid;place-items:center;background:#e8e1d4;font-size:11px}.family-map-chip-avatar img{width:100%;height:100%;object-fit:cover;display:block}.family-map-chip.mine{background:rgba(23,23,22,.92);color:#fff;border-color:rgba(23,23,22,.92)}.family-map-chip.mine .family-map-chip-avatar{background:#fff;color:#171716}
-  .family-map-marker{position:relative;display:flex;flex-direction:column;align-items:center;filter:drop-shadow(0 5px 10px rgba(0,0,0,.28));cursor:pointer;border:0;background:transparent;padding:0}.family-map-marker-dot{width:46px;height:46px;border:3px solid #fff;border-radius:50%;overflow:hidden;display:grid;place-items:center;background:#4c367f;color:#fff;font-weight:800;font-size:13px;box-shadow:0 4px 15px rgba(0,0,0,.22)}.family-map-marker-dot img{width:100%;height:100%;object-fit:cover;display:block}.family-map-marker.mine .family-map-marker-dot{background:#171716}.family-map-marker::after{content:"";width:3px;height:12px;border-radius:3px;background:#fff;margin-top:-1px}.family-map-marker-label{margin-top:3px;padding:4px 7px;border-radius:9px;background:rgba(23,23,22,.86);color:#fff;font-size:9px;font-weight:700;white-space:nowrap}
+  .family-map-shell{position:relative;height:min(62dvh,560px);min-height:420px;margin:14px 16px 18px;border-radius:32px;overflow:hidden;background:#ddd8ce;border:1px solid rgba(218,211,198,.9);box-shadow:0 22px 56px rgba(35,31,25,.14);isolation:isolate}.family-map-canvas{position:absolute;inset:0}.family-map-canvas .maplibregl-canvas{outline:none}.family-map-shell::after{content:"";position:absolute;inset:0;pointer-events:none;background:linear-gradient(180deg,rgba(12,12,12,.16),transparent 28%,transparent 62%,rgba(12,12,12,.42));z-index:2}
+  .family-map-head{position:absolute;left:14px;right:14px;top:14px;z-index:4;display:flex;align-items:flex-start;justify-content:space-between;gap:10px;pointer-events:none}.family-map-head>div{padding:10px 13px;border-radius:18px;background:rgba(250,248,242,.92);backdrop-filter:blur(18px);-webkit-backdrop-filter:blur(18px);box-shadow:0 6px 22px #0001}.family-map-head small{display:block;font-size:8.5px;letter-spacing:.16em;font-weight:800;color:#77736b}.family-map-head b{display:block;margin-top:2px;font:500 19px var(--display-font,Georgia,serif);color:#171716}.family-map-actions{display:flex;gap:7px;pointer-events:auto}.family-map-all,.family-map-mine{height:42px;padding:0 14px;border:0;border-radius:21px;font-weight:750;font-size:11px;backdrop-filter:blur(16px);-webkit-backdrop-filter:blur(16px);box-shadow:0 6px 18px #0002}.family-map-all{background:rgba(23,23,22,.92);color:#fff}.family-map-mine{background:rgba(250,248,242,.92);color:#171716}
+  .family-map-people{position:absolute;z-index:4;left:10px;right:10px;bottom:10px;display:flex;gap:7px;overflow-x:auto;padding:2px 2px max(2px,env(safe-area-inset-bottom));scrollbar-width:none}.family-map-people::-webkit-scrollbar{display:none}.family-map-chip{flex:0 0 auto;display:grid;grid-template-columns:31px auto;grid-template-rows:auto auto;column-gap:8px;align-items:center;min-height:48px;padding:5px 12px 5px 6px;border:1px solid rgba(255,255,255,.45);border-radius:25px;background:rgba(250,248,242,.94);color:#171716;font-size:11.5px;font-weight:750;text-align:left;box-shadow:0 6px 20px #0002;backdrop-filter:blur(18px);-webkit-backdrop-filter:blur(18px)}.family-map-chip small{grid-column:2;display:block;margin-top:-1px;color:#807b73;font-size:8.5px;font-weight:650}.family-map-chip-avatar{grid-row:1/3;width:31px;height:31px;flex:0 0 31px;border-radius:50%;overflow:hidden;display:grid;place-items:center;background:#e8e1d4;font-size:11px}.family-map-chip-avatar img{width:100%;height:100%;object-fit:cover;display:block}.family-map-chip.mine{background:rgba(23,23,22,.94);color:#fff;border-color:rgba(23,23,22,.92)}.family-map-chip.mine small{color:#bdb8af}.family-map-chip.mine .family-map-chip-avatar{background:#fff;color:#171716}
+  .family-map-marker{position:relative;display:flex;flex-direction:column;align-items:center;filter:drop-shadow(0 5px 10px rgba(0,0,0,.28));cursor:pointer;border:0;background:transparent;padding:0}.family-map-marker-dot{position:relative;width:48px;height:48px;border:3px solid #fff;border-radius:50%;overflow:hidden;display:grid;place-items:center;background:#4c367f;color:#fff;font-weight:800;font-size:13px;box-shadow:0 4px 15px rgba(0,0,0,.22)}.family-map-marker.fresh .family-map-marker-dot::before{content:"";position:absolute;inset:-9px;border:2px solid rgba(73,157,105,.4);border-radius:50%;animation:familyLocationPulse 2s ease-out infinite;pointer-events:none}@keyframes familyLocationPulse{0%{transform:scale(.72);opacity:.85}100%{transform:scale(1.35);opacity:0}}.family-map-marker-dot img{width:100%;height:100%;object-fit:cover;display:block}.family-map-marker.mine .family-map-marker-dot{background:#171716}.family-map-marker::after{content:"";width:3px;height:12px;border-radius:3px;background:#fff;margin-top:-1px}.family-map-marker-label{margin-top:3px;padding:4px 7px;border-radius:9px;background:rgba(23,23,22,.86);color:#fff;font-size:9px;font-weight:700;white-space:nowrap}
   .family-map-loading,.family-map-error{position:absolute;inset:0;z-index:6;display:grid;place-items:center;padding:30px;text-align:center;background:linear-gradient(145deg,#d9d3c7,#f2eee6);color:#5f5a52;font-size:13px}.family-map-error b{display:block;color:#171716;font:500 22px var(--display-font,Georgia,serif);margin-bottom:7px}.family-map-loading[hidden],.family-map-error[hidden],[data-map-loading][hidden]{display:none!important}.family-map-popup .maplibregl-popup-content{border-radius:16px;padding:12px 14px;box-shadow:0 12px 34px #0003;font-family:system-ui,sans-serif}.family-map-popup b{display:block;font-size:13px}.family-map-popup small{display:block;margin-top:3px;color:#77736b}.family-map-popup .maplibregl-popup-close-button{font-size:18px;padding:2px 7px}.family-map-shell .maplibregl-ctrl-attrib{font-size:9px;background:rgba(255,255,255,.75)}.family-map-shell .maplibregl-ctrl-group{border-radius:14px;overflow:hidden;box-shadow:0 5px 18px #0002}
-  @media(max-width:480px){.family-map-shell{height:48dvh;min-height:370px;margin:12px;border-radius:26px}.family-map-head{left:12px;right:12px;top:12px}.family-map-people{bottom:10px;left:9px;right:9px}.family-map-marker-label{display:none}}
+  @media(max-width:480px){.family-map-shell{height:55dvh;min-height:410px;margin:10px 12px 16px;border-radius:28px}.family-map-head{left:10px;right:10px;top:10px}.family-map-head>div{padding:9px 11px}.family-map-head b{font-size:17px}.family-map-all,.family-map-mine{height:39px;padding:0 12px}.family-map-people{bottom:9px;left:7px;right:7px}.family-map-marker-label{display:none}}
   `
   document.head.appendChild(style)
 }
@@ -106,11 +106,15 @@ function ensurePanel(page:HTMLElement){
   shell=document.createElement('section')
   shell.className='family-map-shell'
   shell.dataset.familyMap='true'
-  shell.innerHTML=`<div class="family-map-canvas" data-family-map-canvas></div><div class="family-map-head"><div><small>FAMILY MAP · 3D</small><b>Últimas ubicaciones</b></div><button type="button" class="family-map-all" data-map-all>Todos</button></div><div class="family-map-people" data-map-people></div><div class="family-map-loading" data-map-loading>Preparando mapa 3D…</div>`
+  shell.innerHTML=`<div class="family-map-canvas" data-family-map-canvas></div><div class="family-map-head"><div><small>FAMILY MAP · 3D</small><b data-map-title>Familia cerca</b></div><div class="family-map-actions"><button type="button" class="family-map-mine" data-map-mine>Yo</button><button type="button" class="family-map-all" data-map-all>Todos</button></div></div><div class="family-map-people" data-map-people></div><div class="family-map-loading" data-map-loading>Preparando mapa 3D…</div>`
   const gated=!!page.querySelector('#sharelocation')?.textContent?.toLowerCase().includes('continuar')
   if(gated)locationBox.insertAdjacentElement('afterend',shell)
   else locationBox.insertAdjacentElement('beforebegin',shell)
   shell.querySelector('[data-map-all]')?.addEventListener('click',fitAll)
+  shell.querySelector('[data-map-mine]')?.addEventListener('click',()=>{
+    const mine=currentLocations.find(item=>item.mine)
+    if(mine)focus(mine,true)
+  })
   return shell
 }
 
@@ -171,19 +175,31 @@ function fitAll(){
   map.fitBounds(bounds,{padding:{top:95,right:55,bottom:120,left:55},maxZoom:13.4,duration:900})
 }
 
-function focus(item:MapLocation){
+function focus(item:MapLocation,showPopup=false){
   if(!map)return
-  map.flyTo({center:[item.longitude,item.latitude],zoom:17.2,pitch:70,bearing:-32,duration:1000,curve:1.35,essential:true,padding:{top:55,right:25,bottom:115,left:25}})
+  map.flyTo({center:[item.longitude,item.latitude],zoom:17.4,pitch:70,bearing:-32,duration:1050,curve:1.38,essential:true,padding:{top:60,right:25,bottom:120,left:25}})
+  const title=document.querySelector<HTMLElement>('[data-map-title]')
+  if(title)title.textContent=item.mine?'Tu ubicación':item.name
+  document.querySelectorAll<HTMLElement>('.family-map-chip').forEach(chip=>chip.classList.toggle('selected',chip.dataset.mapMember===item.member_id))
+  if(showPopup){
+    const MapLibre=(window as any).__familiaMapLibre
+    if(MapLibre){
+      new MapLibre.Popup({offset:36,className:'family-map-popup',closeButton:true})
+        .setLngLat([item.longitude,item.latitude])
+        .setHTML(`<b>${esc(item.name)}${item.mine?' · tú':''}</b><small>${esc(age(item.updated_at))}${Number.isFinite(item.accuracy)?` · ±${Math.round(item.accuracy as number)} m`:''}</small>`)
+        .addTo(map)
+    }
+  }
 }
 
 function renderPeople(){
   const root=document.querySelector<HTMLElement>('[data-map-people]')
   if(!root)return
-  root.innerHTML=currentLocations.map(item=>`<button type="button" class="family-map-chip${item.mine?' mine':''}" data-map-member="${esc(item.member_id)}"><span class="family-map-chip-avatar">${avatarMarkup(item)}</span>${esc(item.name)}</button>`).join('')
+  root.innerHTML=currentLocations.map(item=>`<button type="button" class="family-map-chip${item.mine?' mine':''}" data-map-member="${esc(item.member_id)}"><span class="family-map-chip-avatar">${avatarMarkup(item)}</span><span>${esc(item.name)}${item.mine?' · tú':''}</span><small>${esc(age(item.updated_at))}</small></button>`).join('')
   bindAvatarFallback(root)
   root.querySelectorAll<HTMLButtonElement>('[data-map-member]').forEach(button=>button.addEventListener('click',()=>{
     const item=currentLocations.find(location=>location.member_id===button.dataset.mapMember)
-    if(item)focus(item)
+    if(item)focus(item,true)
   }))
 }
 
@@ -192,17 +208,14 @@ function renderMarkers(MapLibre:any){
   currentLocations.forEach(item=>{
     const element=document.createElement('button')
     element.type='button'
-    element.className=`family-map-marker${item.mine?' mine':''}`
+    const fresh=Date.now()-new Date(item.updated_at).getTime()<5*60*1000
+    element.className=`family-map-marker${item.mine?' mine':''}${fresh?' fresh':''}`
     element.setAttribute('aria-label',`Ver ubicación de ${item.name}`)
     element.innerHTML=`<span class="family-map-marker-dot">${avatarMarkup(item)}</span><span class="family-map-marker-label">${esc(item.name)}</span>`
     bindAvatarFallback(element)
     element.addEventListener('click',event=>{
       event.stopPropagation()
-      focus(item)
-      new MapLibre.Popup({offset:36,className:'family-map-popup',closeButton:true})
-        .setLngLat([item.longitude,item.latitude])
-        .setHTML(`<b>${esc(item.name)}${item.mine?' · tú':''}</b><small>${esc(age(item.updated_at))}${Number.isFinite(item.accuracy)?` · ±${Math.round(item.accuracy as number)} m`:''}</small>`)
-        .addTo(map)
+      focus(item,true)
     })
     markers.push(new MapLibre.Marker({element,anchor:'bottom'}).setLngLat([item.longitude,item.latitude]).addTo(map))
   })
@@ -311,6 +324,16 @@ async function applyState(state:LocationState){
   }
 }
 
+function handleFocusEvent(event:Event){
+  const custom=event as CustomEvent<{memberId?:string}>
+  const memberId=String(custom.detail?.memberId||'')
+  if(!memberId)return
+  const item=currentLocations.find(location=>location.member_id===memberId)
+  if(item)focus(item,true)
+}
+
+window.addEventListener('familia-noa:focus-location',handleFocusEvent as EventListener)
+
 function attachPage(page:HTMLElement){
   ensurePanel(page)
   stateUnsubscribe?.()
@@ -339,5 +362,6 @@ window.addEventListener('beforeunload',()=>{
   pageObserver?.disconnect()
   pageObserver=null
   destroyMap()
+  window.removeEventListener('familia-noa:focus-location',handleFocusEvent as EventListener)
 },{once:true})
 scan()
