@@ -1,19 +1,25 @@
 name: Build FAMILIA NOA Unified Android APK
 
 on:
-  workflow_dispatch:
   push:
     branches:
       - main
     paths:
       - android-emergency/**
       - .github/workflows/android-emergency.yml
+  workflow_dispatch:
+    inputs:
+      signed_release:
+        description: Build the permanent signed migration APK
+        required: true
+        type: boolean
+        default: false
 
 permissions:
   contents: read
 
 jobs:
-  build-apk:
+  verify-android:
     runs-on: ubuntu-latest
     steps:
       - name: Checkout
@@ -35,14 +41,77 @@ jobs:
         uses: gradle/actions/setup-gradle@v4
         with:
           gradle-version: '8.10.2'
-      - name: Build unified APK
+      - name: Verify unified Android build
         shell: bash
         run: |
           gradle --project-dir android-emergency :app:assembleDebug --stacktrace
-      - name: Upload APK
+
+  signed-release:
+    if: ${{ github.event_name == 'workflow_dispatch' && inputs.signed_release }}
+    runs-on: ubuntu-latest
+    needs: verify-android
+    env:
+      FAMILIA_NOA_ANDROID_KEYSTORE_PASSWORD: ${{ secrets.FAMILIA_NOA_ANDROID_KEYSTORE_PASSWORD }}
+    steps:
+      - name: Checkout
+        uses: actions/checkout@v5
+      - name: Java 17
+        uses: actions/setup-java@v5
+        with:
+          distribution: temurin
+          java-version: '17'
+      - name: Accept Android SDK licenses
+        shell: bash
+        run: |
+          yes | /usr/local/lib/android/sdk/cmdline-tools/latest/bin/sdkmanager --licenses >/dev/null || true
+      - name: Install Android SDK 35
+        shell: bash
+        run: |
+          /usr/local/lib/android/sdk/cmdline-tools/latest/bin/sdkmanager 'platforms;android-35' 'build-tools;35.0.0' 'platform-tools'
+      - name: Gradle 8.10.2
+        uses: gradle/actions/setup-gradle@v4
+        with:
+          gradle-version: '8.10.2'
+      - name: Verify permanent signing secrets
+        env:
+          KEYSTORE_BASE64: ${{ secrets.FAMILIA_NOA_ANDROID_KEYSTORE_BASE64 }}
+        shell: bash
+        run: |
+          test -n "$KEYSTORE_BASE64" || (echo "Missing FAMILIA_NOA_ANDROID_KEYSTORE_BASE64" && exit 1)
+          test -n "$FAMILIA_NOA_ANDROID_KEYSTORE_PASSWORD" || (echo "Missing FAMILIA_NOA_ANDROID_KEYSTORE_PASSWORD" && exit 1)
+      - name: Restore permanent signing key
+        env:
+          KEYSTORE_BASE64: ${{ secrets.FAMILIA_NOA_ANDROID_KEYSTORE_BASE64 }}
+        shell: bash
+        run: |
+          mkdir -p "$RUNNER_TEMP/familia-noa-signing"
+          printf '%s' "$KEYSTORE_BASE64" | base64 --decode > "$RUNNER_TEMP/familia-noa-signing/familia-noa-release.jks"
+          chmod 600 "$RUNNER_TEMP/familia-noa-signing/familia-noa-release.jks"
+          echo "FAMILIA_NOA_ANDROID_KEYSTORE_PATH=$RUNNER_TEMP/familia-noa-signing/familia-noa-release.jks" >> "$GITHUB_ENV"
+      - name: Verify signing certificate identity
+        shell: bash
+        run: |
+          EXPECTED="$(tr -d '\r\n ' < android-emergency/signing-certificate.sha256)"
+          ACTUAL="$(keytool -list -v             -keystore "$FAMILIA_NOA_ANDROID_KEYSTORE_PATH"             -storepass "$FAMILIA_NOA_ANDROID_KEYSTORE_PASSWORD"             -alias familia-noa | awk -F'SHA256: ' '/SHA256:/{print $2; exit}' | tr -d '\r\n ')"
+          test "$ACTUAL" = "$EXPECTED" || (echo "Signing certificate mismatch" && exit 1)
+          echo "Permanent signing certificate verified: $ACTUAL"
+      - name: Build permanent signed release
+        shell: bash
+        run: |
+          gradle --project-dir android-emergency :app:assembleRelease --stacktrace
+      - name: Verify signed APK
+        shell: bash
+        run: |
+          APK="android-emergency/app/build/outputs/apk/release/app-release.apk"
+          test -f "$APK"
+          /usr/local/lib/android/sdk/build-tools/35.0.0/apksigner verify --verbose --print-certs "$APK"
+          sha256sum "$APK" > "$APK.sha256"
+      - name: Upload permanent signed APK
         uses: actions/upload-artifact@v4
         with:
-          name: familia-noa-unified-apk
-          path: android-emergency/app/build/outputs/apk/debug/app-debug.apk
+          name: familia-noa-permanent-signed-apk
+          path: |
+            android-emergency/app/build/outputs/apk/release/app-release.apk
+            android-emergency/app/build/outputs/apk/release/app-release.apk.sha256
           if-no-files-found: error
-          retention-days: 1
+          retention-days: 14
