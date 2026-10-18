@@ -114,19 +114,14 @@ function ensurePanel(page:HTMLElement){
   if(gated)locationBox.insertAdjacentElement('afterend',shell)
   else locationBox.insertAdjacentElement('beforebegin',shell)
   shell.querySelector('[data-map-all]')?.addEventListener('click',()=>{
-    void(async()=>{
-      await refreshLocationState({force:true})
-      fitAll()
-    })()
+    fitAll()
+    void refreshLocationState({force:true})
   })
   shell.querySelector('[data-map-mine]')?.addEventListener('click',()=>{
-    void(async()=>{
-      const mine=currentLocations.find(item=>item.mine)
-      if(!mine)return
-      await refreshMemberLocation(mine.member_id)
-      const fresh=currentLocations.find(item=>item.member_id===mine.member_id)||mine
-      focus(fresh,true)
-    })()
+    const mine=currentLocations.find(item=>item.mine)
+    if(!mine)return
+    focus(mine,true)
+    void refreshMemberLocation(mine.member_id)
   })
   return shell
 }
@@ -211,12 +206,10 @@ function renderPeople(){
   root.innerHTML=currentLocations.map(item=>`<button type="button" class="family-map-chip${item.mine?' mine':''}" data-map-member="${esc(item.member_id)}"><span class="family-map-chip-avatar">${avatarMarkup(item)}</span><span>${esc(item.name)}${item.mine?' · tú':''}</span><small>${esc(age(item.updated_at))}</small></button>`).join('')
   bindAvatarFallback(root)
   root.querySelectorAll<HTMLButtonElement>('[data-map-member]').forEach(button=>button.addEventListener('click',()=>{
-    void(async()=>{
-      const memberId=button.dataset.mapMember||''
-      await refreshMemberLocation(memberId)
-      const item=currentLocations.find(location=>location.member_id===memberId)
-      if(item)focus(item,true)
-    })()
+    const memberId=button.dataset.mapMember||''
+    const item=currentLocations.find(location=>location.member_id===memberId)
+    if(item)focus(item,true)
+    void refreshMemberLocation(memberId)
   }))
 }
 
@@ -232,11 +225,8 @@ function renderMarkers(MapLibre:any){
     bindAvatarFallback(element)
     element.addEventListener('click',event=>{
       event.stopPropagation()
-      void(async()=>{
-        await refreshMemberLocation(item.member_id)
-        const fresh=currentLocations.find(location=>location.member_id===item.member_id)||item
-        focus(fresh,true)
-      })()
+      focus(item,true)
+      void refreshMemberLocation(item.member_id)
     })
     markers.push(new MapLibre.Marker({element,anchor:'bottom'}).setLngLat([item.longitude,item.latitude]).addTo(map))
   })
