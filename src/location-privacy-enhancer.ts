@@ -1,6 +1,6 @@
 import { getIdentity } from './core/identity'
 import { stopSharingOwnLocation, subscribeLocationState, type LocationState } from './core/location-store'
-import { stopOwnLocationRealtime } from './core/location-device-sync'
+import { hasNativeLocationCapability, isNativeLocationSharingEnabled, stopOwnLocationRealtime } from './core/location-device-sync'
 
 let latestState:LocationState|null=null
 let busy=false
@@ -104,7 +104,9 @@ function apply(){
   activePage=page
   if(!page||!latestState||!isOptionalLocationPage(page))return
 
-  const sharing=!!ownLocation(latestState)
+  const hasOwnLocation=!!ownLocation(latestState)
+  const nativeRequired=hasNativeLocationCapability()
+  const sharing=hasOwnLocation&&(!nativeRequired||isNativeLocationSharingEnabled())
   page.classList.toggle('location-sharing-active',sharing)
 
   if(sharing)ensureStopControl(page)
@@ -129,6 +131,8 @@ if(app){
   observer=new MutationObserver(scanPage)
   observer.observe(app,{childList:true})
 }
+
+window.addEventListener('familia-noa:native-location-state',apply)
 
 window.addEventListener('beforeunload',()=>{
   observer?.disconnect()
