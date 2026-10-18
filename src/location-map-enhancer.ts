@@ -24,6 +24,7 @@ let maplibrePromise:Promise<any>|null=null
 let map:any=null
 let markers:any[]=[]
 let activePopup:any=null
+let activePopupMemberId=''
 let currentLocations:MapLocation[]=[]
 let lastLocationSignature=''
 let lastMemberSignature=''
@@ -103,6 +104,7 @@ function destroyMap(){
   lastMemberSignature=''
   if(activePopup){try{activePopup.remove()}catch{}}
   activePopup=null
+  activePopupMemberId=''
   if(map){try{map.remove()}catch{}}
   map=null
 }
@@ -189,6 +191,19 @@ function fitAll(){
   map.fitBounds(bounds,{padding:{top:95,right:55,bottom:120,left:55},maxZoom:13.4,duration:900})
 }
 
+function popupHtml(item:MapLocation){
+  return `<b>${esc(item.name)}${item.mine?' · tú':''}</b><small>${esc(age(item.updated_at))}${Number.isFinite(item.accuracy)?` · ±${Math.round(item.accuracy as number)} m`:''}</small>`
+}
+
+function syncActivePopup(){
+  if(!map||!activePopup||!activePopupMemberId)return
+  const item=currentLocations.find(location=>location.member_id===activePopupMemberId)
+  if(!item)return
+  activePopup
+    .setLngLat([item.longitude,item.latitude])
+    .setHTML(popupHtml(item))
+}
+
 function focus(item:MapLocation,showPopup=false){
   if(!map)return
   map.flyTo({center:[item.longitude,item.latitude],zoom:17.4,pitch:70,bearing:-32,duration:1050,curve:1.38,essential:true,padding:{top:60,right:25,bottom:120,left:25}})
@@ -198,12 +213,14 @@ function focus(item:MapLocation,showPopup=false){
   if(showPopup){
     const MapLibre=(window as any).__familiaMapLibre
     if(MapLibre){
+      activePopupMemberId=item.member_id
       if(!activePopup){
         activePopup=new MapLibre.Popup({offset:36,className:'family-map-popup',closeButton:true})
+        activePopup.on('close',()=>{activePopupMemberId=''})
       }
       activePopup
         .setLngLat([item.longitude,item.latitude])
-        .setHTML(`<b>${esc(item.name)}${item.mine?' · tú':''}</b><small>${esc(age(item.updated_at))}${Number.isFinite(item.accuracy)?` · ±${Math.round(item.accuracy as number)} m`:''}</small>`)
+        .setHTML(popupHtml(item))
         .addTo(map)
     }
   }
@@ -333,6 +350,7 @@ async function applyState(state:LocationState){
       map.on('load',()=>{
         add3dBuildings(map)
         renderMarkers(MapLibre)
+        syncActivePopup()
         lastLocationSignature=signature
         lastMemberSignature=memberSignature
         fitAll()
@@ -343,6 +361,7 @@ async function applyState(state:LocationState){
     }
 
     renderMarkers(MapLibre)
+    syncActivePopup()
     lastLocationSignature=signature
     lastMemberSignature=memberSignature
     if(membersChanged)fitAll()
