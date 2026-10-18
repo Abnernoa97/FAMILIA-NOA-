@@ -23,6 +23,7 @@ type MapLocation={
 let maplibrePromise:Promise<any>|null=null
 let map:any=null
 let markers:any[]=[]
+let activePopup:any=null
 let currentLocations:MapLocation[]=[]
 let lastLocationSignature=''
 let lastMemberSignature=''
@@ -100,6 +101,8 @@ function destroyMap(){
   currentLocations=[]
   lastLocationSignature=''
   lastMemberSignature=''
+  if(activePopup){try{activePopup.remove()}catch{}}
+  activePopup=null
   if(map){try{map.remove()}catch{}}
   map=null
 }
@@ -195,7 +198,10 @@ function focus(item:MapLocation,showPopup=false){
   if(showPopup){
     const MapLibre=(window as any).__familiaMapLibre
     if(MapLibre){
-      new MapLibre.Popup({offset:36,className:'family-map-popup',closeButton:true})
+      if(!activePopup){
+        activePopup=new MapLibre.Popup({offset:36,className:'family-map-popup',closeButton:true})
+      }
+      activePopup
         .setLngLat([item.longitude,item.latitude])
         .setHTML(`<b>${esc(item.name)}${item.mine?' · tú':''}</b><small>${esc(age(item.updated_at))}${Number.isFinite(item.accuracy)?` · ±${Math.round(item.accuracy as number)} m`:''}</small>`)
         .addTo(map)
