@@ -16,9 +16,6 @@ class SessionStore(context: Context) {
     val activeAlertMemberId: String get() = prefs.getString("active_alert_member_id", "") ?: ""
     val activeAlertMessage: String get() = prefs.getString("active_alert_message", "") ?: ""
     val activeAlertCreatedAt: String get() = prefs.getString("active_alert_created_at", "") ?: ""
-    val liveLocationActive: Boolean get() = prefs.getBoolean("live_location_active", false)
-    val liveLocationStartedAt: Long get() = prefs.getLong("live_location_started_at", 0L)
-    val liveLocationEndsAt: Long get() = prefs.getLong("live_location_ends_at", 0L)
 
     fun saveSession(memberId:String, memberName:String, accessToken:String, refreshToken:String, expiresAt:Long) {
         prefs.edit()
@@ -62,28 +59,6 @@ class SessionStore(context: Context) {
             .remove("active_alert_message")
             .remove("active_alert_created_at")
             .apply()
-    }
-
-    fun setLiveLocationSession(startedAt:Long, endsAt:Long) {
-        prefs.edit()
-            .putBoolean("live_location_active", true)
-            .putLong("live_location_started_at", startedAt)
-            .putLong("live_location_ends_at", endsAt)
-            .apply()
-    }
-
-    fun clearLiveLocationSession() {
-        prefs.edit()
-            .putBoolean("live_location_active", false)
-            .remove("live_location_started_at")
-            .remove("live_location_ends_at")
-            .apply()
-    }
-
-    fun liveLocationRemainingMs(now:Long = System.currentTimeMillis()):Long {
-        if (!liveLocationActive) return 0L
-        if (liveLocationEndsAt <= 0L) return Long.MAX_VALUE
-        return (liveLocationEndsAt - now).coerceAtLeast(0L)
     }
 
     fun clearAll() = prefs.edit().clear().apply()
