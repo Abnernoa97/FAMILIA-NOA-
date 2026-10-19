@@ -395,7 +395,7 @@ function fitAll(){
   if(!MapLibre)return
   const bounds=new MapLibre.LngLatBounds()
   currentLocations.forEach(item=>bounds.extend([item.longitude,item.latitude]))
-  map.fitBounds(bounds,{padding:{top:95,right:55,bottom:120,left:55},maxZoom:13.4,duration:900})
+  map.fitBounds(bounds,{padding:{top:95,right:55,bottom:activeCardMemberId?235:120,left:55},maxZoom:13.4,duration:prefersReducedMotion?0:900})
 }
 
 function popupHtml(item:MapLocation){
@@ -593,8 +593,8 @@ async function applyState(state:LocationState){
         style:MAP_STYLE,
         center:[mine.longitude,mine.latitude],
         zoom:locations.length===1?16:10.5,
-        pitch:60,
-        bearing:-24,
+        pitch:scene.threeD?66:0,
+        bearing:scene.threeD?-28:0,
         maxPitch:80,
         attributionControl:false,
         canvasContextAttributes:{antialias:true},
@@ -617,7 +617,15 @@ async function applyState(state:LocationState){
         fitAll()
         hideOverlay(shell)
       })
-      map.on('error',(event:any)=>console.warn('Family map resource error',event?.error||event))
+      map.on('error',(event:any)=>{
+         if(event?.sourceId==='familia-cinematic-dem'){
+           terrainUnavailable=true
+           try{map?.setTerrain(null)}catch{}
+           console.warn('Optional terrain unavailable; 3D city remains active',event?.error||event)
+           return
+         }
+         console.warn('Family map resource error',event?.error||event)
+       })
       return
     }
 
