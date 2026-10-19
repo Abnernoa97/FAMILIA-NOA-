@@ -166,6 +166,40 @@ export function startOwnLocationRealtime(memberId=getMemberId(),activateNative=t
   startWebWatch()
 }
 
+/**
+ * Activate the existing Android foreground location owner before attempting
+ * WebView geolocation. The bridge's start response only queues a service action,
+ * so confirm the persisted native state instead of treating it as success.
+ */
+export async function activateNativeLocationSharing(memberId=getMemberId()):Promise<boolean>{
+  const bridge=nativeBridge()
+  if(!bridge||!memberId)return false
+
+  startOwnLocationRealtime(memberId,true)
+  let stableChecks=0
+  for(let attempt=0;attempt<16;attempt++){
+    if(activeMemberId!==memberId)return false
+    if(nativeSharingEnabled(bridge)){
+      stableChecks++
+      if(stableChecks>=2){
+        stopWebWatch()
+        publishNativeLocationState()
+        try{
+          if(bridge.refreshLocationSharing?.()===false)return false
+        }catch(error){
+          console.warn('Native family location refresh failed',error)
+          return false
+        }
+        return true
+      }
+    }else{
+      stableChecks=0
+    }
+    await new Promise<void>(resolve=>window.setTimeout(resolve,200))
+  }
+  return false
+}
+
 export function ensureOwnLocationRealtime(){
   const memberId=getMemberId()
   if(!memberId)return
@@ -173,6 +207,9 @@ export function ensureOwnLocationRealtime(){
   if(!sharing)return
 
   if(useNativeIfAlreadyEnabled(memberId))return
+  // A stale database row must not enable this Android phone's GPS without
+  // the member explicitly choosing to share on this device.
+  if(nativeBridge()&&activeMemberId!==memberId)return
   startOwnLocationRealtime(memberId,false)
 }
 
