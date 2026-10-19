@@ -46,6 +46,7 @@ let activePopup:any=null
 let activePopupMemberId=''
 let activeCardMemberId=''
 let currentLocations:MapLocation[]=[]
+let lastAvatarPaths=''
 let lastLocationSignature=''
 let activePage:Element|null=null
 let pageObserver:MutationObserver|null=null
@@ -134,6 +135,7 @@ function ensureAssets(){
 function loadMapLibre(){
   ensureAssets()
   if(!maplibrePromise)maplibrePromise=import(/* @vite-ignore */ MAPLIBRE_JS)
+    .catch(error=>{maplibrePromise=null;throw error})
   return maplibrePromise
 }
 
@@ -151,6 +153,7 @@ function destroyMap(){
   resizeObserver=null
   clearMarkers()
   currentLocations=[]
+  lastAvatarPaths=''
   lastLocationSignature=''
   if(activePopup){try{activePopup.remove()}catch{}}
   activePopup=null
@@ -218,12 +221,11 @@ function ensurePanel(page:HTMLElement){
   return shell
 }
 
-async function locationsFromState(state:LocationState):Promise<MapLocation[]>{
+function locationsFromState(state:LocationState):MapLocation[]{
   const me=getMemberId()
   const names=new Map(state.members.map(member=>[member.id,member.name]))
   const profileMap=new Map(state.profiles.map(profile=>[profile.member_id,profile.avatar_path]))
-  const paths=state.locations.map(row=>profileMap.get(row.member_id)||null)
-  await primeMedia(paths)
+  // Never wait for private-photo authorization to place a family's coordinates.
   return state.locations.map(row=>{
     const avatarPath=profileMap.get(row.member_id)||null
     return {
@@ -234,6 +236,28 @@ async function locationsFromState(state:LocationState):Promise<MapLocation[]>{
       avatarUrl:mediaUrl(avatarPath),
     }
   })
+}
+
+function hydrateAvatars(locations:MapLocation[]){
+  const paths=Array.from(new Set(locations.map(item=>item.avatarPath).filter((x):x is string=>!!x))).sort()
+  const key=paths.join('|')
+  if(!key||key===lastAvatarPaths)return
+  lastAvatarPaths=key
+  void primeMedia(paths).then(()=>{
+    if(lastAvatarPaths!==key)return
+    let changed=false
+    currentLocations=currentLocations.map(item=>{
+      const url=mediaUrl(item.avatarPath)
+      if(!url||url===item.avatarUrl)return item
+      changed=true
+      return {...item,avatarUrl:url}
+    })
+    if(changed&&map&&sceneLoaded){
+      const MapLibre=(window as any).__familiaMapLibre
+      if(MapLibre)renderMarkers(MapLibre)
+      syncActivePopup()
+    }
+  }).catch(error=>console.warn('Family avatar loading unavailable',error))
 }
 
 function add3dBuildings(instance:any){
@@ -698,7 +722,7 @@ async function applyState(state:LocationState){
     return
   }
 
-  const locations=await locationsFromState(state)
+  const locations=locationsFromState(state)
   if(run!==generation||!document.contains(shell))return
   const signature=locations
     .map(item=>[item.member_id,item.latitude.toFixed(6),item.longitude.toFixed(6),item.updated_at,item.avatarPath||''].join(':'))
@@ -706,6 +730,7 @@ async function applyState(state:LocationState){
     .join('|')
   const changed=signature!==lastLocationSignature
   currentLocations=locations
+  hydrateAvatars(locations)
 
   if(!locations.length){
     lastLocationSignature=''
@@ -800,6 +825,8 @@ window.addEventListener('familia-noa:focus-location',handleFocusEvent as EventLi
 
 function attachPage(page:HTMLElement){
   ensurePanel(page)
+  // Load the map engine while Supabase data is fetched (never after photo signing).
+  void loadMapLibre().catch(error=>console.warn('Map engine preloading failed',error))
   stateUnsubscribe?.()
   stateUnsubscribe=subscribeLocationState(state=>{void applyState(state)})
   const state=getLocationState()
