@@ -47,7 +47,6 @@ let activePopupMemberId=''
 let activeCardMemberId=''
 let currentLocations:MapLocation[]=[]
 let lastLocationSignature=''
-let lastMemberSignature=''
 let activePage:Element|null=null
 let pageObserver:MutationObserver|null=null
 let stateUnsubscribe:(()=>void)|null=null
@@ -153,7 +152,6 @@ function destroyMap(){
   clearMarkers()
   currentLocations=[]
   lastLocationSignature=''
-  lastMemberSignature=''
   if(activePopup){try{activePopup.remove()}catch{}}
   activePopup=null
   activePopupMemberId=''
@@ -189,7 +187,7 @@ function ensurePanel(page:HTMLElement){
     rememberScene()
     applyCinematicScene(map)
     updateSceneButtons()
-    if(map)map.easeTo({pitch:scene.threeD?66:0,bearing:scene.threeD?-28:0,duration:prefersReducedMotion?0:600})
+    if(map)map.easeTo({pitch:scene.threeD?52:0,bearing:scene.threeD?-24:0,duration:prefersReducedMotion?0:600})
   })
   shell.querySelector<HTMLButtonElement>('[data-map-night]')?.addEventListener('click',()=>{
     scene.night=!scene.night
@@ -388,18 +386,68 @@ function addCinematicStreets(instance:any){
   }catch(error){console.warn('Cinematic street accents unavailable',error)}
 }
 
+function distanceKm(a:MapLocation,b:MapLocation){
+  const rad=Math.PI/180
+  const dLat=(b.latitude-a.latitude)*rad
+  const dLng=(b.longitude-a.longitude)*rad
+  const h=Math.sin(dLat/2)**2+
+    Math.cos(a.latitude*rad)*Math.cos(b.latitude*rad)*Math.sin(dLng/2)**2
+  return 12742*Math.atan2(Math.sqrt(h),Math.sqrt(Math.max(0,1-h)))
+}
+
+/** The default camera shows a real family member, not empty space between cities. */
+function showFamilyOnOpen(){
+  if(!map||!currentLocations.length)return
+  const mine=currentLocations.find(item=>item.mine)
+  const freshest=[...currentLocations].sort((a,b)=>Date.parse(b.updated_at)-Date.parse(a.updated_at))[0]
+  const item=mine||freshest
+  const title=document.querySelector<HTMLElement>('[data-map-title]')
+  if(title)title.textContent='Tu familia en vivo'
+  map.flyTo({
+    center:[item.longitude,item.latitude],
+    zoom:scene.threeD?16.5:16,
+    pitch:scene.threeD?52:0,
+    bearing:scene.threeD?-24:0,
+    duration:prefersReducedMotion?0:900,
+    essential:true,
+    padding:{top:95,right:40,bottom:150,left:40},
+  })
+}
+
+/** 'Todos' is a deliberate overview; wide distances should never show a tilted horizon. */
 function fitAll(){
   if(!map||!currentLocations.length)return
   if(currentLocations.length===1){
     const item=currentLocations[0]
-    map.flyTo({center:[item.longitude,item.latitude],zoom:16.4,pitch:scene.threeD?66:0,bearing:scene.threeD?-28:0,duration:prefersReducedMotion?0:900,curve:1.28,essential:true,padding:{top:50,right:25,bottom:activeCardMemberId?230:105,left:25}})
+    map.flyTo({
+      center:[item.longitude,item.latitude],
+      zoom:16.5,pitch:scene.threeD?52:0,bearing:scene.threeD?-24:0,
+      duration:prefersReducedMotion?0:850,
+      essential:true,
+      padding:{top:90,right:30,bottom:activeCardMemberId?230:125,left:30},
+    })
     return
   }
   const MapLibre=(window as any).__familiaMapLibre
   if(!MapLibre)return
   const bounds=new MapLibre.LngLatBounds()
   currentLocations.forEach(item=>bounds.extend([item.longitude,item.latitude]))
-  map.fitBounds(bounds,{padding:{top:95,right:55,bottom:activeCardMemberId?235:120,left:55},maxZoom:13.4,duration:prefersReducedMotion?0:900})
+  let spreadKm=0
+  for(let i=0;i<currentLocations.length;i++){
+    for(let j=i+1;j<currentLocations.length;j++){
+      spreadKm=Math.max(spreadKm,distanceKm(currentLocations[i],currentLocations[j]))
+    }
+  }
+  // A steep camera clips distant markers behind the horizon. Keep 3D only locally.
+  const pitch=!scene.threeD?0:spreadKm>5?0:spreadKm>1?25:43
+  const bearing=scene.threeD&&spreadKm<=1?-16:0
+  map.fitBounds(bounds,{
+    padding:{top:110,right:52,bottom:activeCardMemberId?235:140,left:52},
+    maxZoom:spreadKm<=1?16:13.7,
+    pitch,bearing,
+    duration:prefersReducedMotion?0:1000,
+    essential:true,
+  })
 }
 
 function popupHtml(item:MapLocation){
@@ -466,7 +514,7 @@ function syncActivePopup(){
 
 function focus(item:MapLocation,showPopup=false){
   if(!map)return
-  map.flyTo({center:[item.longitude,item.latitude],zoom:17.4,pitch:scene.threeD?70:0,bearing:scene.threeD?-32:0,duration:prefersReducedMotion?0:1050,curve:1.38,essential:true,padding:{top:65,right:25,bottom:showPopup?245:cardExpanded?245:130,left:25}})
+  map.flyTo({center:[item.longitude,item.latitude],zoom:16.9,pitch:scene.threeD?54:0,bearing:scene.threeD?-24:0,duration:prefersReducedMotion?0:1050,curve:1.38,essential:true,padding:{top:65,right:25,bottom:showPopup?245:cardExpanded?245:130,left:25}})
   const title=document.querySelector<HTMLElement>('[data-map-title]')
   if(title)title.textContent=item.mine?'Tu ubicación':item.name
   document.querySelectorAll<HTMLElement>('.family-map-chip').forEach(chip=>chip.classList.toggle('selected',chip.dataset.mapMember===item.member_id))
@@ -590,14 +638,11 @@ async function applyState(state:LocationState){
     .map(item=>[item.member_id,item.latitude.toFixed(6),item.longitude.toFixed(6),item.updated_at,item.avatarPath||''].join(':'))
     .sort()
     .join('|')
-  const memberSignature=locations.map(item=>item.member_id).sort().join('|')
   const changed=signature!==lastLocationSignature
-  const membersChanged=memberSignature!==lastMemberSignature
   currentLocations=locations
 
   if(!locations.length){
     lastLocationSignature=''
-    lastMemberSignature=''
     clearMarkers()
     closeDetailsCard()
     showOverlay(shell,'empty')
@@ -626,9 +671,9 @@ async function applyState(state:LocationState){
         container:shell.querySelector<HTMLElement>('[data-family-map-canvas]')!,
         style:MAP_STYLE,
         center:[mine.longitude,mine.latitude],
-        zoom:locations.length===1?16:10.5,
-        pitch:scene.threeD?66:0,
-        bearing:scene.threeD?-28:0,
+        zoom:16,
+        pitch:scene.threeD?50:0,
+        bearing:scene.threeD?-24:0,
         maxPitch:80,
         attributionControl:false,
         canvasContextAttributes:{antialias:true},
@@ -650,8 +695,7 @@ async function applyState(state:LocationState){
         lastLocationSignature=currentLocations
           .map(item=>[item.member_id,item.latitude.toFixed(6),item.longitude.toFixed(6),item.updated_at,item.avatarPath||''].join(':'))
           .sort().join('|')
-        lastMemberSignature=currentLocations.map(item=>item.member_id).sort().join('|')
-        fitAll()
+        showFamilyOnOpen()
         hideOverlay(shell)
       })
       map.on('error',(event:any)=>{
@@ -669,8 +713,7 @@ async function applyState(state:LocationState){
     renderMarkers(MapLibre)
     syncActivePopup()
     lastLocationSignature=signature
-    lastMemberSignature=memberSignature
-    if(membersChanged)fitAll()
+    // Update membership without moving a map that the user is exploring.
     hideOverlay(shell)
     setTimeout(()=>{try{map.resize()}catch{}},40)
   }catch(error){
