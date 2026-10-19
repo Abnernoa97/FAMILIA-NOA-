@@ -24,6 +24,8 @@ let maplibrePromise:Promise<any>|null=null
 let map:any=null
 let markers=new Map<string,any>()
 let mapLoaded=false
+let selectedMemberId:string|null=null
+let focusGeneration=0
 let activePopup:any=null
 let activePopupMemberId=''
 let currentLocations:MapLocation[]=[]
@@ -73,8 +75,8 @@ function ensureAssets(){
   style.textContent=`
   .family-map-shell{position:relative;height:min(62dvh,560px);min-height:420px;margin:14px 16px 18px;border-radius:32px;overflow:hidden;background:#ddd8ce;border:1px solid rgba(218,211,198,.9);box-shadow:0 22px 56px rgba(35,31,25,.14);isolation:isolate}.family-map-canvas{position:absolute;inset:0}.family-map-canvas .maplibregl-canvas{outline:none}.family-map-shell::after{content:"";position:absolute;inset:0;pointer-events:none;background:linear-gradient(180deg,rgba(12,12,12,.16),transparent 28%,transparent 62%,rgba(12,12,12,.42));z-index:2}
   .family-map-head{position:absolute;left:14px;right:14px;top:14px;z-index:4;display:flex;align-items:flex-start;justify-content:space-between;gap:10px;pointer-events:none}.family-map-head>div{padding:10px 13px;border-radius:18px;background:rgba(250,248,242,.92);backdrop-filter:blur(18px);-webkit-backdrop-filter:blur(18px);box-shadow:0 6px 22px #0001}.family-map-head small{display:block;font-size:8.5px;letter-spacing:.16em;font-weight:800;color:#77736b}.family-map-head b{display:block;margin-top:2px;font:500 19px var(--display-font,Georgia,serif);color:#171716}.family-map-actions{display:flex;gap:7px;pointer-events:auto}.family-map-all,.family-map-mine{height:42px;padding:0 14px;border:0;border-radius:21px;font-weight:750;font-size:11px;backdrop-filter:blur(16px);-webkit-backdrop-filter:blur(16px);box-shadow:0 6px 18px #0002}.family-map-all{background:rgba(23,23,22,.92);color:#fff}.family-map-mine{background:rgba(250,248,242,.92);color:#171716}
-  .family-map-people{position:absolute;z-index:4;left:10px;right:10px;bottom:10px;display:flex;gap:7px;overflow-x:auto;padding:2px 2px max(2px,env(safe-area-inset-bottom));scrollbar-width:none}.family-map-people::-webkit-scrollbar{display:none}.family-map-chip{flex:0 0 auto;display:grid;grid-template-columns:31px auto;grid-template-rows:auto auto;column-gap:8px;align-items:center;min-height:48px;padding:5px 12px 5px 6px;border:1px solid rgba(255,255,255,.45);border-radius:25px;background:rgba(250,248,242,.94);color:#171716;font-size:11.5px;font-weight:750;text-align:left;box-shadow:0 6px 20px #0002;backdrop-filter:blur(18px);-webkit-backdrop-filter:blur(18px)}.family-map-chip small{grid-column:2;display:block;margin-top:-1px;color:#807b73;font-size:8.5px;font-weight:650}.family-map-chip-avatar{grid-row:1/3;width:31px;height:31px;flex:0 0 31px;border-radius:50%;overflow:hidden;display:grid;place-items:center;background:#e8e1d4;font-size:11px}.family-map-chip-avatar img{width:100%;height:100%;object-fit:cover;display:block}.family-map-chip.mine{background:rgba(23,23,22,.94);color:#fff;border-color:rgba(23,23,22,.92)}.family-map-chip.mine small{color:#bdb8af}.family-map-chip.mine .family-map-chip-avatar{background:#fff;color:#171716}
-  .family-map-marker{position:relative;display:flex;flex-direction:column;align-items:center;filter:drop-shadow(0 5px 10px rgba(0,0,0,.28));cursor:pointer;border:0;background:transparent;padding:0}.family-map-marker-dot{position:relative;width:48px;height:48px;border:3px solid #fff;border-radius:50%;overflow:hidden;display:grid;place-items:center;background:#4c367f;color:#fff;font-weight:800;font-size:13px;box-shadow:0 4px 15px rgba(0,0,0,.22)}.family-map-marker.fresh .family-map-marker-dot::before{content:"";position:absolute;inset:-9px;border:2px solid rgba(73,157,105,.4);border-radius:50%;animation:familyLocationPulse 2s ease-out infinite;pointer-events:none}@keyframes familyLocationPulse{0%{transform:scale(.72);opacity:.85}100%{transform:scale(1.35);opacity:0}}.family-map-marker-dot img{width:100%;height:100%;object-fit:cover;display:block}.family-map-marker.mine .family-map-marker-dot{background:#171716}.family-map-marker::after{content:"";width:3px;height:12px;border-radius:3px;background:#fff;margin-top:-1px}.family-map-marker-label{margin-top:3px;padding:4px 7px;border-radius:9px;background:rgba(23,23,22,.86);color:#fff;font-size:9px;font-weight:700;white-space:nowrap}
+  .family-map-people{position:absolute;z-index:4;left:10px;right:10px;bottom:10px;display:flex;gap:7px;overflow-x:auto;padding:2px 2px max(2px,env(safe-area-inset-bottom));scrollbar-width:none}.family-map-people::-webkit-scrollbar{display:none}.family-map-chip{flex:0 0 auto;display:grid;grid-template-columns:31px auto;grid-template-rows:auto auto;column-gap:8px;align-items:center;min-height:48px;padding:5px 12px 5px 6px;border:1px solid rgba(255,255,255,.45);border-radius:25px;background:rgba(250,248,242,.94);color:#171716;font-size:11.5px;font-weight:750;text-align:left;box-shadow:0 6px 20px #0002;backdrop-filter:blur(18px);-webkit-backdrop-filter:blur(18px)}.family-map-chip small{grid-column:2;display:block;margin-top:-1px;color:#807b73;font-size:8.5px;font-weight:650}.family-map-chip-avatar{grid-row:1/3;width:31px;height:31px;flex:0 0 31px;border-radius:50%;overflow:hidden;display:grid;place-items:center;background:#e8e1d4;font-size:11px}.family-map-chip-avatar img{width:100%;height:100%;object-fit:cover;display:block}.family-map-chip.selected{background:rgba(23,23,22,.94);color:#fff;border-color:rgba(23,23,22,.92)}.family-map-chip.selected small{color:#bdb8af}.family-map-chip.selected .family-map-chip-avatar{background:#fff;color:#171716}
+  .family-map-marker{transition:none!important;position:relative;display:flex;flex-direction:column;align-items:center;filter:drop-shadow(0 5px 10px rgba(0,0,0,.28));cursor:pointer;border:0;background:transparent;padding:0}.family-map-marker-dot{position:relative;width:48px;height:48px;border:3px solid #fff;border-radius:50%;overflow:hidden;display:grid;place-items:center;background:#4c367f;color:#fff;font-weight:800;font-size:13px;box-shadow:0 4px 15px rgba(0,0,0,.22)}.family-map-marker.fresh .family-map-marker-dot::before{content:"";position:absolute;inset:-9px;border:2px solid rgba(73,157,105,.4);border-radius:50%;animation:familyLocationPulse 2s ease-out infinite;pointer-events:none}@keyframes familyLocationPulse{0%{transform:scale(.72);opacity:.85}100%{transform:scale(1.35);opacity:0}}.family-map-marker-dot img{width:100%;height:100%;object-fit:cover;display:block}.family-map-marker.mine .family-map-marker-dot{background:#171716}.family-map-marker::after{content:"";width:3px;height:12px;border-radius:3px;background:#fff;margin-top:-1px}.family-map-marker-label{margin-top:3px;padding:4px 7px;border-radius:9px;background:rgba(23,23,22,.86);color:#fff;font-size:9px;font-weight:700;white-space:nowrap}
   .family-map-loading{position:absolute;top:47%;left:50%;transform:translate(-50%,-50%);width:max-content;max-width:80%;z-index:3;padding:12px 17px;text-align:center;border:1px solid #ffffffa9;border-radius:18px;background:rgba(250,248,242,.94);color:#5f5a52;font-size:12px;pointer-events:none;box-shadow:0 8px 22px #0001}.family-map-error{position:absolute;inset:0;z-index:6;display:grid;place-items:center;padding:30px;text-align:center;background:linear-gradient(145deg,#d9d3c7,#f2eee6);color:#5f5a52;font-size:13px}.family-map-error b{display:block;color:#171716;font:500 22px var(--display-font,Georgia,serif);margin-bottom:7px}.family-map-loading[hidden],.family-map-error[hidden],[data-map-loading][hidden]{display:none!important}.family-map-popup .maplibregl-popup-content{border-radius:16px;padding:12px 14px;box-shadow:0 12px 34px #0003;font-family:system-ui,sans-serif}.family-map-popup b{display:block;font-size:13px}.family-map-popup small{display:block;margin-top:3px;color:#77736b}.family-map-popup .maplibregl-popup-close-button{font-size:18px;padding:2px 7px}.family-map-shell .maplibregl-ctrl-attrib{font-size:9px;background:rgba(255,255,255,.75)}.family-map-shell .maplibregl-ctrl-group{border-radius:14px;overflow:hidden;box-shadow:0 5px 18px #0002}
   @media(max-width:480px){.family-map-shell{height:55dvh;min-height:410px;margin:10px 12px 16px;border-radius:28px}.family-map-head{left:10px;right:10px;top:10px}.family-map-head>div{padding:9px 11px}.family-map-head b{font-size:17px}.family-map-all,.family-map-mine{height:39px;padding:0 12px}.family-map-people{bottom:9px;left:7px;right:7px}.family-map-marker-label{display:none}}
   `
@@ -97,6 +99,8 @@ function clearMarkers(){
 function destroyMap(){
   generation++
   mapLoaded=false
+  selectedMemberId=null
+  focusGeneration++
   resizeObserver?.disconnect()
   resizeObserver=null
   clearMarkers()
@@ -122,6 +126,9 @@ function ensurePanel(page:HTMLElement){
   if(gated)locationBox.insertAdjacentElement('afterend',shell)
   else locationBox.insertAdjacentElement('beforebegin',shell)
   shell.querySelector('[data-map-all]')?.addEventListener('click',()=>{
+    selectedMemberId=''
+    focusGeneration++
+    updateChipSelection()
     fitAll()
     void refreshLocationState({force:true})
   })
@@ -192,6 +199,33 @@ function add3dBuildings(instance:any){
   }
 }
 
+function syncMarkerViewport(){
+  if(!map||!mapLoaded)return
+  const canvas=map.getCanvas()
+  const width=canvas?.clientWidth||0
+  const height=canvas?.clientHeight||0
+  if(!width||!height)return
+  for(const [memberId,marker] of markers){
+    const item=currentLocations.find(row=>row.member_id===memberId)
+    const element=marker.getElement() as HTMLElement
+    if(!item){element.style.visibility='hidden';continue}
+    const pixel=map.project([item.longitude,item.latitude])
+    // DOM markers outside the current rendered viewport must never flash near
+    // the selected family member during camera jumps.
+    const visible=Number.isFinite(pixel.x)&&Number.isFinite(pixel.y)&&
+      pixel.x>=-40&&pixel.x<=width+40&&pixel.y>=-72&&pixel.y<=height+40
+    element.style.visibility=visible?'visible':'hidden'
+  }
+}
+
+function updateChipSelection(){
+  document.querySelectorAll<HTMLButtonElement>('[data-map-member]').forEach(button=>{
+    const selected=button.dataset.mapMember===selectedMemberId
+    button.classList.toggle('selected',selected)
+    button.setAttribute('aria-pressed',String(selected))
+  })
+}
+
 function fitAll(){
   if(!map||!currentLocations.length)return
   if(currentLocations.length===1){
@@ -221,9 +255,12 @@ function syncActivePopup(){
 
 function focus(item:MapLocation,showPopup=false){
   if(!map)return
-  // Changing family member is a selection, not a geographic camera flight.
-  // flyTo() zoomed out and back in, making all markers seem to rush toward
-  // the selected person and return despite their fixed GPS coordinates.
+  selectedMemberId=item.member_id
+  updateChipSelection()
+  // Hide stale DOM projections until MapLibre has rendered the new camera.
+  // Otherwise markers outside the view can flash beside the selected person.
+  const token=++focusGeneration
+  markers.forEach(marker=>{(marker.getElement() as HTMLElement).style.visibility='hidden'})
   map.stop()
   map.jumpTo({
     center:[item.longitude,item.latitude],
@@ -232,9 +269,15 @@ function focus(item:MapLocation,showPopup=false){
     bearing:-24,
     padding:{top:60,right:25,bottom:120,left:25},
   })
+  const reveal=()=>{
+    if(token!==focusGeneration||!map)return
+    syncMarkerViewport()
+  }
+  map.once('render',reveal)
+  // The render event can be absent when the map was already fully painted.
+  window.setTimeout(reveal,120)
   const title=document.querySelector<HTMLElement>('[data-map-title]')
   if(title)title.textContent=item.mine?'Tu ubicación':item.name
-  document.querySelectorAll<HTMLElement>('.family-map-chip').forEach(chip=>chip.classList.toggle('selected',chip.dataset.mapMember===item.member_id))
   if(showPopup){
     const MapLibre=(window as any).__familiaMapLibre
     if(MapLibre){
@@ -254,7 +297,10 @@ function focus(item:MapLocation,showPopup=false){
 function renderPeople(){
   const root=document.querySelector<HTMLElement>('[data-map-people]')
   if(!root)return
-  root.innerHTML=currentLocations.map(item=>`<button type="button" class="family-map-chip${item.mine?' mine':''}" data-map-member="${esc(item.member_id)}"><span class="family-map-chip-avatar">${avatarMarkup(item)}</span><span>${esc(item.name)}${item.mine?' · tú':''}</span><small>${esc(age(item.updated_at))}</small></button>`).join('')
+  if(selectedMemberId===null&&currentLocations.some(item=>item.mine)){
+    selectedMemberId=currentLocations.find(item=>item.mine)?.member_id||''
+  }
+  root.innerHTML=currentLocations.map(item=>`<button type="button" class="family-map-chip${item.member_id===selectedMemberId?' selected':''}" aria-pressed="${item.member_id===selectedMemberId}" data-map-member="${esc(item.member_id)}"><span class="family-map-chip-avatar">${avatarMarkup(item)}</span><span>${esc(item.name)}${item.mine?' · tú':''}</span><small>${esc(age(item.updated_at))}</small></button>`).join('')
   bindAvatarFallback(root)
   root.querySelectorAll<HTMLButtonElement>('[data-map-member]').forEach(button=>button.addEventListener('click',()=>{
     const memberId=button.dataset.mapMember||''
@@ -310,6 +356,7 @@ function renderMarkers(MapLibre:any){
     }
   }
   renderPeople()
+  syncMarkerViewport()
 }
 
 function showOverlay(shell:HTMLElement,kind:'loading'|'empty'|'error'){
@@ -408,6 +455,9 @@ async function applyState(state:LocationState){
         mapLoaded=true
         add3dBuildings(instance)
         renderMarkers(MapLibre)
+        // Update visibility only once the new MapLibre camera has rendered.
+        instance.on('moveend',syncMarkerViewport)
+        instance.on('resize',syncMarkerViewport)
         syncActivePopup()
         lastLocationSignature=currentLocations
           .map(item=>[item.member_id,item.latitude.toFixed(6),item.longitude.toFixed(6),item.updated_at,item.avatarPath||''].join(':'))
