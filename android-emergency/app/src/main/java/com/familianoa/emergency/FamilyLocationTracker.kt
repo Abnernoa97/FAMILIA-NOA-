@@ -25,7 +25,7 @@ class FamilyLocationTracker(
         private const val MIN_UPDATE_MS = 10_000L
         private const val MAX_SILENCE_MS = 20_000L
         private const val HEARTBEAT_MS = 30_000L
-        private const val MAX_LAST_KNOWN_AGE_MS = 60_000L
+        private const val MAX_LAST_KNOWN_AGE_MS = 20_000L
         private const val MIN_DISTANCE_M = 2.5f
     }
 
