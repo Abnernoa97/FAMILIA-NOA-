@@ -238,7 +238,9 @@ async function locationsFromState(state:LocationState):Promise<MapLocation[]>{
 
 function add3dBuildings(instance:any){
   try{
-    if(!instance.getSource('familia-openfreemap'))instance.addSource('familia-openfreemap',{type:'vector',url:VECTOR_SOURCE})
+    if(!instance.getSource('familia-openfreemap')){
+      instance.addSource('familia-openfreemap',{type:'vector',url:VECTOR_SOURCE})
+    }
     if(instance.getLayer('familia-buildings-3d'))return
     const layers=instance.getStyle()?.layers||[]
     const firstLabel=layers.find((layer:any)=>layer.type==='symbol'&&layer.layout?.['text-field'])?.id
@@ -250,10 +252,14 @@ function add3dBuildings(instance:any){
       minzoom:12.5,
       filter:['!=',['get','hide_3d'],true],
       paint:{
-        'fill-extrusion-color':['interpolate',['linear'],['coalesce',['get','render_height'],0],0,'#d8d2c7',80,'#bdb5a8',220,'#968d80'],
+        // The source provides real OSM footprints and available building heights.
+        // Side gradients plus directional MapLibre light add material-like depth
+        // without textures, paid imagery or additional geometry.
+        'fill-extrusion-color':'#d9c6a9',
         'fill-extrusion-height':['coalesce',['get','render_height'],['get','height'],7],
         'fill-extrusion-base':['coalesce',['get','render_min_height'],0],
-        'fill-extrusion-opacity':0.82,
+        'fill-extrusion-opacity':0.96,
+        'fill-extrusion-vertical-gradient':true,
       },
     },firstLabel)
   }catch(error){
@@ -282,69 +288,100 @@ function applyCinematicScene(instance:any){
   // isStyleLoaded() would suppress cinematic colors during routine source loads.
   if(!instance||!sceneLoaded)return
   const night=scene.night
+  // Restrained natural palette: water, greenery and street hierarchy remain
+  // legible. We keep unknown Liberty style layers unchanged.
   const palette=night?{
-    ground:'#1e3035',water:'#17465b',park:'#245c4b',nature:'#375944',
-    built:'#34454b',roads:'#c5a06c',smallRoads:'#83978f',
-    labels:'#f1e6d1',halo:'#29353c',buildings:'#a38c78',
+    ground:'#182a31',water:'#17495c',park:'#244f45',nature:'#304c43',
+    built:'#334249',roads:'#c9955d',localRoads:'#637c78',minorRoads:'#475e5e',
+    labels:'#f1e9d8',halo:'#243239',
+    short:'#746c65',mid:'#988476',tall:'#aeb2b1',tower:'#b7bbb9',
+    streetEdge:'#2b4145',streetSurface:'#d8a56a',lane:'#82908b',
   }:{
-    ground:'#e6d9be',water:'#4b93a0',park:'#7eab79',nature:'#a5ba87',
-    built:'#e0cbb1',roads:'#f9ecce',smallRoads:'#ddd1b7',
-    labels:'#34423e',halo:'#f6ead2',buildings:'#c9af91',
+    ground:'#e9e1d2',water:'#528c9a',park:'#8da98a',nature:'#b3c19b',
+    built:'#dfd5c2',roads:'#fff5e3',localRoads:'#f0e3cd',minorRoads:'#e3d8c2',
+    labels:'#44534d',halo:'#f6f0e2',
+    short:'#d7c4a8',mid:'#c5b197',tall:'#aeb1ae',tower:'#92a5a3',
+    streetEdge:'#b6a993',streetSurface:'#fff6e7',lane:'#efddc1',
   }
+  // This runs on explicit day/night changes, not on every GPS update.
   for(const layer of instance.getStyle()?.layers||[]){
     const name=String(layer.id||'').toLowerCase()
     if(name.startsWith('familia-'))continue
     const group=String(layer['source-layer']||'').toLowerCase()
-    const isWater=group==='water'||/(water|ocean|lake)/.test(name)
+    const isWater=group==='water'||/(^water|lake|ocean|sea)/.test(name)
     const isPark=/(park|wood|forest|grass|garden)/.test(name)||/(park|grass)/.test(group)
     const isNature=/(landcover|landuse)/.test(group)||/(landcover|nature)/.test(name)
     const isRoad=group==='transportation'||/(road|street|highway|motorway|bridge|tunnel)/.test(name)
     try{
-      if(layer.type==='background')instance.setPaintProperty(layer.id,'background-color',palette.ground)
-      else if(layer.type==='fill'){
-        const fill=isWater?palette.water:isPark?palette.park:isNature?palette.nature:isRoad?palette.roads:palette.built
-        instance.setPaintProperty(layer.id,'fill-color',fill)
+      if(layer.type==='background'){
+        instance.setPaintProperty(layer.id,'background-color',palette.ground)
+      }else if(layer.type==='fill'){
+        // Do not repaint unrecognized features: their original styling
+        // contains useful context (buildings, airports, water details).
+        const fill=isWater?palette.water:isPark?palette.park:isNature?palette.nature:
+          isRoad?palette.localRoads:null
+        if(fill)instance.setPaintProperty(layer.id,'fill-color',fill)
       }else if(layer.type==='line'){
-        if(isRoad)instance.setPaintProperty(layer.id,'line-color',/(minor|path|pedestrian|foot|track|service)/.test(name)?palette.smallRoads:palette.roads)
-        else if(isWater)instance.setPaintProperty(layer.id,'line-color',palette.water)
+        if(isRoad){
+          instance.setPaintProperty(layer.id,'line-color',[
+            'match',['get','class'],
+            ['motorway','trunk','primary'],palette.roads,
+            ['secondary','tertiary'],palette.localRoads,
+            palette.minorRoads,
+          ])
+        }else if(isWater){
+          instance.setPaintProperty(layer.id,'line-color',palette.water)
+        }
       }else if(layer.type==='symbol'&&layer.layout?.['text-field']){
         instance.setPaintProperty(layer.id,'text-color',palette.labels)
         instance.setPaintProperty(layer.id,'text-halo-color',palette.halo)
       }
-    }catch(error){console.warn('Cinematic map style layer unavailable',layer.id,error)}
+    }catch(error){
+      console.warn('Cinematic layer paint unavailable',layer.id,error)
+    }
   }
   try{
+    // Real source geometry has shadows and side gradient, not fake facades.
     instance.setLight({
       anchor:'map',
-      position:[1.5,night?205:175,night?65:48],
-      color:night?'#eecfa6':'#fff0d0',
-      intensity:night?0.55:0.78,
+      position:[1.5,night?225:148,night?44:53],
+      color:night?'#e7c69d':'#fff6de',
+      intensity:night?0.62:0.86,
     })
-  }catch(error){console.warn('Cinematic map light unavailable',error)}
+  }catch(error){console.warn('Cinematic lighting unavailable',error)}
   try{
     instance.setSky({
-      'sky-color':night?'#1e3549':'#a8bfc7',
-      'horizon-color':night?'#657d87':'#f3dcaf',
-      'fog-color':night?'#253b46':'#e4d8bd',
-      'sky-horizon-blend':0.65,
-      'horizon-fog-blend':0.38,
-      'fog-ground-blend':0.22,
+      'sky-color':night?'#1b303f':'#aebdc4',
+      'horizon-color':night?'#465e6a':'#ccd0c2',
+      'fog-color':night?'#273b49':'#d5d8ca',
+      'sky-horizon-blend':0.38,
+      'horizon-fog-blend':0.24,
+      'fog-ground-blend':0.14,
     })
-  }catch(error){console.warn('Cinematic sky unavailable',error)}
+  }catch(error){console.warn('Cinematic atmosphere unavailable',error)}
   try{
     if(instance.getLayer('familia-buildings-3d')){
       instance.setLayoutProperty('familia-buildings-3d','visibility',scene.threeD?'visible':'none')
       instance.setPaintProperty('familia-buildings-3d','fill-extrusion-color',[
-        'interpolate',['linear'],['coalesce',['get','render_height'],0],
-        0,palette.buildings,70,night?'#978c83':'#b89979',200,night?'#d2b48d':'#937b68',
+        'interpolate',['linear'],['coalesce',['get','render_height'],['get','height'],7],
+        0,palette.short,18,palette.mid,60,palette.tall,180,palette.tower,
       ])
-      instance.setPaintProperty('familia-buildings-3d','fill-extrusion-opacity',night?0.96:0.9)
+      instance.setPaintProperty('familia-buildings-3d','fill-extrusion-opacity',night?0.93:0.97)
+      instance.setPaintProperty('familia-buildings-3d','fill-extrusion-vertical-gradient',true)
+    }
+    if(instance.getLayer('familia-cine-street-edge')){
+      instance.setPaintProperty('familia-cine-street-edge','line-color',palette.streetEdge)
+      instance.setPaintProperty('familia-cine-street-edge','line-opacity',night?0.64:0.46)
     }
     if(instance.getLayer('familia-cine-arterials')){
-      instance.setPaintProperty('familia-cine-arterials','line-color',night?'#f4b66d':'#dfb46e')
-      instance.setPaintProperty('familia-cine-arterials','line-opacity',night?0.85:0.42)
+      instance.setPaintProperty('familia-cine-arterials','line-color',palette.streetSurface)
+      instance.setPaintProperty('familia-cine-arterials','line-opacity',night?0.88:0.81)
     }
-  }catch(error){console.warn('Cinematic city layers unavailable',error)}
+    if(instance.getLayer('familia-cine-lanes')){
+      instance.setPaintProperty('familia-cine-lanes','line-color',palette.lane)
+      instance.setPaintProperty('familia-cine-lanes','line-opacity',night?0.62:0.57)
+    }
+  }catch(error){console.warn('Cinematic city material unavailable',error)}
 
   // Height data is an independent open DEM; never let it block the existing map.
   if(scene.threeD&&!lowMemory&&!terrainUnavailable){
@@ -368,22 +405,51 @@ function applyCinematicScene(instance:any){
 
 function addCinematicStreets(instance:any){
   if(instance.getLayer('familia-cine-arterials'))return
+  if(!instance.getSource('familia-openfreemap'))return
   try{
+    // Insert road materials below place labels to preserve cartographic clarity.
+    const firstLabel=instance.getStyle()?.layers?.find((layer:any)=>
+      layer.type==='symbol'&&layer.layout?.['text-field'])?.id
+    const major=['match',['get','class'],['motorway','trunk','primary'],true,false]
+    const local=['match',['get','class'],['secondary','tertiary','minor','residential','service'],true,false]
+    instance.addLayer({
+      id:'familia-cine-street-edge',
+      source:'familia-openfreemap','source-layer':'transportation',
+      type:'line',minzoom:12.5,filter:major,
+      layout:{'line-cap':'round','line-join':'round'},
+      paint:{
+        'line-color':'#b6a993',
+        'line-width':['interpolate',['linear'],['zoom'],12.5,1.2,15,3.5,18,8],
+        'line-opacity':0.46,
+      },
+    },firstLabel)
     instance.addLayer({
       id:'familia-cine-arterials',
-      source:'familia-openfreemap',
-      'source-layer':'transportation',
-      type:'line',
-      minzoom:11,
-      filter:['match',['get','class'],['motorway','trunk','primary'],true,false],
+      source:'familia-openfreemap','source-layer':'transportation',
+      type:'line',minzoom:12.5,filter:major,
+      layout:{'line-cap':'round','line-join':'round'},
       paint:{
-        'line-color':'#dfb46e',
-        'line-width':['interpolate',['linear'],['zoom'],11,0.5,15,1.6,19,3.5],
-        'line-opacity':0.45,
-        'line-blur':0.9,
+        'line-color':'#fff6e7',
+        'line-width':['interpolate',['linear'],['zoom'],12.5,0.6,15,2.1,18,5.5],
+        'line-opacity':0.81,
       },
-    })
-  }catch(error){console.warn('Cinematic street accents unavailable',error)}
+    },firstLabel)
+    // At neighborhood zoom, smaller streets acquire a fine warm outline.
+    // Keep them invisible from afar to avoid GPU overhead and visual noise.
+    instance.addLayer({
+      id:'familia-cine-lanes',
+      source:'familia-openfreemap','source-layer':'transportation',
+      type:'line',minzoom:14.5,filter:local,
+      layout:{'line-cap':'round','line-join':'round'},
+      paint:{
+        'line-color':'#efddc1',
+        'line-width':['interpolate',['linear'],['zoom'],14.5,0.4,17,1.35,19,2.25],
+        'line-opacity':0.57,
+      },
+    },firstLabel)
+  }catch(error){
+    console.warn('Cinematic street materials unavailable',error)
+  }
 }
 
 function distanceKm(a:MapLocation,b:MapLocation){
