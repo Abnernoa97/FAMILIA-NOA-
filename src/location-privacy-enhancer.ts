@@ -36,6 +36,8 @@ function ensureStyles(){
       padding:10px 12px;
     }
     .location-stop-share:disabled{opacity:.45}
+    .location-native-stale{display:none;text-align:center;color:#9b5a32;font-size:12px;font-weight:650;line-height:1.5;padding:0 20px 8px}
+    .location-native-stale.visible{display:block}
     @media(max-width:480px){
       .location-page.location-sharing-active .family-map-shell{
         height:72dvh!important;
@@ -76,6 +78,11 @@ function ensureStopControl(page:HTMLElement){
   button.className='location-stop-share'
   button.dataset.stopLocation='1'
   button.textContent='Dejar de compartir ubicación'
+  const stale=document.createElement('p')
+  stale.className='location-native-stale'
+  stale.setAttribute('role','status')
+  stale.dataset.locationNativeStale='1'
+  footer.appendChild(stale)
   footer.appendChild(button)
   family.insertAdjacentElement('afterend',footer)
 
@@ -109,8 +116,17 @@ function apply(){
   const sharing=hasOwnLocation&&(!nativeRequired||isNativeLocationSharingEnabled())
   page.classList.toggle('location-sharing-active',sharing)
 
-  if(sharing)ensureStopControl(page)
-  else removeStopControl(page)
+  if(sharing){
+    ensureStopControl(page)
+    const row=ownLocation(latestState)
+    const age=row?Date.now()-Date.parse(row.updated_at):NaN
+    const stalled=Number.isFinite(age)&&age>120_000
+    const notice=page.querySelector<HTMLElement>('[data-location-native-stale]')
+    if(notice){
+      notice.classList.toggle('visible',stalled)
+      notice.textContent=stalled?'Tu ubicación no se está actualizando. FAMILIA NOA intenta obtener una nueva posición.':''
+    }
+  }else removeStopControl(page)
 }
 
 function scanPage(){
@@ -133,8 +149,10 @@ if(app){
 }
 
 window.addEventListener('familia-noa:native-location-state',apply)
+const staleRefresh=window.setInterval(()=>{if(!document.hidden)apply()},30_000)
 
 window.addEventListener('beforeunload',()=>{
+  window.clearInterval(staleRefresh)
   observer?.disconnect()
   observer=null
   unsubscribe?.()
