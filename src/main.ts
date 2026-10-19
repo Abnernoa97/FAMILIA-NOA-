@@ -511,10 +511,18 @@ function renderLocationList(state:LocationState){
     return a.name.localeCompare(b.name,'es')
   })
   if(byMember.has(memberId))ensureOwnLocationRealtime()
-  const sharingCount=rows.length
-  const summary=sharingCount===0
-    ?'Nadie comparte ahora'
-    :`${sharingCount} compartiendo`
+  // A stored coordinate proves a previous update, not that a phone is
+  // currently sharing. Use the same five-minute threshold as member badges.
+  const freshCount=rows.filter(row=>{
+    const ageMs=Date.now()-new Date(row.updated_at).getTime()
+    return Number.isFinite(ageMs)&&ageMs>=0&&ageMs<5*60*1000
+  }).length
+  const oldCount=rows.length-freshCount
+  const summary=rows.length===0
+    ?'Sin ubicaciones'
+    :oldCount===0
+      ?`${freshCount} ahora`
+      :`${freshCount} ahora · ${oldCount} sin actualizar`
   const cards=ordered.map(member=>{
     const item=byMember.get(member.id)
     const mine=member.id===memberId
