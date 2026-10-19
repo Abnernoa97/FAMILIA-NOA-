@@ -42,6 +42,7 @@ let maplibrePromise:Promise<any>|null=null
 let map:any=null
 let markers=new Map<string,any>()
 let sceneLoaded=false
+let advancedTerrainReady=false
 let activePopup:any=null
 let activePopupMemberId=''
 let activeCardMemberId=''
@@ -149,6 +150,7 @@ function clearMarkers(){
 function destroyMap(){
   generation++
   sceneLoaded=false
+  advancedTerrainReady=false
   resizeObserver?.disconnect()
   resizeObserver=null
   clearMarkers()
@@ -260,17 +262,28 @@ function hydrateAvatars(locations:MapLocation[]){
   }).catch(error=>console.warn('Family avatar loading unavailable',error))
 }
 
+/** Reuse OpenFreeMap's vector source; adding a duplicate downloads the same city twice. */
+function cityVectorSource(instance:any):string{
+  const sources=instance.getStyle()?.sources||{}
+  const candidates=Object.entries(sources) as Array<[string,any]>
+  const base=candidates.find(([key,source])=>
+    source?.type==='vector' && /openmaptiles|openfreemap|planet/i.test(key+' '+String(source?.url||'')))
+    ||candidates.find(([,source])=>source?.type==='vector')
+  if(base)return base[0]
+  const fallback='familia-openfreemap'
+  if(!instance.getSource(fallback))instance.addSource(fallback,{type:'vector',url:VECTOR_SOURCE})
+  return fallback
+}
+
 function add3dBuildings(instance:any){
   try{
-    if(!instance.getSource('familia-openfreemap')){
-      instance.addSource('familia-openfreemap',{type:'vector',url:VECTOR_SOURCE})
-    }
+    const sourceId=cityVectorSource(instance)
     if(instance.getLayer('familia-buildings-3d'))return
     const layers=instance.getStyle()?.layers||[]
     const firstLabel=layers.find((layer:any)=>layer.type==='symbol'&&layer.layout?.['text-field'])?.id
     instance.addLayer({
       id:'familia-buildings-3d',
-      source:'familia-openfreemap',
+      source:sourceId,
       'source-layer':'building',
       type:'fill-extrusion',
       minzoom:12.5,
@@ -407,7 +420,13 @@ function applyCinematicScene(instance:any){
     }
   }catch(error){console.warn('Cinematic city material unavailable',error)}
 
-  // Height data is an independent open DEM; never let it block the existing map.
+  // Terrain is deferred until the FIRST base-map frame has settled.
+  // It must never hold back the map, avatars or street tiles.
+  if(advancedTerrainReady)syncTerrain(instance)
+}
+
+function syncTerrain(instance:any){
+  if(!instance)return
   if(scene.threeD&&!lowMemory&&!terrainUnavailable){
     try{
       if(!instance.getSource('familia-cinematic-dem')){
@@ -416,10 +435,10 @@ function applyCinematicScene(instance:any){
           attribution:'© <a href="https://mapterhorn.com/attribution">Mapterhorn</a>',
         })
       }
-      instance.setTerrain({source:'familia-cinematic-dem',exaggeration:1.1})
+      if(!instance.getTerrain?.())instance.setTerrain({source:'familia-cinematic-dem',exaggeration:1.1})
     }catch(error){
       terrainUnavailable=true
-      console.warn('3D terrain unavailable; keeping 3D buildings',error)
+      console.warn('Optional terrain unavailable; map remains usable',error)
       try{instance.setTerrain(null)}catch{}
     }
   }else{
@@ -429,7 +448,7 @@ function applyCinematicScene(instance:any){
 
 function addCinematicStreets(instance:any){
   if(instance.getLayer('familia-cine-arterials'))return
-  if(!instance.getSource('familia-openfreemap'))return
+  const sourceId=cityVectorSource(instance)
   try{
     // Insert road materials below place labels to preserve cartographic clarity.
     const firstLabel=instance.getStyle()?.layers?.find((layer:any)=>
@@ -438,7 +457,7 @@ function addCinematicStreets(instance:any){
     const local=['match',['get','class'],['secondary','tertiary','minor','residential','service'],true,false]
     instance.addLayer({
       id:'familia-cine-street-edge',
-      source:'familia-openfreemap','source-layer':'transportation',
+      source:sourceId,'source-layer':'transportation',
       type:'line',minzoom:12.5,filter:major,
       layout:{'line-cap':'round','line-join':'round'},
       paint:{
@@ -449,7 +468,7 @@ function addCinematicStreets(instance:any){
     },firstLabel)
     instance.addLayer({
       id:'familia-cine-arterials',
-      source:'familia-openfreemap','source-layer':'transportation',
+      source:sourceId,'source-layer':'transportation',
       type:'line',minzoom:12.5,filter:major,
       layout:{'line-cap':'round','line-join':'round'},
       paint:{
@@ -462,7 +481,7 @@ function addCinematicStreets(instance:any){
     // Keep them invisible from afar to avoid GPU overhead and visual noise.
     instance.addLayer({
       id:'familia-cine-lanes',
-      source:'familia-openfreemap','source-layer':'transportation',
+      source:sourceId,'source-layer':'transportation',
       type:'line',minzoom:14.5,filter:local,
       layout:{'line-cap':'round','line-join':'round'},
       paint:{
@@ -788,6 +807,15 @@ async function applyState(state:LocationState){
           .sort().join('|')
         showFamilyOnOpen()
         hideOverlay(shell)
+        // Optional elevation work starts only after the base map is truly idle.
+        // A slow terrain server must never block the first usable map frame.
+        const instance=map
+        const mapGeneration=generation
+        instance.once('idle',()=>{
+          if(map!==instance||!sceneLoaded||mapGeneration!==generation||lowMemory)return
+          advancedTerrainReady=true
+          syncTerrain(instance)
+        })
       })
       map.on('error',(event:any)=>{
          if(event?.sourceId==='familia-cinematic-dem'){
