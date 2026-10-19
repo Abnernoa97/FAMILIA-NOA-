@@ -7,6 +7,24 @@ const MAPLIBRE_JS='https://unpkg.com/maplibre-gl@6.10.0/dist/maplibre-gl.mjs'
 const MAPLIBRE_CSS='https://unpkg.com/maplibre-gl@6.10.0/dist/maplibre-gl.css'
 const MAP_STYLE='https://tiles.openfreemap.org/styles/liberty'
 const VECTOR_SOURCE='https://tiles.openfreemap.org/planet'
+const ELEVATION_SOURCE='https://tiles.mapterhorn.com/tilejson.json'
+const SCENE_PREFERENCES='familia-noa-cinematic-v1'
+const prefersReducedMotion=window.matchMedia?.('(prefers-reduced-motion: reduce)').matches||false
+
+type MapScene={threeD:boolean;night:boolean}
+function savedScene():MapScene{
+  try{
+    const value=JSON.parse(localStorage.getItem(SCENE_PREFERENCES)||'{}')
+    return {threeD:value.threeD!==false,night:value.night===true}
+  }catch{return {threeD:true,night:false}}
+}
+let scene=savedScene()
+function rememberScene(){
+  try{localStorage.setItem(SCENE_PREFERENCES,JSON.stringify(scene))}catch{}
+}
+const lowMemory=Number((navigator as Navigator & {deviceMemory?:number}).deviceMemory||8)<4
+let terrainUnavailable=false
+let cardExpanded=true
 
 type MapLocation={
   member_id:string
@@ -25,6 +43,7 @@ let map:any=null
 let markers:any[]=[]
 let activePopup:any=null
 let activePopupMemberId=''
+let activeCardMemberId=''
 let currentLocations:MapLocation[]=[]
 let lastLocationSignature=''
 let lastMemberSignature=''
@@ -77,6 +96,37 @@ function ensureAssets(){
   .family-map-marker{position:relative;display:flex;flex-direction:column;align-items:center;filter:drop-shadow(0 5px 10px rgba(0,0,0,.28));cursor:pointer;border:0;background:transparent;padding:0}.family-map-marker-dot{position:relative;width:48px;height:48px;border:3px solid #fff;border-radius:50%;overflow:hidden;display:grid;place-items:center;background:#4c367f;color:#fff;font-weight:800;font-size:13px;box-shadow:0 4px 15px rgba(0,0,0,.22)}.family-map-marker.fresh .family-map-marker-dot::before{content:"";position:absolute;inset:-9px;border:2px solid rgba(73,157,105,.4);border-radius:50%;animation:familyLocationPulse 2s ease-out infinite;pointer-events:none}@keyframes familyLocationPulse{0%{transform:scale(.72);opacity:.85}100%{transform:scale(1.35);opacity:0}}.family-map-marker-dot img{width:100%;height:100%;object-fit:cover;display:block}.family-map-marker.mine .family-map-marker-dot{background:#171716}.family-map-marker::after{content:"";width:3px;height:12px;border-radius:3px;background:#fff;margin-top:-1px}.family-map-marker-label{margin-top:3px;padding:4px 7px;border-radius:9px;background:rgba(23,23,22,.86);color:#fff;font-size:9px;font-weight:700;white-space:nowrap}
   .family-map-loading,.family-map-error{position:absolute;inset:0;z-index:6;display:grid;place-items:center;padding:30px;text-align:center;background:linear-gradient(145deg,#d9d3c7,#f2eee6);color:#5f5a52;font-size:13px}.family-map-error b{display:block;color:#171716;font:500 22px var(--display-font,Georgia,serif);margin-bottom:7px}.family-map-loading[hidden],.family-map-error[hidden],[data-map-loading][hidden]{display:none!important}.family-map-popup .maplibregl-popup-content{border-radius:16px;padding:12px 14px;box-shadow:0 12px 34px #0003;font-family:system-ui,sans-serif}.family-map-popup b{display:block;font-size:13px}.family-map-popup small{display:block;margin-top:3px;color:#77736b}.family-map-popup .maplibregl-popup-close-button{font-size:18px;padding:2px 7px}.family-map-shell .maplibregl-ctrl-attrib{font-size:9px;background:rgba(255,255,255,.75)}.family-map-shell .maplibregl-ctrl-group{border-radius:14px;overflow:hidden;box-shadow:0 5px 18px #0002}
   @media(max-width:480px){.family-map-shell{height:55dvh;min-height:410px;margin:10px 12px 16px;border-radius:28px}.family-map-head{left:10px;right:10px;top:10px}.family-map-head>div{padding:9px 11px}.family-map-head b{font-size:17px}.family-map-all,.family-map-mine{height:39px;padding:0 12px}.family-map-people{bottom:9px;left:7px;right:7px}.family-map-marker-label{display:none}}
+
+  /* CINEMATIC 3D G1: warm colored city, floating controls and member sheet */
+  .family-map-shell{background:#b6c5b2;border:1px solid rgba(250,235,213,.65);box-shadow:0 24px 52px rgba(23,38,34,.19)}
+  .family-map-shell::after{background:linear-gradient(180deg,rgba(22,34,35,.4),transparent 26%,transparent 60%,rgba(20,28,29,.28))}
+  .family-map-head>div{background:rgba(255,251,243,.93);border:1px solid rgba(255,255,255,.58)}
+  .family-map-scene-controls{position:absolute;z-index:5;right:10px;top:88px;display:flex;flex-direction:column;gap:9px}
+  .family-map-scene-button{width:46px;height:46px;border-radius:50%;border:1px solid #ffffff9c;background:rgba(24,34,36,.85);color:#fff;font:800 11px system-ui;box-shadow:0 6px 22px #0003;backdrop-filter:blur(13px);-webkit-backdrop-filter:blur(13px)}
+  .family-map-scene-button[aria-pressed="true"]{background:#fff9e8;color:#24392f;border-color:#fff}
+  .family-map-shell.has-selected .family-map-people{opacity:0;pointer-events:none}
+  .family-map-detail{position:absolute;bottom:12px;left:11px;right:11px;z-index:6;max-height:min(44dvh,296px);overflow:auto;padding:9px 15px 13px;border:1px solid rgba(255,255,255,.9);border-radius:26px;background:rgba(255,251,245,.97);color:#262923;box-shadow:0 14px 40px #0004;backdrop-filter:blur(22px);-webkit-backdrop-filter:blur(22px);font-family:system-ui,sans-serif}
+  .family-map-detail[hidden],.family-map-detail-body[hidden]{display:none!important}
+  .family-map-detail-grab{width:36px;height:4px;border-radius:3px;background:#c9c4bb;margin:0 auto 9px}
+  .family-map-detail-top{display:flex;gap:11px;align-items:center}
+  .family-map-detail-avatar{width:48px;height:48px;flex:0 0 48px;overflow:hidden;border-radius:50%;display:grid;place-items:center;background:#253e35;color:white;border:3px solid #fff;box-shadow:0 2px 11px #0002;font-weight:800}
+  .family-map-detail-avatar img{width:100%;height:100%;object-fit:cover}
+  .family-map-detail-info{flex:1;min-width:0}.family-map-detail-info b{display:block;font-size:15px;line-height:1.35}.family-map-detail-info small{display:block;font-size:10px;color:#77766d;margin-top:3px}
+  .family-map-status{display:inline-flex;align-items:center;gap:4px;border-radius:8px;background:#d5eedd;color:#1d663e;padding:3px 7px;font-weight:800;font-size:9px}
+  .family-map-status.old{background:#f2e5ce;color:#8c6025}
+  .family-map-card-icon{display:grid;place-items:center;width:34px;height:34px;flex:0 0 34px;border-radius:50%;border:0;background:#ede9df;color:#403e38;font-size:20px}
+  .family-map-detail-meta{display:grid;grid-template-columns:repeat(2,minmax(0,1fr));gap:8px;margin:13px 0 10px}
+  .family-map-detail-stat{padding:10px 11px;border-radius:14px;background:#f3efe7}.family-map-detail-stat small{display:block;font-size:9px;color:#807b71}.family-map-detail-stat b{display:block;margin-top:3px;font-size:12px;color:#2d312a}
+  .family-map-detail-actions{display:flex;gap:8px}.family-map-detail-action{flex:1;border:0;border-radius:13px;background:#263b34;color:#fff;font-size:11px;font-weight:750;padding:12px 10px}
+  .family-map-detail-action.secondary{background:#eae5da;color:#2d352e}
+  .family-map-shell.has-selected .maplibregl-ctrl-bottom-right{bottom:200px}
+  .family-map-shell.has-selected.card-collapsed .maplibregl-ctrl-bottom-right{bottom:85px}
+  .family-map-marker-dot{border-color:#fff7e9;box-shadow:0 0 0 3px rgba(48,124,99,.5),0 7px 20px #101f1a61}
+  .family-map-marker.fresh .family-map-marker-dot{box-shadow:0 0 0 3px rgba(40,171,116,.65),0 0 24px rgba(63,198,135,.6)}
+  .family-map-marker-label{background:rgba(26,39,36,.87);padding:5px 9px}
+  .family-map-shell .maplibregl-ctrl-attrib{font-size:9px}
+  @media(max-width:480px){.family-map-scene-controls{top:81px;right:9px}.family-map-scene-button{width:41px;height:41px}.family-map-detail{left:8px;right:8px;bottom:8px}.family-map-shell.has-selected .maplibregl-ctrl-bottom-right{bottom:205px}}
+  @media(prefers-reduced-motion:reduce){.family-map-marker.fresh .family-map-marker-dot::before{animation:none}}
   `
   document.head.appendChild(style)
 }
@@ -105,6 +155,7 @@ function destroyMap(){
   if(activePopup){try{activePopup.remove()}catch{}}
   activePopup=null
   activePopupMemberId=''
+  closeDetailsCard()
   if(map){try{map.remove()}catch{}}
   map=null
 }
@@ -117,7 +168,7 @@ function ensurePanel(page:HTMLElement){
   shell=document.createElement('section')
   shell.className='family-map-shell'
   shell.dataset.familyMap='true'
-  shell.innerHTML=`<div class="family-map-canvas" data-family-map-canvas></div><div class="family-map-head"><div><small>FAMILY MAP · 3D</small><b data-map-title>Familia cerca</b></div><div class="family-map-actions"><button type="button" class="family-map-mine" data-map-mine>Yo</button><button type="button" class="family-map-all" data-map-all>Todos</button></div></div><div class="family-map-people" data-map-people></div><div class="family-map-loading" data-map-loading>Preparando mapa 3D…</div>`
+  shell.innerHTML=`<div class="family-map-canvas" data-family-map-canvas></div><div class="family-map-head"><div><small>CINEMATIC 3D · FAMILIA NOA</small><b data-map-title>Tu familia en vivo</b></div><div class="family-map-actions"><button type="button" class="family-map-mine" data-map-mine>Yo</button><button type="button" class="family-map-all" data-map-all>Todos</button></div></div><div class="family-map-scene-controls"><button type="button" class="family-map-scene-button" data-map-3d aria-label="Activar o desactivar vista tridimensional">3D</button><button type="button" class="family-map-scene-button" data-map-night aria-label="Cambiar iluminación de día y noche">☾</button></div><div class="family-map-people" data-map-people></div><div class="family-map-detail" data-map-card hidden></div><div class="family-map-loading" data-map-loading>Preparando ciudad cinematográfica…</div>`
   const gated=!!page.querySelector('#sharelocation')?.textContent?.toLowerCase().includes('continuar')
   if(gated)locationBox.insertAdjacentElement('afterend',shell)
   else locationBox.insertAdjacentElement('beforebegin',shell)
@@ -131,6 +182,39 @@ function ensurePanel(page:HTMLElement){
     focus(mine,true)
     void refreshMemberLocation(mine.member_id)
   })
+  shell.querySelector<HTMLButtonElement>('[data-map-3d]')?.addEventListener('click',()=>{
+    scene.threeD=!scene.threeD
+    rememberScene()
+    applyCinematicScene(map)
+    updateSceneButtons()
+    if(map)map.easeTo({pitch:scene.threeD?66:0,bearing:scene.threeD?-28:0,duration:prefersReducedMotion?0:600})
+  })
+  shell.querySelector<HTMLButtonElement>('[data-map-night]')?.addEventListener('click',()=>{
+    scene.night=!scene.night
+    rememberScene()
+    applyCinematicScene(map)
+    updateSceneButtons()
+  })
+  shell.querySelector('[data-map-card]')?.addEventListener('click',event=>{
+    const action=(event.target as Element).closest<HTMLButtonElement>('[data-card-action]')?.dataset.cardAction
+    if(!action)return
+    if(action==='close'){
+      closeDetailsCard()
+      if(activePopup)activePopup.remove()
+      return
+    }
+    if(action==='toggle'){
+      cardExpanded=!cardExpanded
+      const current=currentLocations.find(location=>location.member_id===activeCardMemberId)
+      if(current)renderDetailsCard(current)
+      return
+    }
+    if(action==='focus'){
+      const item=currentLocations.find(location=>location.member_id===activeCardMemberId)
+      if(item)focus(item,false)
+    }
+  })
+  updateSceneButtons()
   return shell
 }
 
@@ -177,25 +261,197 @@ function add3dBuildings(instance:any){
   }
 }
 
+function updateSceneButtons(){
+  const threeD=document.querySelector<HTMLButtonElement>('[data-map-3d]')
+  const night=document.querySelector<HTMLButtonElement>('[data-map-night]')
+  if(threeD){
+    threeD.textContent=scene.threeD?'3D':'2D'
+    threeD.setAttribute('aria-pressed',String(scene.threeD))
+    threeD.title=scene.threeD?'Cambiar a vista plana':'Activar vista 3D'
+  }
+  if(night){
+    night.textContent=scene.night?'☀':'☾'
+    night.setAttribute('aria-pressed',String(scene.night))
+    night.title=scene.night?'Cambiar a luz de día':'Activar iluminación nocturna'
+  }
+}
+
+/** OpenFreeMap tiles stay the single cartographic source; this changes only their presentation. */
+function applyCinematicScene(instance:any){
+  if(!instance||!instance.isStyleLoaded?.())return
+  const night=scene.night
+  const palette=night?{
+    ground:'#1e3035',water:'#17465b',park:'#245c4b',nature:'#375944',
+    built:'#34454b',roads:'#c5a06c',smallRoads:'#83978f',
+    labels:'#f1e6d1',halo:'#29353c',buildings:'#a38c78',
+  }:{
+    ground:'#e6d9be',water:'#4b93a0',park:'#7eab79',nature:'#a5ba87',
+    built:'#e0cbb1',roads:'#f9ecce',smallRoads:'#ddd1b7',
+    labels:'#34423e',halo:'#f6ead2',buildings:'#c9af91',
+  }
+  for(const layer of instance.getStyle()?.layers||[]){
+    const name=String(layer.id||'').toLowerCase()
+    if(name.startsWith('familia-'))continue
+    const group=String(layer['source-layer']||'').toLowerCase()
+    const isWater=group==='water'||/(water|ocean|lake)/.test(name)
+    const isPark=/(park|wood|forest|grass|garden)/.test(name)||/(park|grass)/.test(group)
+    const isNature=/(landcover|landuse)/.test(group)||/(landcover|nature)/.test(name)
+    const isRoad=group==='transportation'||/(road|street|highway|motorway|bridge|tunnel)/.test(name)
+    try{
+      if(layer.type==='background')instance.setPaintProperty(layer.id,'background-color',palette.ground)
+      else if(layer.type==='fill'){
+        const fill=isWater?palette.water:isPark?palette.park:isNature?palette.nature:isRoad?palette.roads:palette.built
+        instance.setPaintProperty(layer.id,'fill-color',fill)
+      }else if(layer.type==='line'){
+        if(isRoad)instance.setPaintProperty(layer.id,'line-color',/(minor|path|pedestrian|foot|track|service)/.test(name)?palette.smallRoads:palette.roads)
+        else if(isWater)instance.setPaintProperty(layer.id,'line-color',palette.water)
+      }else if(layer.type==='symbol'&&layer.layout?.['text-field']){
+        instance.setPaintProperty(layer.id,'text-color',palette.labels)
+        instance.setPaintProperty(layer.id,'text-halo-color',palette.halo)
+      }
+    }catch(error){console.warn('Cinematic map style layer unavailable',layer.id,error)}
+  }
+  try{
+    instance.setLight({
+      anchor:'map',
+      position:[1.5,night?205:175,night?65:48],
+      color:night?'#eecfa6':'#fff0d0',
+      intensity:night?0.55:0.78,
+    })
+  }catch(error){console.warn('Cinematic map light unavailable',error)}
+  try{
+    instance.setSky({
+      'sky-color':night?'#1e3549':'#a8bfc7',
+      'horizon-color':night?'#657d87':'#f3dcaf',
+      'fog-color':night?'#253b46':'#e4d8bd',
+      'sky-horizon-blend':0.65,
+      'horizon-fog-blend':0.38,
+      'fog-ground-blend':0.22,
+    })
+  }catch(error){console.warn('Cinematic sky unavailable',error)}
+  try{
+    if(instance.getLayer('familia-buildings-3d')){
+      instance.setLayoutProperty('familia-buildings-3d','visibility',scene.threeD?'visible':'none')
+      instance.setPaintProperty('familia-buildings-3d','fill-extrusion-color',[
+        'interpolate',['linear'],['coalesce',['get','render_height'],0],
+        0,palette.buildings,70,night?'#978c83':'#b89979',200,night?'#d2b48d':'#937b68',
+      ])
+      instance.setPaintProperty('familia-buildings-3d','fill-extrusion-opacity',night?0.96:0.9)
+    }
+    if(instance.getLayer('familia-cine-arterials')){
+      instance.setPaintProperty('familia-cine-arterials','line-color',night?'#f4b66d':'#dfb46e')
+      instance.setPaintProperty('familia-cine-arterials','line-opacity',night?0.85:0.42)
+    }
+  }catch(error){console.warn('Cinematic city layers unavailable',error)}
+
+  // Height data is an independent open DEM; never let it block the existing map.
+  if(scene.threeD&&!lowMemory&&!terrainUnavailable){
+    try{
+      if(!instance.getSource('familia-cinematic-dem')){
+        instance.addSource('familia-cinematic-dem',{
+          type:'raster-dem',url:ELEVATION_SOURCE,tileSize:512,encoding:'terrarium',
+          attribution:'© <a href="https://mapterhorn.com/attribution">Mapterhorn</a>',
+        })
+      }
+      instance.setTerrain({source:'familia-cinematic-dem',exaggeration:1.1})
+    }catch(error){
+      terrainUnavailable=true
+      console.warn('3D terrain unavailable; keeping 3D buildings',error)
+      try{instance.setTerrain(null)}catch{}
+    }
+  }else{
+    try{if(instance.getTerrain?.())instance.setTerrain(null)}catch{}
+  }
+}
+
+function addCinematicStreets(instance:any){
+  if(instance.getLayer('familia-cine-arterials'))return
+  try{
+    instance.addLayer({
+      id:'familia-cine-arterials',
+      source:'familia-openfreemap',
+      'source-layer':'transportation',
+      type:'line',
+      minzoom:11,
+      filter:['match',['get','class'],['motorway','trunk','primary'],true,false],
+      paint:{
+        'line-color':'#dfb46e',
+        'line-width':['interpolate',['linear'],['zoom'],11,0.5,15,1.6,19,3.5],
+        'line-opacity':0.45,
+        'line-blur':0.9,
+      },
+    })
+  }catch(error){console.warn('Cinematic street accents unavailable',error)}
+}
+
 function fitAll(){
   if(!map||!currentLocations.length)return
   if(currentLocations.length===1){
     const item=currentLocations[0]
-    map.flyTo({center:[item.longitude,item.latitude],zoom:16.4,pitch:66,bearing:-28,duration:900,curve:1.28,essential:true,padding:{top:50,right:25,bottom:105,left:25}})
+    map.flyTo({center:[item.longitude,item.latitude],zoom:16.4,pitch:scene.threeD?66:0,bearing:scene.threeD?-28:0,duration:prefersReducedMotion?0:900,curve:1.28,essential:true,padding:{top:50,right:25,bottom:activeCardMemberId?230:105,left:25}})
     return
   }
   const MapLibre=(window as any).__familiaMapLibre
   if(!MapLibre)return
   const bounds=new MapLibre.LngLatBounds()
   currentLocations.forEach(item=>bounds.extend([item.longitude,item.latitude]))
-  map.fitBounds(bounds,{padding:{top:95,right:55,bottom:120,left:55},maxZoom:13.4,duration:900})
+  map.fitBounds(bounds,{padding:{top:95,right:55,bottom:activeCardMemberId?235:120,left:55},maxZoom:13.4,duration:prefersReducedMotion?0:900})
 }
 
 function popupHtml(item:MapLocation){
   return `<b>${esc(item.name)}${item.mine?' · tú':''}</b><small>${esc(age(item.updated_at))}${Number.isFinite(item.accuracy)?` · ±${Math.round(item.accuracy as number)} m`:''}</small>`
 }
 
+function closeDetailsCard(){
+  activeCardMemberId=''
+  const card=document.querySelector<HTMLElement>('[data-map-card]')
+  if(card)card.hidden=true
+  const shell=document.querySelector<HTMLElement>('[data-family-map]')
+  shell?.classList.remove('has-selected','card-collapsed')
+}
+
+function renderDetailsCard(item:MapLocation){
+  const card=document.querySelector<HTMLElement>('[data-map-card]')
+  const shell=document.querySelector<HTMLElement>('[data-family-map]')
+  if(!card||!shell)return
+  activeCardMemberId=item.member_id
+  const elapsed=Date.now()-new Date(item.updated_at).getTime()
+  const fresh=Number.isFinite(elapsed)&&elapsed>=0&&elapsed<5*60*1000
+  const accuracy=Number.isFinite(item.accuracy)?'±'+Math.round(item.accuracy as number)+' m':'Sin dato'
+  const label=esc(item.name)+(item.mine?' · tú':'')
+  const status=fresh?'Ahora':'Última ubicación'
+  card.hidden=false
+  shell.classList.add('has-selected')
+  shell.classList.toggle('card-collapsed',!cardExpanded)
+  card.innerHTML=
+    '<div class="family-map-detail-grab"></div>'+
+    '<div class="family-map-detail-top">'+
+      '<span class="family-map-detail-avatar">'+avatarMarkup(item)+'</span>'+
+      '<div class="family-map-detail-info"><b>'+label+'</b>'+
+      '<span class="family-map-status'+(fresh?'':' old')+'">'+status+'</span>'+
+      '<small>'+esc(age(item.updated_at))+' · '+accuracy+'</small></div>'+
+      '<button type="button" class="family-map-card-icon" data-card-action="toggle" aria-label="'+(cardExpanded?'Reducir':'Ampliar')+' tarjeta" aria-expanded="'+String(cardExpanded)+'">'+(cardExpanded?'⌄':'⌃')+'</button>'+
+      '<button type="button" class="family-map-card-icon" data-card-action="close" aria-label="Cerrar tarjeta">×</button>'+
+    '</div>'+
+    '<div class="family-map-detail-body" '+(cardExpanded?'':'hidden')+'>'+
+      '<div class="family-map-detail-meta">'+
+        '<div class="family-map-detail-stat"><small>PRECISIÓN</small><b>'+accuracy+'</b></div>'+
+        '<div class="family-map-detail-stat"><small>ACTUALIZACIÓN</small><b>'+esc(age(item.updated_at))+'</b></div>'+
+      '</div>'+
+      '<div class="family-map-detail-actions">'+
+        '<button type="button" class="family-map-detail-action" data-card-action="focus">⌖  Centrar en el mapa</button>'+
+        '<button type="button" class="family-map-detail-action secondary" data-card-action="toggle">Reducir</button>'+
+      '</div>'+
+    '</div>'
+  bindAvatarFallback(card)
+}
+
 function syncActivePopup(){
+  if(activeCardMemberId){
+    const cardItem=currentLocations.find(location=>location.member_id===activeCardMemberId)
+    if(cardItem)renderDetailsCard(cardItem)
+    else closeDetailsCard()
+  }
   if(!map||!activePopup||!activePopupMemberId)return
   const item=currentLocations.find(location=>location.member_id===activePopupMemberId)
   if(!item)return
@@ -206,11 +462,13 @@ function syncActivePopup(){
 
 function focus(item:MapLocation,showPopup=false){
   if(!map)return
-  map.flyTo({center:[item.longitude,item.latitude],zoom:17.4,pitch:70,bearing:-32,duration:1050,curve:1.38,essential:true,padding:{top:60,right:25,bottom:120,left:25}})
+  map.flyTo({center:[item.longitude,item.latitude],zoom:17.4,pitch:scene.threeD?70:0,bearing:scene.threeD?-32:0,duration:prefersReducedMotion?0:1050,curve:1.38,essential:true,padding:{top:65,right:25,bottom:showPopup?245:cardExpanded?245:130,left:25}})
   const title=document.querySelector<HTMLElement>('[data-map-title]')
   if(title)title.textContent=item.mine?'Tu ubicación':item.name
   document.querySelectorAll<HTMLElement>('.family-map-chip').forEach(chip=>chip.classList.toggle('selected',chip.dataset.mapMember===item.member_id))
   if(showPopup){
+    if(activeCardMemberId!==item.member_id)cardExpanded=true
+    renderDetailsCard(item)
     const MapLibre=(window as any).__familiaMapLibre
     if(MapLibre){
       activePopupMemberId=item.member_id
@@ -265,7 +523,7 @@ function showOverlay(shell:HTMLElement,kind:'loading'|'empty'|'error'){
   overlay.hidden=false
   if(kind==='loading'){
     overlay.className='family-map-loading'
-    overlay.textContent='Preparando mapa 3D…'
+    overlay.textContent='Preparando ciudad cinematográfica…'
     return
   }
   overlay.className='family-map-error'
@@ -311,6 +569,7 @@ async function applyState(state:LocationState){
     lastLocationSignature=''
     lastMemberSignature=''
     clearMarkers()
+    closeDetailsCard()
     showOverlay(shell,'empty')
     return
   }
@@ -334,8 +593,8 @@ async function applyState(state:LocationState){
         style:MAP_STYLE,
         center:[mine.longitude,mine.latitude],
         zoom:locations.length===1?16:10.5,
-        pitch:60,
-        bearing:-24,
+        pitch:scene.threeD?66:0,
+        bearing:scene.threeD?-28:0,
         maxPitch:80,
         attributionControl:false,
         canvasContextAttributes:{antialias:true},
@@ -349,6 +608,8 @@ async function applyState(state:LocationState){
       }
       map.on('load',()=>{
         add3dBuildings(map)
+        addCinematicStreets(map)
+        applyCinematicScene(map)
         renderMarkers(MapLibre)
         syncActivePopup()
         lastLocationSignature=signature
@@ -356,7 +617,15 @@ async function applyState(state:LocationState){
         fitAll()
         hideOverlay(shell)
       })
-      map.on('error',(event:any)=>console.warn('Family map resource error',event?.error||event))
+      map.on('error',(event:any)=>{
+         if(event?.sourceId==='familia-cinematic-dem'){
+           terrainUnavailable=true
+           try{map?.setTerrain(null)}catch{}
+           console.warn('Optional terrain unavailable; 3D city remains active',event?.error||event)
+           return
+         }
+         console.warn('Family map resource error',event?.error||event)
+       })
       return
     }
 

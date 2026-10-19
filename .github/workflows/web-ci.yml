@@ -1,6 +1,11 @@
 name: Validate FAMILIA NOA Web
 
 on:
+  pull_request:
+    branches: [main]
+    paths:
+      - 'src/**'
+      - '.github/workflows/web-ci.yml'
   push:
     branches: [main]
     paths:
