@@ -36,6 +36,7 @@ function ensureStyles(){
       padding:10px 12px;
     }
     .location-stop-share:disabled{opacity:.45}
+    .location-sharing-footer{flex-direction:column;align-items:center}
     .location-native-stale{display:none;text-align:center;color:#9b5a32;font-size:12px;font-weight:650;line-height:1.5;padding:0 20px 8px}
     .location-native-stale.visible{display:block}
     @media(max-width:480px){
