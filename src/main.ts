@@ -643,6 +643,15 @@ async function boot() {
 void loadSettings()
 void boot()
 
+window.addEventListener('familia-noa:open-location',event=>{
+  if(!getIdentity()?.memberId)return
+  const memberId=String((event as CustomEvent<{memberId?:string}>).detail?.memberId||'')
+  void renderLocation(true).then(()=>{
+    if(!memberId)return
+    window.dispatchEvent(new CustomEvent('familia-noa:focus-location',{detail:{memberId}}))
+  })
+})
+
 initNavigation((view:AppView) => {
   if (view === 'media') return
   if (isMediaViewerOpen()) closeMediaViewer()
