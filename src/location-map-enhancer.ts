@@ -802,7 +802,7 @@ async function applyState(state:LocationState){
         // Optional elevation work starts only after the base map is truly idle.
         // A slow terrain server must never block the first usable map frame.
         const instance=map
-                instance.once('idle',()=>{
+        instance.once('idle',()=>{
           if(map!==instance||!sceneLoaded||lowMemory)return
           advancedTerrainReady=true
           syncTerrain(instance)
