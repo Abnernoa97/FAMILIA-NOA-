@@ -1,4 +1,5 @@
 import './styles.css'
+import './family-activity-notifications'
 import { supabase } from './supabase'
 import { clearIdentity, getAuthenticatedFamilyMember, getIdentity, setIdentity } from './core/identity'
 import { closeChat, openChat } from './chat-core'
