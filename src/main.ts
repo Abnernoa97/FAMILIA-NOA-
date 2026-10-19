@@ -7,7 +7,7 @@ import { initNavigation, enterView, replaceView, backView, type AppView } from '
 import { closeMediaViewer, isMediaViewerOpen } from './core/media-viewer'
 import { clearPrivateMediaCache } from './core/private-media'
 import { getLocationState, refreshLocationState, saveOwnLocation, subscribeLocationState, type LocationState } from './core/location-store'
-import { ensureOwnLocationRealtime, refreshMemberLocation, startOwnLocationRealtime } from './core/location-device-sync'
+import { activateNativeLocationSharing, ensureOwnLocationRealtime, hasNativeLocationCapability, isNativeLocationSharingEnabled, refreshMemberLocation, startOwnLocationRealtime } from './core/location-device-sync'
 
 type Member = { id: string; name: string; active: boolean; must_share_location: boolean }
 type FamilySessionResponse = {
@@ -57,6 +57,7 @@ let familySyncChannel: ReturnType<typeof supabase.channel> | null = null
 let mandatoryLocationVerified = false
 let mandatoryLocationGateActive = false
 let locationViewUnsubscribe:(()=>void)|null=null
+let pendingNativeFix:{memberId:string;previousUpdatedAt:string;startedAt:number}|null=null
 const app = document.querySelector<HTMLDivElement>('#app')!
 document.title = 'FAMILIA NOA'
 
@@ -390,23 +391,67 @@ function currentPosition(){
   })
 }
 
-async function shareLocation() {
-  const text = document.querySelector<HTMLElement>('#locationtext')
-  const button = document.querySelector<HTMLButtonElement>('#sharelocation')
-  if (!text || !button) return
-  if (!navigator.geolocation) {
-    text.textContent = 'Este dispositivo no permite ubicación.'
-    return
+function confirmNativeLocationFix(state:LocationState){
+  const pending=pendingNativeFix
+  if(!pending||!isNativeLocationSharingEnabled())return false
+  const location=state.locations.find(row=>row.member_id===pending.memberId)
+  if(!location||location.updated_at===pending.previousUpdatedAt)return false
+  const updatedAt=Date.parse(location.updated_at)
+  if(!Number.isFinite(updatedAt)||updatedAt<pending.startedAt-5000)return false
+
+  pendingNativeFix=null
+  mandatoryLocationVerified=true
+  const text=document.querySelector<HTMLElement>('#locationtext')
+  if(text){
+    const accuracy=location.accuracy
+    text.textContent=`Ubicación actualizada ahora${Number.isFinite(accuracy)?` · precisión aproximada ${Math.round(accuracy as number)} m`:''}.`
   }
+  if(mandatoryLocationGateActive){
+    mandatoryLocationGateActive=false
+    renderHome()
+    return true
+  }
+  return false
+}
+
+async function shareLocation() {
+  const text=document.querySelector<HTMLElement>('#locationtext')
+  const button=document.querySelector<HTMLButtonElement>('#sharelocation')
+  if(!text||!button)return
   if(!memberId){
     text.textContent='No se pudo identificar tu perfil.'
     return
   }
 
+  pendingNativeFix=null
   button.disabled=true
-  button.textContent='Obteniendo ubicación…'
-  text.textContent='Buscando tu posición actual…'
+  button.textContent='Activando ubicación…'
+  text.textContent='Preparando ubicación del teléfono…'
   try{
+    if(hasNativeLocationCapability()){
+      const previousUpdatedAt=getLocationState().locations.find(row=>row.member_id===memberId)?.updated_at||''
+      const startedAt=Date.now()
+      button.textContent='Activando GPS de Android…'
+      if(await activateNativeLocationSharing(memberId)){
+        pendingNativeFix={memberId,previousUpdatedAt,startedAt}
+        text.textContent='GPS de Android activado. Esperando una posición nueva…'
+        button.textContent='Comprobando ubicación…'
+        const state=await refreshLocationState({force:true})
+        confirmNativeLocationFix(state)
+        // Realtime confirms the first newly stored fix, even after this
+        // button is re-enabled. Starting a service is not a GPS success.
+        return
+      }
+      text.textContent='El GPS nativo no respondió. Intentando ubicación web…'
+    }
+
+    if(!navigator.geolocation){
+      text.textContent='No hay ubicación disponible en este dispositivo.'
+      return
+    }
+
+    button.textContent='Obteniendo ubicación…'
+    text.textContent='Buscando tu posición actual…'
     const position=await currentPosition()
     const latitude=position.coords.latitude
     const longitude=position.coords.longitude
@@ -442,6 +487,7 @@ async function shareLocation() {
 }
 
 function renderLocationList(state:LocationState){
+  if(confirmNativeLocationFix(state))return
   const element=document.querySelector<HTMLElement>('#familylocations')
   if(!element)return
   if(!state.updatedAt&&!state.error){
