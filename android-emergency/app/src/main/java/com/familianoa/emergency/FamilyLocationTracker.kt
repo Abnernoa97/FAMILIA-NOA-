@@ -56,7 +56,7 @@ class FamilyLocationTracker(
                 locationManager.requestLocationUpdates(
                     provider,
                     MIN_UPDATE_MS,
-                    MIN_DISTANCE_M,
+                    0f, // Keep receiving fixes while stationary; upload() still filters movement.
                     this,
                     Looper.getMainLooper()
                 )
