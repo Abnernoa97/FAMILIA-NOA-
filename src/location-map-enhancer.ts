@@ -2,8 +2,9 @@ import { getMemberId } from './core/identity'
 import { mediaUrl, primeMedia } from './core/private-media'
 import { getLocationState, refreshLocationState, subscribeLocationState, type LocationState } from './core/location-store'
 import { refreshMemberLocation } from './core/location-device-sync'
-import 'maplibre-gl/dist/maplibre-gl.css'
 
+const MAPLIBRE_JS='https://unpkg.com/maplibre-gl@6.10.0/dist/maplibre-gl.mjs'
+const MAPLIBRE_CSS='https://unpkg.com/maplibre-gl@6.10.0/dist/maplibre-gl.css'
 const MAP_STYLE='https://tiles.openfreemap.org/styles/liberty'
 const VECTOR_SOURCE='https://tiles.openfreemap.org/planet'
 const ELEVATION_SOURCE='https://tiles.mapterhorn.com/tilejson.json'
@@ -41,12 +42,10 @@ let maplibrePromise:Promise<any>|null=null
 let map:any=null
 let markers=new Map<string,any>()
 let sceneLoaded=false
-let advancedTerrainReady=false
 let activePopup:any=null
 let activePopupMemberId=''
 let activeCardMemberId=''
 let currentLocations:MapLocation[]=[]
-let lastAvatarPaths=''
 let lastLocationSignature=''
 let activePage:Element|null=null
 let pageObserver:MutationObserver|null=null
@@ -80,11 +79,18 @@ function age(value:string){
 }
 
 function ensureAssets(){
+  if(!document.querySelector('link[data-family-maplibre]')){
+    const link=document.createElement('link')
+    link.rel='stylesheet'
+    link.href=MAPLIBRE_CSS
+    link.dataset.familyMaplibre='true'
+    document.head.appendChild(link)
+  }
   if(document.getElementById('family-map-styles'))return
   const style=document.createElement('style')
   style.id='family-map-styles'
   style.textContent=`
-  .family-map-shell{position:relative;height:min(62dvh,560px);min-height:420px;margin:14px 16px 18px;border-radius:32px;overflow:hidden;background:#e5e2d6;border:1px solid rgba(218,211,198,.9);box-shadow:0 22px 56px rgba(35,31,25,.14);isolation:isolate}.family-map-canvas{position:absolute;inset:0}.family-map-canvas .maplibregl-canvas{outline:none}.family-map-shell::after{content:"";position:absolute;inset:0;pointer-events:none;background:linear-gradient(180deg,rgba(12,12,12,.16),transparent 28%,transparent 62%,rgba(12,12,12,.42));z-index:2}
+  .family-map-shell{position:relative;height:min(62dvh,560px);min-height:420px;margin:14px 16px 18px;border-radius:32px;overflow:hidden;background:#ddd8ce;border:1px solid rgba(218,211,198,.9);box-shadow:0 22px 56px rgba(35,31,25,.14);isolation:isolate}.family-map-canvas{position:absolute;inset:0}.family-map-canvas .maplibregl-canvas{outline:none}.family-map-shell::after{content:"";position:absolute;inset:0;pointer-events:none;background:linear-gradient(180deg,rgba(12,12,12,.16),transparent 28%,transparent 62%,rgba(12,12,12,.42));z-index:2}
   .family-map-head{position:absolute;left:14px;right:14px;top:14px;z-index:4;display:flex;align-items:flex-start;justify-content:space-between;gap:10px;pointer-events:none}.family-map-head>div{padding:10px 13px;border-radius:18px;background:rgba(250,248,242,.92);backdrop-filter:blur(18px);-webkit-backdrop-filter:blur(18px);box-shadow:0 6px 22px #0001}.family-map-head small{display:block;font-size:8.5px;letter-spacing:.16em;font-weight:800;color:#77736b}.family-map-head b{display:block;margin-top:2px;font:500 19px var(--display-font,Georgia,serif);color:#171716}.family-map-actions{display:flex;gap:7px;pointer-events:auto}.family-map-all,.family-map-mine{height:42px;padding:0 14px;border:0;border-radius:21px;font-weight:750;font-size:11px;backdrop-filter:blur(16px);-webkit-backdrop-filter:blur(16px);box-shadow:0 6px 18px #0002}.family-map-all{background:rgba(23,23,22,.92);color:#fff}.family-map-mine{background:rgba(250,248,242,.92);color:#171716}
   .family-map-people{position:absolute;z-index:4;left:10px;right:10px;bottom:10px;display:flex;gap:7px;overflow-x:auto;padding:2px 2px max(2px,env(safe-area-inset-bottom));scrollbar-width:none}.family-map-people::-webkit-scrollbar{display:none}.family-map-chip{flex:0 0 auto;display:grid;grid-template-columns:31px auto;grid-template-rows:auto auto;column-gap:8px;align-items:center;min-height:48px;padding:5px 12px 5px 6px;border:1px solid rgba(255,255,255,.45);border-radius:25px;background:rgba(250,248,242,.94);color:#171716;font-size:11.5px;font-weight:750;text-align:left;box-shadow:0 6px 20px #0002;backdrop-filter:blur(18px);-webkit-backdrop-filter:blur(18px)}.family-map-chip small{grid-column:2;display:block;margin-top:-1px;color:#807b73;font-size:8.5px;font-weight:650}.family-map-chip-avatar{grid-row:1/3;width:31px;height:31px;flex:0 0 31px;border-radius:50%;overflow:hidden;display:grid;place-items:center;background:#e8e1d4;font-size:11px}.family-map-chip-avatar img{width:100%;height:100%;object-fit:cover;display:block}.family-map-chip.mine{background:rgba(23,23,22,.94);color:#fff;border-color:rgba(23,23,22,.92)}.family-map-chip.mine small{color:#bdb8af}.family-map-chip.mine .family-map-chip-avatar{background:#fff;color:#171716}
   .family-map-marker{position:relative;display:flex;flex-direction:column;align-items:center;filter:drop-shadow(0 5px 10px rgba(0,0,0,.28));cursor:pointer;border:0;background:transparent;padding:0}.family-map-marker-dot{position:relative;width:48px;height:48px;border:3px solid #fff;border-radius:50%;overflow:hidden;display:grid;place-items:center;background:#4c367f;color:#fff;font-weight:800;font-size:13px;box-shadow:0 4px 15px rgba(0,0,0,.22)}.family-map-marker.fresh .family-map-marker-dot::before{content:"";position:absolute;inset:-9px;border:2px solid rgba(73,157,105,.4);border-radius:50%;animation:familyLocationPulse 2s ease-out infinite;pointer-events:none}@keyframes familyLocationPulse{0%{transform:scale(.72);opacity:.85}100%{transform:scale(1.35);opacity:0}}.family-map-marker-dot img{width:100%;height:100%;object-fit:cover;display:block}.family-map-marker.mine .family-map-marker-dot{background:#171716}.family-map-marker::after{content:"";width:3px;height:12px;border-radius:3px;background:#fff;margin-top:-1px}.family-map-marker-label{margin-top:3px;padding:4px 7px;border-radius:9px;background:rgba(23,23,22,.86);color:#fff;font-size:9px;font-weight:700;white-space:nowrap}
@@ -92,7 +98,7 @@ function ensureAssets(){
   @media(max-width:480px){.family-map-shell{height:55dvh;min-height:410px;margin:10px 12px 16px;border-radius:28px}.family-map-head{left:10px;right:10px;top:10px}.family-map-head>div{padding:9px 11px}.family-map-head b{font-size:17px}.family-map-all,.family-map-mine{height:39px;padding:0 12px}.family-map-people{bottom:9px;left:7px;right:7px}.family-map-marker-label{display:none}}
 
   /* CINEMATIC 3D G1: warm colored city, floating controls and member sheet */
-  .family-map-shell{background:#e5e2d6;border:1px solid rgba(250,235,213,.65);box-shadow:0 24px 52px rgba(23,38,34,.19)}
+  .family-map-shell{background:#b6c5b2;border:1px solid rgba(250,235,213,.65);box-shadow:0 24px 52px rgba(23,38,34,.19)}
   .family-map-shell::after{background:linear-gradient(180deg,rgba(22,34,35,.4),transparent 26%,transparent 60%,rgba(20,28,29,.28))}
   .family-map-head>div{background:rgba(255,251,243,.93);border:1px solid rgba(255,255,255,.58)}
   .family-map-scene-controls{position:absolute;z-index:5;right:10px;top:88px;display:flex;flex-direction:column;gap:9px}
@@ -127,8 +133,7 @@ function ensureAssets(){
 
 function loadMapLibre(){
   ensureAssets()
-  if(!maplibrePromise)maplibrePromise=import('maplibre-gl')
-    .catch(error=>{maplibrePromise=null;throw error})
+  if(!maplibrePromise)maplibrePromise=import(/* @vite-ignore */ MAPLIBRE_JS)
   return maplibrePromise
 }
 
@@ -142,12 +147,10 @@ function clearMarkers(){
 function destroyMap(){
   generation++
   sceneLoaded=false
-  advancedTerrainReady=false
   resizeObserver?.disconnect()
   resizeObserver=null
   clearMarkers()
   currentLocations=[]
-  lastAvatarPaths=''
   lastLocationSignature=''
   if(activePopup){try{activePopup.remove()}catch{}}
   activePopup=null
@@ -215,11 +218,12 @@ function ensurePanel(page:HTMLElement){
   return shell
 }
 
-function locationsFromState(state:LocationState):MapLocation[]{
+async function locationsFromState(state:LocationState):Promise<MapLocation[]>{
   const me=getMemberId()
   const names=new Map(state.members.map(member=>[member.id,member.name]))
   const profileMap=new Map(state.profiles.map(profile=>[profile.member_id,profile.avatar_path]))
-  // Never wait for private-photo authorization to place a family's coordinates.
+  const paths=state.locations.map(row=>profileMap.get(row.member_id)||null)
+  await primeMedia(paths)
   return state.locations.map(row=>{
     const avatarPath=profileMap.get(row.member_id)||null
     return {
@@ -232,50 +236,17 @@ function locationsFromState(state:LocationState):MapLocation[]{
   })
 }
 
-function hydrateAvatars(locations:MapLocation[]){
-  const paths=Array.from(new Set(locations.map(item=>item.avatarPath).filter((x):x is string=>!!x))).sort()
-  const key=paths.join('|')
-  if(!key||key===lastAvatarPaths)return
-  lastAvatarPaths=key
-  void primeMedia(paths).then(()=>{
-    if(lastAvatarPaths!==key)return
-    let changed=false
-    currentLocations=currentLocations.map(item=>{
-      const url=mediaUrl(item.avatarPath)
-      if(!url||url===item.avatarUrl)return item
-      changed=true
-      return {...item,avatarUrl:url}
-    })
-    if(changed&&map&&sceneLoaded){
-      const MapLibre=(window as any).__familiaMapLibre
-      if(MapLibre)renderMarkers(MapLibre)
-      syncActivePopup()
-    }
-  }).catch(error=>console.warn('Family avatar loading unavailable',error))
-}
-
-/** Reuse OpenFreeMap's vector source; adding a duplicate downloads the same city twice. */
-function cityVectorSource(instance:any):string{
-  const sources=instance.getStyle()?.sources||{}
-  const candidates=Object.entries(sources) as Array<[string,any]>
-  const base=candidates.find(([key,source])=>
-    source?.type==='vector' && /openmaptiles|openfreemap|planet/i.test(key+' '+String(source?.url||'')))
-    ||candidates.find(([,source])=>source?.type==='vector')
-  if(base)return base[0]
-  const fallback='familia-openfreemap'
-  if(!instance.getSource(fallback))instance.addSource(fallback,{type:'vector',url:VECTOR_SOURCE})
-  return fallback
-}
-
 function add3dBuildings(instance:any){
   try{
-    const sourceId=cityVectorSource(instance)
+    if(!instance.getSource('familia-openfreemap')){
+      instance.addSource('familia-openfreemap',{type:'vector',url:VECTOR_SOURCE})
+    }
     if(instance.getLayer('familia-buildings-3d'))return
     const layers=instance.getStyle()?.layers||[]
     const firstLabel=layers.find((layer:any)=>layer.type==='symbol'&&layer.layout?.['text-field'])?.id
     instance.addLayer({
       id:'familia-buildings-3d',
-      source:sourceId,
+      source:'familia-openfreemap',
       'source-layer':'building',
       type:'fill-extrusion',
       minzoom:12.5,
@@ -412,13 +383,7 @@ function applyCinematicScene(instance:any){
     }
   }catch(error){console.warn('Cinematic city material unavailable',error)}
 
-  // Terrain is deferred until the FIRST base-map frame has settled.
-  // It must never hold back the map, avatars or street tiles.
-  if(advancedTerrainReady)syncTerrain(instance)
-}
-
-function syncTerrain(instance:any){
-  if(!instance)return
+  // Height data is an independent open DEM; never let it block the existing map.
   if(scene.threeD&&!lowMemory&&!terrainUnavailable){
     try{
       if(!instance.getSource('familia-cinematic-dem')){
@@ -427,10 +392,10 @@ function syncTerrain(instance:any){
           attribution:'© <a href="https://mapterhorn.com/attribution">Mapterhorn</a>',
         })
       }
-      if(!instance.getTerrain?.())instance.setTerrain({source:'familia-cinematic-dem',exaggeration:1.1})
+      instance.setTerrain({source:'familia-cinematic-dem',exaggeration:1.1})
     }catch(error){
       terrainUnavailable=true
-      console.warn('Optional terrain unavailable; map remains usable',error)
+      console.warn('3D terrain unavailable; keeping 3D buildings',error)
       try{instance.setTerrain(null)}catch{}
     }
   }else{
@@ -440,7 +405,7 @@ function syncTerrain(instance:any){
 
 function addCinematicStreets(instance:any){
   if(instance.getLayer('familia-cine-arterials'))return
-  const sourceId=cityVectorSource(instance)
+  if(!instance.getSource('familia-openfreemap'))return
   try{
     // Insert road materials below place labels to preserve cartographic clarity.
     const firstLabel=instance.getStyle()?.layers?.find((layer:any)=>
@@ -449,7 +414,7 @@ function addCinematicStreets(instance:any){
     const local=['match',['get','class'],['secondary','tertiary','minor','residential','service'],true,false]
     instance.addLayer({
       id:'familia-cine-street-edge',
-      source:sourceId,'source-layer':'transportation',
+      source:'familia-openfreemap','source-layer':'transportation',
       type:'line',minzoom:12.5,filter:major,
       layout:{'line-cap':'round','line-join':'round'},
       paint:{
@@ -460,7 +425,7 @@ function addCinematicStreets(instance:any){
     },firstLabel)
     instance.addLayer({
       id:'familia-cine-arterials',
-      source:sourceId,'source-layer':'transportation',
+      source:'familia-openfreemap','source-layer':'transportation',
       type:'line',minzoom:12.5,filter:major,
       layout:{'line-cap':'round','line-join':'round'},
       paint:{
@@ -473,7 +438,7 @@ function addCinematicStreets(instance:any){
     // Keep them invisible from afar to avoid GPU overhead and visual noise.
     instance.addLayer({
       id:'familia-cine-lanes',
-      source:sourceId,'source-layer':'transportation',
+      source:'familia-openfreemap','source-layer':'transportation',
       type:'line',minzoom:14.5,filter:local,
       layout:{'line-cap':'round','line-join':'round'},
       paint:{
@@ -733,7 +698,7 @@ async function applyState(state:LocationState){
     return
   }
 
-  const locations=locationsFromState(state)
+  const locations=await locationsFromState(state)
   if(run!==generation||!document.contains(shell))return
   const signature=locations
     .map(item=>[item.member_id,item.latitude.toFixed(6),item.longitude.toFixed(6),item.updated_at,item.avatarPath||''].join(':'))
@@ -741,7 +706,6 @@ async function applyState(state:LocationState){
     .join('|')
   const changed=signature!==lastLocationSignature
   currentLocations=locations
-  hydrateAvatars(locations)
 
   if(!locations.length){
     lastLocationSignature=''
@@ -799,14 +763,6 @@ async function applyState(state:LocationState){
           .sort().join('|')
         showFamilyOnOpen()
         hideOverlay(shell)
-        // Optional elevation work starts only after the base map is truly idle.
-        // A slow terrain server must never block the first usable map frame.
-        const instance=map
-        instance.once('idle',()=>{
-          if(map!==instance||!sceneLoaded||lowMemory)return
-          advancedTerrainReady=true
-          syncTerrain(instance)
-        })
       })
       map.on('error',(event:any)=>{
          if(event?.sourceId==='familia-cinematic-dem'){
@@ -844,8 +800,6 @@ window.addEventListener('familia-noa:focus-location',handleFocusEvent as EventLi
 
 function attachPage(page:HTMLElement){
   ensurePanel(page)
-  // Load the map engine while Supabase data is fetched (never after photo signing).
-  void loadMapLibre().catch(error=>console.warn('Map engine preloading failed',error))
   stateUnsubscribe?.()
   stateUnsubscribe=subscribeLocationState(state=>{void applyState(state)})
   const state=getLocationState()
