@@ -35,10 +35,7 @@ function showActivity(row:FamilyActivity){
   toast.querySelector('button')?.addEventListener('click',()=>toast.remove())
   toast.addEventListener('click',event=>{
     if((event.target as Element).closest('button'))return
-    const locationButton=document.querySelector<HTMLButtonElement>('#navlocation,#location')
-    if(locationButton)locationButton.click()
-    else if(document.querySelector('.location-page'))
-      window.dispatchEvent(new CustomEvent('familia-noa:focus-location',{detail:{memberId:row.member_id}}))
+    window.dispatchEvent(new CustomEvent('familia-noa:open-location',{detail:{memberId:row.member_id}}))
     toast.remove()
   })
   document.body.appendChild(toast)
