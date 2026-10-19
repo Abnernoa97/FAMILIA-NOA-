@@ -388,7 +388,7 @@ function fitAll(){
   if(!map||!currentLocations.length)return
   if(currentLocations.length===1){
     const item=currentLocations[0]
-    map.flyTo({center:[item.longitude,item.latitude],zoom:16.4,pitch:66,bearing:-28,duration:900,curve:1.28,essential:true,padding:{top:50,right:25,bottom:105,left:25}})
+    map.flyTo({center:[item.longitude,item.latitude],zoom:16.4,pitch:scene.threeD?66:0,bearing:scene.threeD?-28:0,duration:prefersReducedMotion?0:900,curve:1.28,essential:true,padding:{top:50,right:25,bottom:activeCardMemberId?230:105,left:25}})
     return
   }
   const MapLibre=(window as any).__familiaMapLibre
@@ -462,7 +462,7 @@ function syncActivePopup(){
 
 function focus(item:MapLocation,showPopup=false){
   if(!map)return
-  map.flyTo({center:[item.longitude,item.latitude],zoom:17.4,pitch:70,bearing:-32,duration:1050,curve:1.38,essential:true,padding:{top:65,right:25,bottom:showPopup?245:cardExpanded?245:130,left:25}})
+  map.flyTo({center:[item.longitude,item.latitude],zoom:17.4,pitch:scene.threeD?70:0,bearing:scene.threeD?-32:0,duration:prefersReducedMotion?0:1050,curve:1.38,essential:true,padding:{top:65,right:25,bottom:showPopup?245:cardExpanded?245:130,left:25}})
   const title=document.querySelector<HTMLElement>('[data-map-title]')
   if(title)title.textContent=item.mine?'Tu ubicación':item.name
   document.querySelectorAll<HTMLElement>('.family-map-chip').forEach(chip=>chip.classList.toggle('selected',chip.dataset.mapMember===item.member_id))
@@ -523,7 +523,7 @@ function showOverlay(shell:HTMLElement,kind:'loading'|'empty'|'error'){
   overlay.hidden=false
   if(kind==='loading'){
     overlay.className='family-map-loading'
-    overlay.textContent='Preparando mapa 3D…'
+    overlay.textContent='Preparando ciudad cinematográfica…'
     return
   }
   overlay.className='family-map-error'
@@ -608,6 +608,8 @@ async function applyState(state:LocationState){
       }
       map.on('load',()=>{
         add3dBuildings(map)
+        addCinematicStreets(map)
+        applyCinematicScene(map)
         renderMarkers(MapLibre)
         syncActivePopup()
         lastLocationSignature=signature
