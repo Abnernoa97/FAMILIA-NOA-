@@ -17,6 +17,7 @@ class SessionStore(context: Context) {
     val activeAlertMessage: String get() = prefs.getString("active_alert_message", "") ?: ""
     val activeAlertCreatedAt: String get() = prefs.getString("active_alert_created_at", "") ?: ""
     val locationSharingEnabled: Boolean get() = prefs.getBoolean("location_sharing_enabled", false)
+    val lastFamilyActivityId: Long get() = prefs.getLong("last_family_activity_id", 0L)
 
     fun saveSession(memberId:String, memberName:String, accessToken:String, refreshToken:String, expiresAt:Long) {
         prefs.edit()
@@ -35,6 +36,14 @@ class SessionStore(context: Context) {
             .putString("refresh_token", refreshToken)
             .putLong("expires_at", expiresAt)
             .apply()
+    }
+
+    fun rememberFamilyActivity(id:Long):Boolean {
+        synchronized(this) {
+            if (id <= lastFamilyActivityId) return false
+            prefs.edit().putLong("last_family_activity_id", id).apply()
+            return true
+        }
     }
 
     fun setBiometricEnabled(enabled:Boolean) {
