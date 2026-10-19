@@ -604,6 +604,10 @@ async function applyState(state:LocationState){
     return
   }
 
+  // Retain the newest Supabase snapshot while the map's base style loads.
+  // Initial map.on('load') consumes currentLocations instead of an older closure.
+  if(map&&!sceneLoaded)return
+
   if(map&&!changed){
     hideOverlay(shell)
     setTimeout(()=>{try{map.resize()}catch{}},20)
@@ -643,8 +647,10 @@ async function applyState(state:LocationState){
         applyCinematicScene(map)
         renderMarkers(MapLibre)
         syncActivePopup()
-        lastLocationSignature=signature
-        lastMemberSignature=memberSignature
+        lastLocationSignature=currentLocations
+          .map(item=>[item.member_id,item.latitude.toFixed(6),item.longitude.toFixed(6),item.updated_at,item.avatarPath||''].join(':'))
+          .sort().join('|')
+        lastMemberSignature=currentLocations.map(item=>item.member_id).sort().join('|')
         fitAll()
         hideOverlay(shell)
       })
