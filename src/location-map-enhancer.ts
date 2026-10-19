@@ -167,7 +167,7 @@ function ensurePanel(page:HTMLElement){
   shell=document.createElement('section')
   shell.className='family-map-shell'
   shell.dataset.familyMap='true'
-  shell.innerHTML=`<div class="family-map-canvas" data-family-map-canvas></div><div class="family-map-head"><div><small>FAMILY MAP · 3D</small><b data-map-title>Familia cerca</b></div><div class="family-map-actions"><button type="button" class="family-map-mine" data-map-mine>Yo</button><button type="button" class="family-map-all" data-map-all>Todos</button></div></div><div class="family-map-people" data-map-people></div><div class="family-map-loading" data-map-loading>Preparando mapa 3D…</div>`
+  shell.innerHTML=`<div class="family-map-canvas" data-family-map-canvas></div><div class="family-map-head"><div><small>CINEMATIC 3D · FAMILIA NOA</small><b data-map-title>Tu familia en vivo</b></div><div class="family-map-actions"><button type="button" class="family-map-mine" data-map-mine>Yo</button><button type="button" class="family-map-all" data-map-all>Todos</button></div></div><div class="family-map-scene-controls"><button type="button" class="family-map-scene-button" data-map-3d aria-label="Activar o desactivar vista tridimensional">3D</button><button type="button" class="family-map-scene-button" data-map-night aria-label="Cambiar iluminación de día y noche">☾</button></div><div class="family-map-people" data-map-people></div><div class="family-map-detail" data-map-card hidden></div><div class="family-map-loading" data-map-loading>Preparando ciudad cinematográfica…</div>`
   const gated=!!page.querySelector('#sharelocation')?.textContent?.toLowerCase().includes('continuar')
   if(gated)locationBox.insertAdjacentElement('afterend',shell)
   else locationBox.insertAdjacentElement('beforebegin',shell)
@@ -181,6 +181,39 @@ function ensurePanel(page:HTMLElement){
     focus(mine,true)
     void refreshMemberLocation(mine.member_id)
   })
+  shell.querySelector<HTMLButtonElement>('[data-map-3d]')?.addEventListener('click',()=>{
+    scene.threeD=!scene.threeD
+    rememberScene()
+    applyCinematicScene(map)
+    updateSceneButtons()
+    if(map)map.easeTo({pitch:scene.threeD?66:0,bearing:scene.threeD?-28:0,duration:prefersReducedMotion?0:600})
+  })
+  shell.querySelector<HTMLButtonElement>('[data-map-night]')?.addEventListener('click',()=>{
+    scene.night=!scene.night
+    rememberScene()
+    applyCinematicScene(map)
+    updateSceneButtons()
+  })
+  shell.querySelector('[data-map-card]')?.addEventListener('click',event=>{
+    const action=(event.target as Element).closest<HTMLButtonElement>('[data-card-action]')?.dataset.cardAction
+    if(!action)return
+    if(action==='close'){
+      closeDetailsCard()
+      if(activePopup)activePopup.remove()
+      return
+    }
+    if(action==='toggle'){
+      cardExpanded=!cardExpanded
+      const current=currentLocations.find(location=>location.member_id===activeCardMemberId)
+      if(current)renderDetailsCard(current)
+      return
+    }
+    if(action==='focus'){
+      const item=currentLocations.find(location=>location.member_id===activeCardMemberId)
+      if(item)focus(item,false)
+    }
+  })
+  updateSceneButtons()
   return shell
 }
 
