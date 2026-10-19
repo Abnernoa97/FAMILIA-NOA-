@@ -24,7 +24,7 @@ let maplibrePromise:Promise<any>|null=null
 let map:any=null
 let markers=new Map<string,any>()
 let mapLoaded=false
-let selectedMemberId=''
+let selectedMemberId:string|null=null
 let focusGeneration=0
 let activePopup:any=null
 let activePopupMemberId=''
@@ -99,7 +99,7 @@ function clearMarkers(){
 function destroyMap(){
   generation++
   mapLoaded=false
-  selectedMemberId=''
+  selectedMemberId=null
   focusGeneration++
   resizeObserver?.disconnect()
   resizeObserver=null
@@ -127,6 +127,7 @@ function ensurePanel(page:HTMLElement){
   else locationBox.insertAdjacentElement('beforebegin',shell)
   shell.querySelector('[data-map-all]')?.addEventListener('click',()=>{
     selectedMemberId=''
+    focusGeneration++
     updateChipSelection()
     fitAll()
     void refreshLocationState({force:true})
@@ -296,7 +297,7 @@ function focus(item:MapLocation,showPopup=false){
 function renderPeople(){
   const root=document.querySelector<HTMLElement>('[data-map-people]')
   if(!root)return
-  if(!selectedMemberId&&currentLocations.some(item=>item.mine)){
+  if(selectedMemberId===null&&currentLocations.some(item=>item.mine)){
     selectedMemberId=currentLocations.find(item=>item.mine)?.member_id||''
   }
   root.innerHTML=currentLocations.map(item=>`<button type="button" class="family-map-chip${item.member_id===selectedMemberId?' selected':''}" aria-pressed="${item.member_id===selectedMemberId}" data-map-member="${esc(item.member_id)}"><span class="family-map-chip-avatar">${avatarMarkup(item)}</span><span>${esc(item.name)}${item.mine?' · tú':''}</span><small>${esc(age(item.updated_at))}</small></button>`).join('')
