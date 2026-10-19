@@ -7,6 +7,24 @@ const MAPLIBRE_JS='https://unpkg.com/maplibre-gl@6.10.0/dist/maplibre-gl.mjs'
 const MAPLIBRE_CSS='https://unpkg.com/maplibre-gl@6.10.0/dist/maplibre-gl.css'
 const MAP_STYLE='https://tiles.openfreemap.org/styles/liberty'
 const VECTOR_SOURCE='https://tiles.openfreemap.org/planet'
+const ELEVATION_SOURCE='https://tiles.mapterhorn.com/tilejson.json'
+const SCENE_PREFERENCES='familia-noa-cinematic-v1'
+const prefersReducedMotion=window.matchMedia?.('(prefers-reduced-motion: reduce)').matches||false
+
+type MapScene={threeD:boolean;night:boolean}
+function savedScene():MapScene{
+  try{
+    const value=JSON.parse(localStorage.getItem(SCENE_PREFERENCES)||'{}')
+    return {threeD:value.threeD!==false,night:value.night===true}
+  }catch{return {threeD:true,night:false}}
+}
+let scene=savedScene()
+function rememberScene(){
+  try{localStorage.setItem(SCENE_PREFERENCES,JSON.stringify(scene))}catch{}
+}
+const lowMemory=Number((navigator as Navigator & {deviceMemory?:number}).deviceMemory||8)<4
+let terrainUnavailable=false
+let cardExpanded=true
 
 type MapLocation={
   member_id:string
@@ -25,6 +43,7 @@ let map:any=null
 let markers:any[]=[]
 let activePopup:any=null
 let activePopupMemberId=''
+let activeCardMemberId=''
 let currentLocations:MapLocation[]=[]
 let lastLocationSignature=''
 let lastMemberSignature=''
