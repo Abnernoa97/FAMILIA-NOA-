@@ -40,7 +40,8 @@ type MapLocation={
 
 let maplibrePromise:Promise<any>|null=null
 let map:any=null
-let markers:any[]=[]
+let markers=new Map<string,any>()
+let sceneLoaded=false
 let activePopup:any=null
 let activePopupMemberId=''
 let activeCardMemberId=''
@@ -139,13 +140,14 @@ function loadMapLibre(){
 
 function clearMarkers(){
   markers.forEach(marker=>{try{marker.remove()}catch{}})
-  markers=[]
+  markers.clear()
   const people=document.querySelector<HTMLElement>('[data-map-people]')
   if(people)people.innerHTML=''
 }
 
 function destroyMap(){
   generation++
+  sceneLoaded=false
   resizeObserver?.disconnect()
   resizeObserver=null
   clearMarkers()
@@ -278,7 +280,9 @@ function updateSceneButtons(){
 
 /** OpenFreeMap tiles stay the single cartographic source; this changes only their presentation. */
 function applyCinematicScene(instance:any){
-  if(!instance||!instance.isStyleLoaded?.())return
+  // A loaded style accepts updates even while its tiles remain pending.
+  // isStyleLoaded() would suppress cinematic colors during routine source loads.
+  if(!instance||!sceneLoaded)return
   const night=scene.night
   const palette=night?{
     ground:'#1e3035',water:'#17465b',park:'#245c4b',nature:'#375944',
@@ -498,22 +502,48 @@ function renderPeople(){
 }
 
 function renderMarkers(MapLibre:any){
-  clearMarkers()
-  currentLocations.forEach(item=>{
-    const element=document.createElement('button')
-    element.type='button'
+  // Keep one DOM marker per person: GPS updates change coordinates in place.
+  const ids=new Set(currentLocations.map(item=>item.member_id))
+  for(const [id,marker] of markers){
+    if(ids.has(id))continue
+    try{marker.remove()}catch{}
+    markers.delete(id)
+  }
+  for(const item of currentLocations){
     const fresh=Date.now()-new Date(item.updated_at).getTime()<5*60*1000
-    element.className=`family-map-marker${item.mine?' mine':''}${fresh?' fresh':''}`
+    const className=`family-map-marker${item.mine?' mine':''}${fresh?' fresh':''}`
+    const signature=[item.name,item.avatarUrl,item.mine].join('|')
+    let marker=markers.get(item.member_id)
+    let element:HTMLButtonElement
+    if(marker){
+      element=marker.getElement() as HTMLButtonElement
+      const lastPosition=marker.getLngLat()
+      if(Math.abs(lastPosition.lng-item.longitude)>0.0000001||Math.abs(lastPosition.lat-item.latitude)>0.0000001){
+        marker.setLngLat([item.longitude,item.latitude])
+      }
+    }else{
+      element=document.createElement('button')
+      element.type='button'
+      marker=new MapLibre.Marker({element,anchor:'bottom'})
+        .setLngLat([item.longitude,item.latitude])
+        .addTo(map)
+      markers.set(item.member_id,marker)
+      element.addEventListener('click',event=>{
+        event.stopPropagation()
+        const current=currentLocations.find(location=>location.member_id===item.member_id)
+        if(!current)return
+        focus(current,true)
+        void refreshMemberLocation(current.member_id)
+      })
+    }
+    element.className=className
     element.setAttribute('aria-label',`Ver ubicación de ${item.name}`)
-    element.innerHTML=`<span class="family-map-marker-dot">${avatarMarkup(item)}</span><span class="family-map-marker-label">${esc(item.name)}</span>`
-    bindAvatarFallback(element)
-    element.addEventListener('click',event=>{
-      event.stopPropagation()
-      focus(item,true)
-      void refreshMemberLocation(item.member_id)
-    })
-    markers.push(new MapLibre.Marker({element,anchor:'bottom'}).setLngLat([item.longitude,item.latitude]).addTo(map))
-  })
+    if(element.dataset.contentSignature!==signature){
+      element.dataset.contentSignature=signature
+      element.innerHTML=`<span class="family-map-marker-dot">${avatarMarkup(item)}</span><span class="family-map-marker-label">${esc(item.name)}</span>`
+      bindAvatarFallback(element)
+    }
+  }
   renderPeople()
 }
 
@@ -574,6 +604,10 @@ async function applyState(state:LocationState){
     return
   }
 
+  // Retain the newest Supabase snapshot while the map's base style loads.
+  // Initial map.on('load') consumes currentLocations instead of an older closure.
+  if(map&&!sceneLoaded)return
+
   if(map&&!changed){
     hideOverlay(shell)
     setTimeout(()=>{try{map.resize()}catch{}},20)
@@ -607,13 +641,16 @@ async function applyState(state:LocationState){
         resizeObserver.observe(shell)
       }
       map.on('load',()=>{
+        sceneLoaded=true
         add3dBuildings(map)
         addCinematicStreets(map)
         applyCinematicScene(map)
         renderMarkers(MapLibre)
         syncActivePopup()
-        lastLocationSignature=signature
-        lastMemberSignature=memberSignature
+        lastLocationSignature=currentLocations
+          .map(item=>[item.member_id,item.latitude.toFixed(6),item.longitude.toFixed(6),item.updated_at,item.avatarPath||''].join(':'))
+          .sort().join('|')
+        lastMemberSignature=currentLocations.map(item=>item.member_id).sort().join('|')
         fitAll()
         hideOverlay(shell)
       })
