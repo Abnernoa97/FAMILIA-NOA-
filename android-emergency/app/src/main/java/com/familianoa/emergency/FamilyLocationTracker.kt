@@ -8,6 +8,12 @@ import android.location.LocationListener
 import android.location.LocationManager
 import android.os.Bundle
 import android.os.Looper
+import android.os.Build
+import android.os.Handler
+import android.os.CancellationSignal
+import android.os.SystemClock
+import android.util.Log
+import java.util.concurrent.TimeUnit
 import java.util.concurrent.atomic.AtomicBoolean
 
 class FamilyLocationTracker(
@@ -16,22 +22,26 @@ class FamilyLocationTracker(
     private val accessTokenProvider: () -> String,
 ) : LocationListener {
     companion object {
-        private const val MIN_UPDATE_MS = 4_000L
+        private const val MIN_UPDATE_MS = 10_000L
         private const val MAX_SILENCE_MS = 20_000L
-        private const val MAX_LAST_KNOWN_AGE_MS = 60_000L
+        private const val HEARTBEAT_MS = 30_000L
+        private const val MAX_LAST_KNOWN_AGE_MS = 20_000L
         private const val MIN_DISTANCE_M = 2.5f
     }
 
     private val appContext = context.applicationContext
     private val locationManager = appContext.getSystemService(LocationManager::class.java)
     private val uploading = AtomicBoolean(false)
+    private val heartbeatHandler = Handler(Looper.getMainLooper())
+    private var heartbeat:Runnable? = null
+    private var currentFix:CancellationSignal? = null
 
     @Volatile
     var running: Boolean = false
         private set
 
     private var lastUploadedLocation: Location? = null
-    private var lastUploadAt = 0L
+    @Volatile private var lastUploadAt = 0L
 
     fun start(): Boolean {
         if (running) return true
@@ -56,16 +66,15 @@ class FamilyLocationTracker(
                 locationManager.requestLocationUpdates(
                     provider,
                     MIN_UPDATE_MS,
-                    MIN_DISTANCE_M,
+                    0f, // Keep receiving fixes while stationary; upload() still filters movement.
                     this,
                     Looper.getMainLooper()
                 )
             }
 
             running = true
-            if (lastKnown != null && System.currentTimeMillis() - lastKnown.time <= MAX_LAST_KNOWN_AGE_MS) {
-                upload(lastKnown, force = true)
-            }
+            if (lastKnown != null && fresh(lastKnown)) upload(lastKnown, force = true)
+            beginHeartbeat()
             true
         } catch (_: SecurityException) {
             running = false
@@ -77,6 +86,10 @@ class FamilyLocationTracker(
     }
 
     fun stop() {
+        heartbeat?.let(heartbeatHandler::removeCallbacks)
+        heartbeat = null
+        currentFix?.cancel()
+        currentFix = null
         if (!running) return
         runCatching { locationManager.removeUpdates(this) }
         running = false
@@ -92,7 +105,8 @@ class FamilyLocationTracker(
         val best = providers
             .mapNotNull { provider -> runCatching { locationManager.getLastKnownLocation(provider) }.getOrNull() }
             .maxByOrNull { it.time }
-        if (best != null) upload(best, force = true)
+        if (best != null && fresh(best)) upload(best, force = true)
+        else requestFreshFix()
     }
 
     override fun onLocationChanged(location: Location) {
@@ -106,7 +120,7 @@ class FamilyLocationTracker(
     override fun onProviderDisabled(provider: String) = Unit
 
     private fun upload(location: Location, force: Boolean) {
-        if (!running || !valid(location) || !uploading.compareAndSet(false, true)) return
+        if (!running || !valid(location) || !fresh(location) || !uploading.compareAndSet(false, true)) return
 
         val now = System.currentTimeMillis()
         val previous = lastUploadedLocation
@@ -151,12 +165,63 @@ class FamilyLocationTracker(
                 )
                 lastUploadedLocation = Location(location)
                 lastUploadAt = System.currentTimeMillis()
-            } catch (_: Throwable) {
-                // The next GPS sample retries automatically.
+            } catch (error: Throwable) {
+                Log.w("FamiliaNoaGPS", "Upload failed; the next sample will retry", error)
             } finally {
                 uploading.set(false)
             }
         }.start()
+    }
+
+
+    private fun fresh(location: Location): Boolean {
+        val ageMs = TimeUnit.NANOSECONDS.toMillis(
+            SystemClock.elapsedRealtimeNanos() - location.elapsedRealtimeNanos
+        )
+        return ageMs in -5_000L..MAX_LAST_KNOWN_AGE_MS
+    }
+
+    private fun beginHeartbeat() {
+        heartbeat?.let(heartbeatHandler::removeCallbacks)
+        val task = object:Runnable {
+            override fun run() {
+                if (!running) return
+                if (System.currentTimeMillis() - lastUploadAt >= MAX_SILENCE_MS) {
+                    requestFreshFix()
+                }
+                heartbeatHandler.postDelayed(this, HEARTBEAT_MS)
+            }
+        }
+        heartbeat = task
+        heartbeatHandler.postDelayed(task, HEARTBEAT_MS)
+    }
+
+    private fun requestFreshFix() {
+        if (!running || Build.VERSION.SDK_INT < 30 || currentFix != null) return
+        val provider = listOf(LocationManager.NETWORK_PROVIDER, LocationManager.GPS_PROVIDER)
+            .firstOrNull { runCatching { locationManager.isProviderEnabled(it) }.getOrDefault(false) }
+            ?: return
+        val signal = CancellationSignal()
+        currentFix = signal
+        val timeout = Runnable {
+            if (currentFix === signal) {
+                currentFix = null
+                signal.cancel()
+            }
+        }
+        heartbeatHandler.postDelayed(timeout, 15_000L)
+        try {
+            locationManager.getCurrentLocation(provider, signal, { task -> heartbeatHandler.post(task) }) { location ->
+                heartbeatHandler.removeCallbacks(timeout)
+                if (currentFix !== signal) return@getCurrentLocation
+                currentFix = null
+                if (running && location != null) upload(location, force = true)
+            }
+        } catch (error: Throwable) {
+            heartbeatHandler.removeCallbacks(timeout)
+            currentFix = null
+            Log.w("FamiliaNoaGPS", "Fresh position request failed", error)
+        }
     }
 
     private fun valid(location: Location): Boolean =
