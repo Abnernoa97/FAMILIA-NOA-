@@ -221,7 +221,17 @@ function syncActivePopup(){
 
 function focus(item:MapLocation,showPopup=false){
   if(!map)return
-  map.flyTo({center:[item.longitude,item.latitude],zoom:16.9,pitch:52,bearing:-24,duration:750,curve:1.28,essential:true,padding:{top:60,right:25,bottom:120,left:25}})
+  // Changing family member is a selection, not a geographic camera flight.
+  // flyTo() zoomed out and back in, making all markers seem to rush toward
+  // the selected person and return despite their fixed GPS coordinates.
+  map.stop()
+  map.jumpTo({
+    center:[item.longitude,item.latitude],
+    zoom:16.9,
+    pitch:52,
+    bearing:-24,
+    padding:{top:60,right:25,bottom:120,left:25},
+  })
   const title=document.querySelector<HTMLElement>('[data-map-title]')
   if(title)title.textContent=item.mine?'Tu ubicación':item.name
   document.querySelectorAll<HTMLElement>('.family-map-chip').forEach(chip=>chip.classList.toggle('selected',chip.dataset.mapMember===item.member_id))
@@ -268,7 +278,12 @@ function renderMarkers(MapLibre:any){
     let element:HTMLButtonElement
     if(marker){
       element=marker.getElement() as HTMLButtonElement
-      marker.setLngLat([item.longitude,item.latitude])
+      // Do not reproject unchanged GPS points during camera changes.
+      const point=marker.getLngLat()
+      if(Math.abs(point.lng-item.longitude)>0.0000001||
+         Math.abs(point.lat-item.latitude)>0.0000001){
+        marker.setLngLat([item.longitude,item.latitude])
+      }
     }else{
       element=document.createElement('button')
       element.type='button'
