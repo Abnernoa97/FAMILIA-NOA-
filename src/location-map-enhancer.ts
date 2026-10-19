@@ -155,6 +155,7 @@ function destroyMap(){
   if(activePopup){try{activePopup.remove()}catch{}}
   activePopup=null
   activePopupMemberId=''
+  closeDetailsCard()
   if(map){try{map.remove()}catch{}}
   map=null
 }
@@ -401,7 +402,56 @@ function popupHtml(item:MapLocation){
   return `<b>${esc(item.name)}${item.mine?' · tú':''}</b><small>${esc(age(item.updated_at))}${Number.isFinite(item.accuracy)?` · ±${Math.round(item.accuracy as number)} m`:''}</small>`
 }
 
+function closeDetailsCard(){
+  activeCardMemberId=''
+  const card=document.querySelector<HTMLElement>('[data-map-card]')
+  if(card)card.hidden=true
+  const shell=document.querySelector<HTMLElement>('[data-family-map]')
+  shell?.classList.remove('has-selected','card-collapsed')
+}
+
+function renderDetailsCard(item:MapLocation){
+  const card=document.querySelector<HTMLElement>('[data-map-card]')
+  const shell=document.querySelector<HTMLElement>('[data-family-map]')
+  if(!card||!shell)return
+  activeCardMemberId=item.member_id
+  const elapsed=Date.now()-new Date(item.updated_at).getTime()
+  const fresh=Number.isFinite(elapsed)&&elapsed>=0&&elapsed<5*60*1000
+  const accuracy=Number.isFinite(item.accuracy)?'±'+Math.round(item.accuracy as number)+' m':'Sin dato'
+  const label=esc(item.name)+(item.mine?' · tú':'')
+  const status=fresh?'Ahora':'Última ubicación'
+  card.hidden=false
+  shell.classList.add('has-selected')
+  shell.classList.toggle('card-collapsed',!cardExpanded)
+  card.innerHTML=
+    '<div class="family-map-detail-grab"></div>'+
+    '<div class="family-map-detail-top">'+
+      '<span class="family-map-detail-avatar">'+avatarMarkup(item)+'</span>'+
+      '<div class="family-map-detail-info"><b>'+label+'</b>'+
+      '<span class="family-map-status'+(fresh?'':' old')+'">'+status+'</span>'+
+      '<small>'+esc(age(item.updated_at))+' · '+accuracy+'</small></div>'+
+      '<button type="button" class="family-map-card-icon" data-card-action="toggle" aria-label="'+(cardExpanded?'Reducir':'Ampliar')+' tarjeta" aria-expanded="'+String(cardExpanded)+'">'+(cardExpanded?'⌄':'⌃')+'</button>'+
+      '<button type="button" class="family-map-card-icon" data-card-action="close" aria-label="Cerrar tarjeta">×</button>'+
+    '</div>'+
+    '<div class="family-map-detail-body" '+(cardExpanded?'':'hidden')+'>'+
+      '<div class="family-map-detail-meta">'+
+        '<div class="family-map-detail-stat"><small>PRECISIÓN</small><b>'+accuracy+'</b></div>'+
+        '<div class="family-map-detail-stat"><small>ACTUALIZACIÓN</small><b>'+esc(age(item.updated_at))+'</b></div>'+
+      '</div>'+
+      '<div class="family-map-detail-actions">'+
+        '<button type="button" class="family-map-detail-action" data-card-action="focus">⌖  Centrar en el mapa</button>'+
+        '<button type="button" class="family-map-detail-action secondary" data-card-action="toggle">Reducir</button>'+
+      '</div>'+
+    '</div>'
+  bindAvatarFallback(card)
+}
+
 function syncActivePopup(){
+  if(activeCardMemberId){
+    const cardItem=currentLocations.find(location=>location.member_id===activeCardMemberId)
+    if(cardItem)renderDetailsCard(cardItem)
+    else closeDetailsCard()
+  }
   if(!map||!activePopup||!activePopupMemberId)return
   const item=currentLocations.find(location=>location.member_id===activePopupMemberId)
   if(!item)return
@@ -412,11 +462,13 @@ function syncActivePopup(){
 
 function focus(item:MapLocation,showPopup=false){
   if(!map)return
-  map.flyTo({center:[item.longitude,item.latitude],zoom:17.4,pitch:70,bearing:-32,duration:1050,curve:1.38,essential:true,padding:{top:60,right:25,bottom:120,left:25}})
+  map.flyTo({center:[item.longitude,item.latitude],zoom:17.4,pitch:70,bearing:-32,duration:1050,curve:1.38,essential:true,padding:{top:65,right:25,bottom:showPopup?245:cardExpanded?245:130,left:25}})
   const title=document.querySelector<HTMLElement>('[data-map-title]')
   if(title)title.textContent=item.mine?'Tu ubicación':item.name
   document.querySelectorAll<HTMLElement>('.family-map-chip').forEach(chip=>chip.classList.toggle('selected',chip.dataset.mapMember===item.member_id))
   if(showPopup){
+    if(activeCardMemberId!==item.member_id)cardExpanded=true
+    renderDetailsCard(item)
     const MapLibre=(window as any).__familiaMapLibre
     if(MapLibre){
       activePopupMemberId=item.member_id
@@ -517,6 +569,7 @@ async function applyState(state:LocationState){
     lastLocationSignature=''
     lastMemberSignature=''
     clearMarkers()
+    closeDetailsCard()
     showOverlay(shell,'empty')
     return
   }
