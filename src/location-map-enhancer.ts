@@ -260,6 +260,129 @@ function add3dBuildings(instance:any){
   }
 }
 
+function updateSceneButtons(){
+  const threeD=document.querySelector<HTMLButtonElement>('[data-map-3d]')
+  const night=document.querySelector<HTMLButtonElement>('[data-map-night]')
+  if(threeD){
+    threeD.textContent=scene.threeD?'3D':'2D'
+    threeD.setAttribute('aria-pressed',String(scene.threeD))
+    threeD.title=scene.threeD?'Cambiar a vista plana':'Activar vista 3D'
+  }
+  if(night){
+    night.textContent=scene.night?'☀':'☾'
+    night.setAttribute('aria-pressed',String(scene.night))
+    night.title=scene.night?'Cambiar a luz de día':'Activar iluminación nocturna'
+  }
+}
+
+/** OpenFreeMap tiles stay the single cartographic source; this changes only their presentation. */
+function applyCinematicScene(instance:any){
+  if(!instance||!instance.isStyleLoaded?.())return
+  const night=scene.night
+  const palette=night?{
+    ground:'#1e3035',water:'#17465b',park:'#245c4b',nature:'#375944',
+    built:'#34454b',roads:'#c5a06c',smallRoads:'#83978f',
+    labels:'#f1e6d1',halo:'#29353c',buildings:'#a38c78',
+  }:{
+    ground:'#e6d9be',water:'#4b93a0',park:'#7eab79',nature:'#a5ba87',
+    built:'#e0cbb1',roads:'#f9ecce',smallRoads:'#ddd1b7',
+    labels:'#34423e',halo:'#f6ead2',buildings:'#c9af91',
+  }
+  for(const layer of instance.getStyle()?.layers||[]){
+    const name=String(layer.id||'').toLowerCase()
+    if(name.startsWith('familia-'))continue
+    const group=String(layer['source-layer']||'').toLowerCase()
+    const isWater=group==='water'||/(water|ocean|lake)/.test(name)
+    const isPark=/(park|wood|forest|grass|garden)/.test(name)||/(park|grass)/.test(group)
+    const isNature=/(landcover|landuse)/.test(group)||/(landcover|nature)/.test(name)
+    const isRoad=group==='transportation'||/(road|street|highway|motorway|bridge|tunnel)/.test(name)
+    try{
+      if(layer.type==='background')instance.setPaintProperty(layer.id,'background-color',palette.ground)
+      else if(layer.type==='fill'){
+        const fill=isWater?palette.water:isPark?palette.park:isNature?palette.nature:isRoad?palette.roads:palette.built
+        instance.setPaintProperty(layer.id,'fill-color',fill)
+      }else if(layer.type==='line'){
+        if(isRoad)instance.setPaintProperty(layer.id,'line-color',/(minor|path|pedestrian|foot|track|service)/.test(name)?palette.smallRoads:palette.roads)
+        else if(isWater)instance.setPaintProperty(layer.id,'line-color',palette.water)
+      }else if(layer.type==='symbol'&&layer.layout?.['text-field']){
+        instance.setPaintProperty(layer.id,'text-color',palette.labels)
+        instance.setPaintProperty(layer.id,'text-halo-color',palette.halo)
+      }
+    }catch(error){console.warn('Cinematic map style layer unavailable',layer.id,error)}
+  }
+  try{
+    instance.setLight({
+      anchor:'map',
+      position:[1.5,night?205:175,night?65:48],
+      color:night?'#eecfa6':'#fff0d0',
+      intensity:night?0.55:0.78,
+    })
+  }catch(error){console.warn('Cinematic map light unavailable',error)}
+  try{
+    instance.setSky({
+      'sky-color':night?'#1e3549':'#a8bfc7',
+      'horizon-color':night?'#657d87':'#f3dcaf',
+      'fog-color':night?'#253b46':'#e4d8bd',
+      'sky-horizon-blend':0.65,
+      'horizon-fog-blend':0.38,
+      'fog-ground-blend':0.22,
+    })
+  }catch(error){console.warn('Cinematic sky unavailable',error)}
+  try{
+    if(instance.getLayer('familia-buildings-3d')){
+      instance.setLayoutProperty('familia-buildings-3d','visibility',scene.threeD?'visible':'none')
+      instance.setPaintProperty('familia-buildings-3d','fill-extrusion-color',[
+        'interpolate',['linear'],['coalesce',['get','render_height'],0],
+        0,palette.buildings,70,night?'#978c83':'#b89979',200,night?'#d2b48d':'#937b68',
+      ])
+      instance.setPaintProperty('familia-buildings-3d','fill-extrusion-opacity',night?0.96:0.9)
+    }
+    if(instance.getLayer('familia-cine-arterials')){
+      instance.setPaintProperty('familia-cine-arterials','line-color',night?'#f4b66d':'#dfb46e')
+      instance.setPaintProperty('familia-cine-arterials','line-opacity',night?0.85:0.42)
+    }
+  }catch(error){console.warn('Cinematic city layers unavailable',error)}
+
+  // Height data is an independent open DEM; never let it block the existing map.
+  if(scene.threeD&&!lowMemory&&!terrainUnavailable){
+    try{
+      if(!instance.getSource('familia-cinematic-dem')){
+        instance.addSource('familia-cinematic-dem',{
+          type:'raster-dem',url:ELEVATION_SOURCE,tileSize:512,encoding:'terrarium',
+          attribution:'© <a href="https://mapterhorn.com/attribution">Mapterhorn</a>',
+        })
+      }
+      instance.setTerrain({source:'familia-cinematic-dem',exaggeration:1.1})
+    }catch(error){
+      terrainUnavailable=true
+      console.warn('3D terrain unavailable; keeping 3D buildings',error)
+      try{instance.setTerrain(null)}catch{}
+    }
+  }else{
+    try{if(instance.getTerrain?.())instance.setTerrain(null)}catch{}
+  }
+}
+
+function addCinematicStreets(instance:any){
+  if(instance.getLayer('familia-cine-arterials'))return
+  try{
+    instance.addLayer({
+      id:'familia-cine-arterials',
+      source:'familia-openfreemap',
+      'source-layer':'transportation',
+      type:'line',
+      minzoom:11,
+      filter:['match',['get','class'],['motorway','trunk','primary'],true,false],
+      paint:{
+        'line-color':'#dfb46e',
+        'line-width':['interpolate',['linear'],['zoom'],11,0.5,15,1.6,19,3.5],
+        'line-opacity':0.45,
+        'line-blur':0.9,
+      },
+    })
+  }catch(error){console.warn('Cinematic street accents unavailable',error)}
+}
+
 function fitAll(){
   if(!map||!currentLocations.length)return
   if(currentLocations.length===1){
