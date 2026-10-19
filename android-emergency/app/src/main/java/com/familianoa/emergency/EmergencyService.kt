@@ -31,6 +31,8 @@ class EmergencyService : Service() {
         private const val EXTRA_ALERT_ID = "alert_id"
         private const val PROTECTION_CHANNEL = "familia_noa_protection"
         private const val EMERGENCY_CHANNEL = "familia_noa_emergency"
+        private const val ACTIVITY_CHANNEL = "familia_noa_activity"
+        private const val ACTIVITY_NOTIFICATION = 7102
         private const val PROTECTION_NOTIFICATION = 7001
         private const val EMERGENCY_NOTIFICATION = 911
 
@@ -130,8 +132,14 @@ class EmergencyService : Service() {
             lockscreenVisibility = Notification.VISIBILITY_PUBLIC
             if (manager.isNotificationPolicyAccessGranted) setBypassDnd(true)
         }
+        val familyActivity = NotificationChannel(ACTIVITY_CHANNEL, "Actividad familiar", NotificationManager.IMPORTANCE_DEFAULT).apply {
+            description = "Avisos al conectarse o comenzar a compartir ubicación"
+            lockscreenVisibility = Notification.VISIBILITY_PRIVATE
+            enableVibration(false)
+        }
         manager.createNotificationChannel(protection)
         manager.createNotificationChannel(emergency)
+        manager.createNotificationChannel(familyActivity)
     }
 
     private fun protectionNotification(state:String): Notification {
@@ -258,6 +266,10 @@ class EmergencyService : Service() {
             .put("schema", "public")
             .put("table", "help_alerts")
             .put("filter", "emergency=eq.true"))
+            .put(JSONObject()
+                .put("event", "INSERT")
+                .put("schema", "public")
+                .put("table", "family_activity_events"))
         val config = JSONObject()
             .put("broadcast", JSONObject().put("ack", false).put("self", false))
             .put("presence", JSONObject().put("enabled", false))
@@ -332,6 +344,10 @@ class EmergencyService : Service() {
                 "postgres_changes" -> {
                     val data = root.optJSONObject("payload")?.optJSONObject("data") ?: return
                     val record = data.optJSONObject("record") ?: return
+                    if (data.optString("table") == "family_activity_events") {
+                        showFamilyActivity(record)
+                        return
+                    }
                     if (!record.optBoolean("emergency", false)) return
                     val id = record.optString("id")
                     val resolved = !record.isNull("resolved_at") && record.optString("resolved_at").isNotBlank()
@@ -346,6 +362,48 @@ class EmergencyService : Service() {
                 }
             }
         } catch (_:Throwable) {}
+    }
+
+    /**
+     * Normal family activity is independent of the existing emergency channel.
+     * Only server-generated transition events are delivered, never raw GPS writes.
+     */
+    private fun showFamilyActivity(row:JSONObject) {
+        val id = row.optLong("id", 0L)
+        val memberId = row.optString("member_id")
+        val kind = row.optString("kind")
+        if (id <= 0L || memberId.isBlank() || memberId == store.memberId) return
+        if (kind != "online" && kind != "location_sharing") return
+        val createdAt = row.optString("created_at")
+        val time = try { java.time.Instant.parse(createdAt).toEpochMilli() } catch (_:Throwable) { 0L }
+        if (time <= 0L || kotlin.math.abs(System.currentTimeMillis() - time) > 10L * 60L * 1000L) return
+        if (android.os.Build.VERSION.SDK_INT >= 33 &&
+            checkSelfPermission(Manifest.permission.POST_NOTIFICATIONS) != PackageManager.PERMISSION_GRANTED) return
+        if (!store.rememberFamilyActivity(id)) return
+
+        val name = row.optString("member_name", "Un familiar").take(100)
+        val description = if (kind == "location_sharing")
+            "$name está compartiendo su ubicación"
+        else "$name se conectó a FAMILIA NOA"
+        val pending = PendingIntent.getActivity(
+            this, ACTIVITY_NOTIFICATION,
+            Intent(this, MainActivity::class.java).addFlags(Intent.FLAG_ACTIVITY_CLEAR_TOP or Intent.FLAG_ACTIVITY_SINGLE_TOP),
+            PendingIntent.FLAG_UPDATE_CURRENT or PendingIntent.FLAG_IMMUTABLE
+        )
+        val notification = (if (Build.VERSION.SDK_INT >= 26)
+            Notification.Builder(this, ACTIVITY_CHANNEL)
+        else Notification.Builder(this))
+            .setSmallIcon(android.R.drawable.ic_dialog_info)
+            .setContentTitle("FAMILIA NOA")
+            .setContentText(description)
+            .setStyle(Notification.BigTextStyle().bigText(description))
+            .setContentIntent(pending)
+            .setCategory(Notification.CATEGORY_SOCIAL)
+            .setAutoCancel(true)
+            .setVisibility(Notification.VISIBILITY_PRIVATE)
+            .build()
+        getSystemService(NotificationManager::class.java)
+            .notify(ACTIVITY_NOTIFICATION, notification)
     }
 
     private fun showEmergency(alert:EmergencyAlert) {
