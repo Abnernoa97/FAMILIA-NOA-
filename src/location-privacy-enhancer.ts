@@ -37,6 +37,8 @@ function ensureStyles(){
     }
     .location-stop-share:disabled{opacity:.45}
     .location-sharing-footer{flex-direction:column;align-items:center}
+    .family-pending-toggle{display:flex;align-items:center;justify-content:space-between;gap:12px;width:100%;margin:2px 0 12px;padding:15px 18px;border:1px solid #e6e0d6;border-radius:18px;background:#f9f7f2;color:#35312b;font-size:12px;font-weight:700;text-align:left;cursor:pointer}
+    .family-pending-toggle span{font-size:20px;color:#82796e;font-weight:400}
     .location-native-stale{display:none;text-align:center;color:#9b5a32;font-size:12px;font-weight:650;line-height:1.5;padding:0 20px 8px}
     .location-native-stale.visible{display:block}
     @media(max-width:480px){
