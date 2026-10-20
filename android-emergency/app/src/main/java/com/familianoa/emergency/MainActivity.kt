@@ -43,6 +43,7 @@ class MainActivity : Activity() {
     private var loadingView: TextView? = null
     private var openingProtection = false
     private var loadedMemberId = ""
+    private var pendingFamilyNotice: JSONObject? = null
 
     private var filePathCallback: ValueCallback<Array<Uri>>? = null
     private var captureUri: Uri? = null
@@ -56,11 +57,44 @@ class MainActivity : Activity() {
     override fun onCreate(savedInstanceState: Bundle?) {
         super.onCreate(savedInstanceState)
         store = SessionStore(this)
+        captureFamilyNotice(intent)
         window.statusBarColor = Color.rgb(246, 243, 237)
         window.navigationBarColor = Color.BLACK
         window.decorView.systemUiVisibility = View.SYSTEM_UI_FLAG_LIGHT_STATUS_BAR
 
         if (store.configured) renderWebApp() else openProtection()
+    }
+
+    override fun onNewIntent(intent: Intent) {
+        super.onNewIntent(intent)
+        setIntent(intent)
+        captureFamilyNotice(intent)
+        webView?.takeIf { it.visibility == View.VISIBLE }?.let { deliverFamilyNotice(it) }
+    }
+
+    private fun captureFamilyNotice(intent: Intent?) {
+        val kind=intent?.getStringExtra("familia_activity_kind") ?: return
+        if(kind !in setOf("online","location_sharing","presume_post","story","chat_message")) return
+        val memberId=intent.getStringExtra("familia_activity_member_id") ?: ""
+        pendingFamilyNotice=JSONObject()
+            .put("kind",kind)
+            .put("memberId",memberId)
+            .put("referenceId",intent.getStringExtra("familia_activity_reference_id"))
+    }
+
+    private fun deliverFamilyNotice(view:WebView) {
+        val detail=pendingFamilyNotice?.toString() ?: return
+        pendingFamilyNotice=null
+        val script="""
+          (function(){
+            try{
+              var detail=$detail;
+              sessionStorage.setItem('familia-noa-pending-native-notice',JSON.stringify(detail));
+              window.dispatchEvent(new CustomEvent('familia-noa:native-notification',{detail:detail}));
+            }catch(error){}
+          })();
+        """.trimIndent()
+        view.evaluateJavascript(script,null)
     }
 
     override fun onResume() {
@@ -263,6 +297,7 @@ class MainActivity : Activity() {
             if (result?.contains("reload") == true) return@evaluateJavascript
             view.visibility = View.VISIBLE
             loadingView?.visibility = View.GONE
+            deliverFamilyNotice(view)
         }
     }
 
