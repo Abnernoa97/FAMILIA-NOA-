@@ -715,16 +715,18 @@ async function drawViewer(){
     if(viewerStoryIndex>0)book.turnToPage(viewerStoryIndex)
     onStoryBookPage(viewerStoryIndex,token)
   }catch(error){
-    console.error('Magazine reader failed to mount',error)
-    destroyStoryBook()
-    // Prefer a visible story over a failed paper-curl engine on an unusual
-    // Android WebView. Basic navigation still works via drawViewer().
+    console.warn('Magazine reader unavailable; keeping stories accessible',error)
+    // A low-memory WebView must never make photographs inaccessible.
     const fallback=storyBookImages[viewerStoryIndex]
+    destroyStoryBook()
     if(fallback){
       fallback.classList.add('family-story-fallback-image')
       mount.replaceChildren(fallback)
-      storyBookImages=[fallback]
-      storyPageReady(0,token)
+      storyBookImages=Array.from({length:group.stories.length},(_,i)=>i===viewerStoryIndex?fallback:null as unknown as HTMLImageElement)
+      storyPageReady(viewerStoryIndex,token)
+    }else{
+      const loading=stage.querySelector<HTMLElement>('.family-story-loading')
+      if(loading)loading.textContent='No se pudo abrir esta historia.'
     }
   }
 }
