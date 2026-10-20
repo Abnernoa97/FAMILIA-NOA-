@@ -46,6 +46,20 @@ class SessionStore(context: Context) {
         }
     }
 
+    // Track a bounded collection, not just the highest event ID: Realtime can
+    // deliver concurrent notifications out of order. Durable across process restarts.
+    fun claimActivityEvent(id:Long):Boolean {
+        if (id <= 0L) return false
+        synchronized(this) {
+            val key="shown_family_activity_ids"
+            val ids=(prefs.getString(key,"") ?: "").split(",").filter { it.isNotBlank() }
+            if (id.toString() in ids) return false
+            val updated=(ids.takeLast(95) + id.toString()).joinToString(",")
+            prefs.edit().putString(key,updated).apply()
+            return true
+        }
+    }
+
     fun setBiometricEnabled(enabled:Boolean) {
         prefs.edit().putBoolean("biometric_enabled", enabled).apply()
     }

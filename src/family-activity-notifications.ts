@@ -5,7 +5,8 @@ type FamilyActivity={
   id:number
   member_id:string
   member_name:string
-  kind:'online'|'location_sharing'
+  kind:'online'|'location_sharing'|'presume_post'|'story'|'chat_message'
+  reference_id?:string|null
   created_at:string
 }
 
@@ -17,9 +18,13 @@ const seen=new Set<number>()
 const startedAt=Date.now()
 
 function notificationText(row:FamilyActivity){
-  return row.kind==='location_sharing'
-    ? `${row.member_name} está compartiendo su ubicación`
-    : `${row.member_name} se conectó a FAMILIA NOA`
+  switch(row.kind){
+    case 'location_sharing':return `${row.member_name} está compartiendo su ubicación`
+    case 'presume_post':return `${row.member_name} publicó en PRESUME`
+    case 'story':return `${row.member_name} compartió un Estado`
+    case 'chat_message':return `Nuevo mensaje de ${row.member_name} en Chat`
+    default:return `${row.member_name} se conectó a FAMILIA NOA`
+  }
 }
 
 function showActivity(row:FamilyActivity){
@@ -35,7 +40,9 @@ function showActivity(row:FamilyActivity){
   toast.querySelector('button')?.addEventListener('click',()=>toast.remove())
   toast.addEventListener('click',event=>{
     if((event.target as Element).closest('button'))return
-    window.dispatchEvent(new CustomEvent('familia-noa:open-location',{detail:{memberId:row.member_id}}))
+    window.dispatchEvent(new CustomEvent('familia-noa:open-notification',{
+      detail:{kind:row.kind,memberId:row.member_id,referenceId:row.reference_id||null}
+    }))
     toast.remove()
   })
   document.body.appendChild(toast)
@@ -47,7 +54,7 @@ function handleEvent(value:unknown){
   const row=value as FamilyActivity|undefined
   if(!row||!Number.isSafeInteger(row.id)||seen.has(row.id))return
   if(row.member_id===getMemberId())return
-  if(row.kind!=='online'&&row.kind!=='location_sharing')return
+  if(!['online','location_sharing','presume_post','story','chat_message'].includes(row.kind))return
   const createdAt=Date.parse(row.created_at)
   if(!Number.isFinite(createdAt)||createdAt<startedAt-15000)return
   seen.add(row.id)

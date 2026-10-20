@@ -643,6 +643,56 @@ async function boot() {
 void loadSettings()
 void boot()
 
+type FamilyNotificationKind='online'|'location_sharing'|'presume_post'|'story'|'chat_message'
+type NotificationTarget={kind:FamilyNotificationKind;memberId:string;referenceId?:string|null}
+
+async function navigateFamilyNotification(detail:NotificationTarget){
+  if(!getIdentity()?.memberId)return
+  if(detail.kind==='chat_message'){openChatScreen();return}
+  if(detail.kind==='presume_post'){
+    await import('./presume-enhancer')
+    document.dispatchEvent(new CustomEvent('presume:open-notification',{detail:{postId:detail.referenceId}}))
+    return
+  }
+  if(detail.kind==='story'){
+    renderHome()
+    await import('./home-stories')
+    window.dispatchEvent(new CustomEvent('familia-noa:open-story-notification',{detail:{memberId:detail.memberId}}))
+    return
+  }
+  await renderLocation(true)
+  if(detail.memberId)window.dispatchEvent(new CustomEvent('familia-noa:focus-location',{detail:{memberId:detail.memberId}}))
+}
+
+window.addEventListener('familia-noa:open-notification',event=>{
+  const detail=(event as CustomEvent<NotificationTarget>).detail
+  if(!detail||!['online','location_sharing','presume_post','story','chat_message'].includes(detail.kind))return
+  void navigateFamilyNotification(detail).catch(error=>console.error('Notification navigation unavailable',error))
+})
+
+// The existing Android WebView forwards a tapped notification here after the
+// home session has been restored. Store it until family identity is available.
+const NATIVE_NOTICE_KEY='familia-noa-pending-native-notice'
+window.addEventListener('familia-noa:native-notification',event=>{
+  const detail=(event as CustomEvent<NotificationTarget>).detail
+  if(!detail)return
+  try{sessionStorage.setItem(NATIVE_NOTICE_KEY,JSON.stringify(detail))}catch{}
+  void openPendingNativeNotice()
+})
+async function openPendingNativeNotice(){
+  if(!getIdentity()?.memberId)return
+  const raw=sessionStorage.getItem(NATIVE_NOTICE_KEY)
+  if(!raw)return
+  try{
+    const detail=JSON.parse(raw) as NotificationTarget
+    if(!['online','location_sharing','presume_post','story','chat_message'].includes(detail.kind))return
+    sessionStorage.removeItem(NATIVE_NOTICE_KEY)
+    await navigateFamilyNotification(detail)
+  }catch(error){console.error('Native notification destination unavailable',error)}
+}
+window.addEventListener('familia-noa:identity-changed',()=>void openPendingNativeNotice())
+window.setTimeout(()=>void openPendingNativeNotice(),1200)
+
 window.addEventListener('familia-noa:open-location',event=>{
   if(!getIdentity()?.memberId)return
   const memberId=String((event as CustomEvent<{memberId?:string}>).detail?.memberId||'')

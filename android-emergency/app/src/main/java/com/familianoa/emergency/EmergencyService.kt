@@ -373,21 +373,35 @@ class EmergencyService : Service() {
         val memberId = row.optString("member_id")
         val kind = row.optString("kind")
         if (id <= 0L || memberId.isBlank() || memberId == store.memberId) return
-        if (kind != "online" && kind != "location_sharing") return
-        val createdAt = row.optString("created_at")
-        val time = try { java.time.Instant.parse(createdAt).toEpochMilli() } catch (_:Throwable) { 0L }
+        if (kind !in setOf("online", "location_sharing", "presume_post", "story", "chat_message")) return
+        val time = try {
+            java.time.Instant.parse(row.optString("created_at")).toEpochMilli()
+        } catch (_:Throwable) { 0L }
         if (time <= 0L || kotlin.math.abs(System.currentTimeMillis() - time) > 10L * 60L * 1000L) return
-        if (android.os.Build.VERSION.SDK_INT >= 33 &&
+        if (Build.VERSION.SDK_INT >= 33 &&
             checkSelfPermission(Manifest.permission.POST_NOTIFICATIONS) != PackageManager.PERMISSION_GRANTED) return
-        if (!store.rememberFamilyActivity(id)) return
+        if (!store.claimActivityEvent(id)) return
 
-        val name = row.optString("member_name", "Un familiar").take(100)
-        val description = if (kind == "location_sharing")
-            "$name está compartiendo su ubicación"
-        else "$name se conectó a FAMILIA NOA"
+        val name = row.optString("member_name", "Un familiar").take(80)
+        val description = when (kind) {
+            "location_sharing" -> "$name está compartiendo su ubicación"
+            "presume_post" -> "$name publicó en PRESUME"
+            "story" -> "$name compartió un Estado"
+            "chat_message" -> "Nuevo mensaje de $name en Chat"
+            else -> "$name se conectó a FAMILIA NOA"
+        }
+        val referenceId = row.optString("reference_id", "")
+        // Each notification has its own PendingIntent and Android notification
+        // ID. A second family event must never replace or redirect the first.
+        val nativeId = (id % 1_900_000_000L).toInt() + 10_000
+        val destination = Intent(this, MainActivity::class.java).apply {
+            addFlags(Intent.FLAG_ACTIVITY_CLEAR_TOP or Intent.FLAG_ACTIVITY_SINGLE_TOP)
+            putExtra("familia_activity_kind", kind)
+            putExtra("familia_activity_member_id", memberId)
+            putExtra("familia_activity_reference_id", referenceId)
+        }
         val pending = PendingIntent.getActivity(
-            this, ACTIVITY_NOTIFICATION,
-            Intent(this, MainActivity::class.java).addFlags(Intent.FLAG_ACTIVITY_CLEAR_TOP or Intent.FLAG_ACTIVITY_SINGLE_TOP),
+            this, nativeId, destination,
             PendingIntent.FLAG_UPDATE_CURRENT or PendingIntent.FLAG_IMMUTABLE
         )
         val notification = (if (Build.VERSION.SDK_INT >= 26)
@@ -402,8 +416,7 @@ class EmergencyService : Service() {
             .setAutoCancel(true)
             .setVisibility(Notification.VISIBILITY_PRIVATE)
             .build()
-        getSystemService(NotificationManager::class.java)
-            .notify(ACTIVITY_NOTIFICATION, notification)
+        getSystemService(NotificationManager::class.java).notify(nativeId, notification)
     }
 
     private fun showEmergency(alert:EmergencyAlert) {

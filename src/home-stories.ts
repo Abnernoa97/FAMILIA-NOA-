@@ -502,6 +502,14 @@ async function openViewer(memberId:string){
   await drawViewer()
 }
 
+window.addEventListener('familia-noa:open-story-notification',event=>{
+  const memberId=(event as CustomEvent<{memberId?:string}>).detail?.memberId||''
+  if(!memberId)return
+  void (async()=>{
+    if(!dataReady)await refreshStories()
+    if(!viewer)await openViewer(memberId)
+  })().catch(error=>console.warn('Family story notification navigation unavailable',error))
+})
 window.addEventListener('popstate',()=>{
   if(viewer&&history.state?.[HISTORY_KEY]!==1)closeViewerDirect()
 })
