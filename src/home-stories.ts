@@ -32,6 +32,9 @@ let viewerStoryIndex=0
 let viewerPaused=false
 let viewerDrawToken=0
 let viewerTurning=false
+let viewerMediaReady=false
+let viewerStartedAt=0
+let viewerRemainingMs=STORY_MS
 const wiredStoryRails=new WeakSet<HTMLElement>()
 let snapshotStoryAction:{kind:'member'|'create';memberId?:string}|null=null
 let picker:HTMLElement|null=null
@@ -352,9 +355,30 @@ async function markViewed(story:Story){
 function clearViewerTimer(){
   if(viewerTimer!==null){window.clearTimeout(viewerTimer);viewerTimer=null}
 }
+function pauseViewer(){
+  if(viewerStartedAt){
+    viewerRemainingMs=Math.max(100,viewerRemainingMs-(Date.now()-viewerStartedAt))
+    viewerStartedAt=0
+  }
+  clearViewerTimer()
+  viewerPaused=true
+  const bar=viewer?.querySelector<HTMLElement>('.family-story-progress i.active span')
+  if(bar){
+    bar.style.transition='none'
+    bar.style.transform=`scaleX(${Math.max(0,Math.min(1,(STORY_MS-viewerRemainingMs)/STORY_MS))})`
+  }
+}
+function resumeViewer(){
+  if(!viewerPaused)return
+  viewerPaused=false
+  scheduleViewer()
+}
 
 function closeViewerDirect(){
   viewerTurning=false
+  viewerMediaReady=false
+  viewerStartedAt=0
+  viewerRemainingMs=STORY_MS
   snapshotStoryAction=null
   clearViewerTimer()
   closeActionSheet()
@@ -376,9 +400,14 @@ function closeViewer(){
 // Same physical paper-turn engine and timing family used in HAVANA QUOTES.
 // The overlay is purely visual: existing story media, permissions, progress,
 // view tracking and navigation continue to use the original viewer controller.
+// HAVANA QUOTES uses PageFlip 2.0.7 with a stretchable single-page
+// portrait reader. Keep that geometry here; a full-screen leaf configured
+// to the raw WebView height rendered half the picture outside the viewport.
 async function animateMagazineTurn(next:Story,direction:1|-1){
-  const stage=viewer?.querySelector<HTMLElement>('.family-story-stage')
-  const currentImage=stage?.querySelector<HTMLImageElement>('img')
+  if(window.matchMedia('(prefers-reduced-motion: reduce)').matches)return
+  const activeViewer=viewer
+  const stage=activeViewer?.querySelector<HTMLElement>('.family-story-stage')
+  const currentImage=stage?.querySelector<HTMLImageElement>(':scope > img')
   if(!stage||!currentImage?.src)return
   let nextUrl=mediaUrl(next.media_path)
   if(!nextUrl){
@@ -387,50 +416,79 @@ async function animateMagazineTurn(next:Story,direction:1|-1){
       return
     }
   }
-  if(!nextUrl||!viewer||!document.contains(stage))return
+  if(!nextUrl||viewer!==activeViewer||!stage.isConnected)return
+
+  // Preload the target image before beginning the curl. Avoid ever showing a
+  // completely black half-page on Android while the new image is loading.
+  const nextImageReady=await new Promise<boolean>(resolve=>{
+    const preload=new Image()
+    let finished=false
+    const finish=(ready:boolean)=>{if(finished)return;finished=true;resolve(ready)}
+    preload.onload=()=>finish(true)
+    preload.onerror=()=>finish(false)
+    preload.src=nextUrl
+    if(preload.complete&&preload.naturalWidth>0)finish(true)
+    window.setTimeout(()=>finish(false),350)
+  })
+  // Slow media never leaves the user waiting on an empty black magazine page.
+  // Continue with normal story navigation instead of blocking for the effect.
+  if(!nextImageReady||viewer!==activeViewer||!stage.isConnected)return
 
   const overlay=document.createElement('div')
   overlay.className='family-story-magazine-overlay'
+  // Real next photograph fills the stage underneath the turning paper.
+  // With a black background the right half used to be a black rectangle.
+  const underlay=document.createElement('img')
+  underlay.className='family-story-magazine-underlay'
+  underlay.src=nextUrl
+  underlay.alt=''
+  overlay.appendChild(underlay)
+
   const host=document.createElement('div')
   host.className='family-story-magazine-host'
   overlay.appendChild(host)
   const makePage=(url:string)=>{
     const page=document.createElement('div')
     page.className='family-story-magazine-leaf'
-    const img=document.createElement('img')
-    img.src=url
-    img.alt=''
-    img.draggable=false
-    page.appendChild(img)
+    const image=document.createElement('img')
+    image.src=url
+    image.alt=''
+    image.draggable=false
+    page.appendChild(image)
     return page
   }
   const oldPage=makePage(currentImage.src)
-  const newPage=makePage(nextUrl)
-  const pages=direction===1?[oldPage,newPage]:[newPage,oldPage]
+  const nextPage=makePage(nextUrl)
+  const pages=direction===1?[oldPage,nextPage]:[nextPage,oldPage]
   host.append(...pages)
   stage.appendChild(overlay)
 
   let flip:PageFlip|null=null
   try{
-    const width=Math.max(260,Math.round(stage.clientWidth))
-    const height=Math.max(360,Math.round(stage.clientHeight))
+    const stageWidth=Math.max(270,Math.round(stage.clientWidth))
+    const stageHeight=Math.max(382,Math.round(stage.clientHeight))
+    // Match HAVANA QUOTES page dimensions and responsive bounds rather than
+    // forcing each page to the entire stage (which breaks portrait rendering).
     flip=new PageFlip(host,{
-      width,height,size:'stretch',
-      minWidth:width,maxWidth:width,minHeight:height,maxHeight:height,
-      drawShadow:true,maxShadowOpacity:.72,flippingTime:920,
+      width:410,height:580,size:'stretch',
+      minWidth:Math.min(270,stageWidth),
+      maxWidth:Math.max(560,stageWidth),
+      minHeight:Math.min(382,stageHeight),
+      maxHeight:Math.max(792,stageHeight),
+      drawShadow:true,maxShadowOpacity:.42,flippingTime:680,
       usePortrait:true,autoSize:true,showCover:false,
       mobileScrollSupport:false,swipeDistance:25,
       showPageCorners:true,disableFlipByClick:true
     })
     flip.loadFromHTML(pages)
     await new Promise<void>(resolve=>requestAnimationFrame(()=>requestAnimationFrame(()=>resolve())))
+    if(viewer!==activeViewer||!stage.isConnected)return
     if(direction===-1)flip.turnToPage(1)
     if(direction===1)flip.flipNext('bottom')
     else flip.flipPrev('bottom')
-    await new Promise<void>(resolve=>window.setTimeout(resolve,990))
+    await new Promise<void>(resolve=>window.setTimeout(resolve,720))
   }catch(error){
-    // Never let an animation failure stop a real story from opening.
-    console.warn('Magazine turn unavailable, continuing normally',error)
+    console.warn('Magazine page curl unavailable; showing next story',error)
   }finally{
     try{flip?.destroy()}catch{}
     overlay.remove()
@@ -456,6 +514,7 @@ async function moveViewer(direction:1|-1){
   const openedViewer=viewer
   viewerTurning=true
   clearViewerTimer()
+  viewerStartedAt=0
   try{
     if(currentStory)await animateMagazineTurn(next,direction)
   }finally{
@@ -469,14 +528,28 @@ async function moveViewer(direction:1|-1){
 
 function scheduleViewer(){
   clearViewerTimer()
-  if(viewerPaused||viewerTurning||!viewer)return
-  viewerTimer=window.setTimeout(()=>moveViewer(1),STORY_MS)
+  if(viewerPaused||viewerTurning||!viewer||!viewerMediaReady)return
+  viewerRemainingMs=Math.max(100,viewerRemainingMs)
+  viewerStartedAt=Date.now()
+  const bar=viewer.querySelector<HTMLElement>('.family-story-progress i.active span')
+  if(bar){
+    bar.style.transition='none'
+    bar.style.transform=`scaleX(${Math.max(0,Math.min(1,(STORY_MS-viewerRemainingMs)/STORY_MS))})`
+    // Ensure the browser sees the starting position before animating.
+    void bar.offsetWidth
+    bar.style.transition=`transform ${viewerRemainingMs}ms linear`
+    bar.style.transform='scaleX(1)'
+  }
+  viewerTimer=window.setTimeout(()=>{
+    viewerStartedAt=0
+    void moveViewer(1)
+  },viewerRemainingMs)
 }
 
 function showOwnStoryActions(story:Story,position:number,total:number){
   closeActionSheet()
   clearViewerTimer()
-  viewerPaused=true
+  pauseViewer()
   const root=document.createElement('div')
   root.className='family-story-actions'
   root.innerHTML=`<div class="family-story-actions-card"><div class="family-story-actions-copy"><b>Tu historia</b><span>${total===1?'1 historia activa':`${position} de ${total} historias activas`}</span></div><button class="family-story-delete" data-story-delete>Eliminar historia</button><button class="family-story-cancel" data-story-cancel>Cancelar</button></div>`
@@ -484,8 +557,7 @@ function showOwnStoryActions(story:Story,position:number,total:number){
   actionSheet=root
   const resume=()=>{
     closeActionSheet()
-    viewerPaused=false
-    scheduleViewer()
+    resumeViewer()
   }
   root.addEventListener('click',event=>{if(event.target===root)resume()})
   root.querySelector('[data-story-cancel]')?.addEventListener('click',resume)
@@ -538,6 +610,9 @@ async function drawViewer(){
   if(!viewer)return
   const token=++viewerDrawToken
   clearViewerTimer()
+  viewerStartedAt=0
+  viewerRemainingMs=STORY_MS
+  viewerMediaReady=false
   closeActionSheet()
   const group=viewerGroups[viewerGroupIndex]
   const story=group?.stories[viewerStoryIndex]
@@ -545,7 +620,7 @@ async function drawViewer(){
 
   const own=group.member.id===identity()?.memberId
   const ownerActions=own?'<button class="family-story-viewer-more" data-story-more aria-label="Opciones de tu historia">⋯</button>':''
-  viewer.innerHTML=`<div class="family-story-viewer-top"><div class="family-story-progress">${group.stories.map((_,index)=>`<i class="${index<viewerStoryIndex?'seen':index===viewerStoryIndex?'active':''}"></i>`).join('')}</div><div class="family-story-viewer-head">${avatarMarkup(group.member,'family-story-viewer-avatar')}<div class="family-story-viewer-who"><b>${esc(group.member.name)}</b><span>${age(story.created_at)}</span></div>${ownerActions}<button class="family-story-viewer-close" aria-label="Cerrar">×</button></div></div><div class="family-story-stage"><div class="family-story-loading">Cargando historia…</div><div class="family-story-stage-nav"><button data-story-prev aria-label="Historia anterior"></button><button data-story-next aria-label="Historia siguiente"></button></div></div>`
+  viewer.innerHTML=`<div class="family-story-viewer-top"><div class="family-story-progress">${group.stories.map((_,index)=>`<i class="${index<viewerStoryIndex?'seen':index===viewerStoryIndex?'active':''}"><span></span></i>`).join('')}</div><div class="family-story-viewer-head">${avatarMarkup(group.member,'family-story-viewer-avatar')}<div class="family-story-viewer-who"><b>${esc(group.member.name)}</b><span>${age(story.created_at)}</span></div>${ownerActions}<button class="family-story-viewer-close" aria-label="Cerrar">×</button></div></div><div class="family-story-stage"><div class="family-story-loading">Cargando historia…</div><div class="family-story-stage-nav"><button data-story-prev aria-label="Historia anterior"></button><button data-story-next aria-label="Historia siguiente"></button></div></div>`
 
   viewer.querySelector('.family-story-viewer-close')?.addEventListener('click',closeViewer)
   viewer.querySelector('[data-story-more]')?.addEventListener('click',()=>showOwnStoryActions(story,viewerStoryIndex+1,group.stories.length))
@@ -554,10 +629,9 @@ async function drawViewer(){
   const stage=viewer.querySelector<HTMLElement>('.family-story-stage')!
   stage.addEventListener('pointerdown',event=>{
     if((event.target as Element).closest('button'))return
-    viewerPaused=true
-    clearViewerTimer()
+    pauseViewer()
   })
-  const resume=()=>{if(!viewerPaused)return;viewerPaused=false;scheduleViewer()}
+  const resume=()=>resumeViewer()
   stage.addEventListener('pointerup',resume)
   stage.addEventListener('pointercancel',resume)
   stage.addEventListener('pointerleave',resume)
@@ -570,20 +644,25 @@ async function drawViewer(){
   const loading=stage.querySelector('.family-story-loading')
   if(!url){
     if(loading)loading.textContent='No se pudo abrir esta historia.'
-    scheduleViewer()
     return
   }
   const image=document.createElement('img')
   image.src=url
   image.alt=`Historia de ${group.member.name}`
   image.decoding='async'
-  image.addEventListener('load',()=>{
+  let imageReadyOnce=false
+  const ready=()=>{
+    if(imageReadyOnce||viewer!==stage.closest('.family-story-viewer')||token!==viewerDrawToken)return
+    imageReadyOnce=true
     loading?.remove()
+    viewerMediaReady=true
     void markViewed(story)
-  },{once:true})
+    scheduleViewer()
+  }
+  image.addEventListener('load',ready,{once:true})
   image.addEventListener('error',()=>{if(loading)loading.textContent='No se pudo abrir esta historia.'},{once:true})
   stage.insertBefore(image,stage.querySelector('.family-story-stage-nav'))
-  scheduleViewer()
+  if(image.complete&&image.naturalWidth>0)ready()
 }
 
 async function openViewer(memberId:string){
@@ -597,6 +676,7 @@ async function openViewer(memberId:string){
   viewerStoryIndex=firstUnseen>=0?firstUnseen:0
   viewerPaused=false
   viewerTurning=false
+  viewerMediaReady=false
 
   const root=document.createElement('div')
   root.className='family-story-viewer'
