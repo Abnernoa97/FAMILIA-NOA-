@@ -612,25 +612,34 @@ async function deleteOwnStory(story:Story){
 
 async function drawViewer(){
   if(!viewer)return
+  const root=viewer
   const token=++viewerDrawToken
+  destroyStoryBook()
   clearViewerTimer()
+  closeActionSheet()
   viewerStartedAt=0
   viewerRemainingMs=STORY_MS
   viewerMediaReady=false
-  closeActionSheet()
+  viewerTurning=false
   const group=viewerGroups[viewerGroupIndex]
   const story=group?.stories[viewerStoryIndex]
   if(!group||!story){closeViewer();return}
 
   const own=group.member.id===identity()?.memberId
   const ownerActions=own?'<button class="family-story-viewer-more" data-story-more aria-label="Opciones de tu historia">⋯</button>':''
-  viewer.innerHTML=`<div class="family-story-viewer-top"><div class="family-story-progress">${group.stories.map((_,index)=>`<i class="${index<viewerStoryIndex?'seen':index===viewerStoryIndex?'active':''}"><span></span></i>`).join('')}</div><div class="family-story-viewer-head">${avatarMarkup(group.member,'family-story-viewer-avatar')}<div class="family-story-viewer-who"><b>${esc(group.member.name)}</b><span>${age(story.created_at)}</span></div>${ownerActions}<button class="family-story-viewer-close" aria-label="Cerrar">×</button></div></div><div class="family-story-stage"><div class="family-story-loading">Cargando historia…</div><div class="family-story-stage-nav"><button data-story-prev aria-label="Historia anterior"></button><button data-story-next aria-label="Historia siguiente"></button></div></div>`
-
-  viewer.querySelector('.family-story-viewer-close')?.addEventListener('click',closeViewer)
-  viewer.querySelector('[data-story-more]')?.addEventListener('click',()=>showOwnStoryActions(story,viewerStoryIndex+1,group.stories.length))
-  viewer.querySelector('[data-story-prev]')?.addEventListener('click',event=>{event.stopPropagation();moveViewer(-1)})
-  viewer.querySelector('[data-story-next]')?.addEventListener('click',event=>{event.stopPropagation();moveViewer(1)})
-  const stage=viewer.querySelector<HTMLElement>('.family-story-stage')!
+  // Unlike the previous implementation, this container is created ONCE for
+  // the whole person's story. It stays mounted while the book flips pages.
+  root.innerHTML=`<div class="family-story-viewer-top"><div class="family-story-progress"></div><div class="family-story-viewer-head">${avatarMarkup(group.member,'family-story-viewer-avatar')}<div class="family-story-viewer-who"><b>${esc(group.member.name)}</b><span data-story-created></span></div>${ownerActions}<button class="family-story-viewer-close" aria-label="Cerrar">×</button></div></div><div class="family-story-stage"><div class="family-story-book-surface"></div><div class="family-story-loading">Cargando historia…</div><div class="family-story-stage-nav"><button data-story-prev aria-label="Historia anterior"></button><button data-story-next aria-label="Historia siguiente"></button></div></div>`
+  updateStoryHud()
+  root.querySelector('.family-story-viewer-close')?.addEventListener('click',closeViewer)
+  root.querySelector('[data-story-more]')?.addEventListener('click',()=> {
+    const current=viewerGroups[viewerGroupIndex]?.stories[viewerStoryIndex]
+    const total=viewerGroups[viewerGroupIndex]?.stories.length||0
+    if(current)showOwnStoryActions(current,viewerStoryIndex+1,total)
+  })
+  root.querySelector('[data-story-prev]')?.addEventListener('click',event=>{event.stopPropagation();void moveViewer(-1)})
+  root.querySelector('[data-story-next]')?.addEventListener('click',event=>{event.stopPropagation();void moveViewer(1)})
+  const stage=root.querySelector<HTMLElement>('.family-story-stage')!
   stage.addEventListener('pointerdown',event=>{
     if((event.target as Element).closest('button'))return
     pauseViewer()
@@ -640,33 +649,84 @@ async function drawViewer(){
   stage.addEventListener('pointercancel',resume)
   stage.addEventListener('pointerleave',resume)
 
-  let url=mediaUrl(story.media_path)
-  if(!url){
-    try{url=await signMedia(story.media_path)}catch(error){console.error('Story media signing failed',error)}
-  }
-  if(!viewer||token!==viewerDrawToken)return
-  const loading=stage.querySelector('.family-story-loading')
-  if(!url){
-    if(loading)loading.textContent='No se pudo abrir esta historia.'
+  const paths=group.stories.map(item=>item.media_path)
+  // Signed photo URLs are normally already cached by refreshStories().
+  // A missing signature should not blank the entire album.
+  const urls=await Promise.all(paths.map(async path=>{
+    const cached=mediaUrl(path)
+    if(cached)return cached
+    try{return await signMedia(path)}catch(error){
+      console.warn('Story image signature unavailable',error)
+      return ''
+    }
+  }))
+  if(viewer!==root||token!==viewerDrawToken)return
+  const mount=stage.querySelector<HTMLElement>('.family-story-book-surface')!
+  const host=document.createElement('div')
+  host.className='family-story-book-host'
+  // Same persistent PageFlip structure as HAVANA QUOTES: original pages
+  // are constructed separately, then cloned into one live book host.
+  const source=urls.map((url,i)=>{
+    const leaf=document.createElement('div')
+    leaf.className='family-story-book-leaf'
+    leaf.setAttribute('data-density','soft')
+    const image=document.createElement('img')
+    image.src=url
+    image.alt=`Historia de ${group.member.name} · ${i+1}`
+    image.decoding='async'
+    image.draggable=false
+    leaf.appendChild(image)
+    return leaf
+  })
+  host.replaceChildren(...source.map(leaf=>leaf.cloneNode(true)))
+  mount.replaceChildren(host)
+  storyBookImages=Array.from(host.querySelectorAll<HTMLImageElement>('.family-story-book-leaf img'))
+
+  await new Promise<void>(resolve=>requestAnimationFrame(()=>resolve()))
+  if(viewer!==root||token!==viewerDrawToken)return
+  const width=Math.round(stage.clientWidth)
+  const height=Math.round(stage.clientHeight)
+  if(width<180||height<250){
+    const loading=stage.querySelector<HTMLElement>('.family-story-loading')
+    if(loading)loading.textContent='No se pudo preparar el visor.'
     return
   }
-  const image=document.createElement('img')
-  image.src=url
-  image.alt=`Historia de ${group.member.name}`
-  image.decoding='async'
-  let imageReadyOnce=false
-  const ready=()=>{
-    if(imageReadyOnce||viewer!==stage.closest('.family-story-viewer')||token!==viewerDrawToken)return
-    imageReadyOnce=true
-    loading?.remove()
-    viewerMediaReady=true
-    void markViewed(story)
-    scheduleViewer()
+
+  try{
+    // HAVANA QUOTES uses size=stretch, autoSize and a persistent host.
+    // Keep exactly that book lifecycle while binding the aspect ratio to the
+    // ACTUAL full-screen story stage. Never shrink it to an inset 410×580
+    // rectangle: that was why photo content jumped in size during every tap.
+    const book=new PageFlip(host,{
+      width,height,size:'stretch',
+      minWidth:width,maxWidth:width,minHeight:height,maxHeight:height,
+      drawShadow:true,maxShadowOpacity:.72,flippingTime:1080,
+      usePortrait:true,autoSize:true,showCover:false,
+      mobileScrollSupport:false,swipeDistance:25,
+      showPageCorners:true,disableFlipByClick:true
+    })
+    book.loadFromHTML(host.querySelectorAll<HTMLElement>('.family-story-book-leaf'))
+    storyBook=book
+    storyBookGroup=viewerGroupIndex
+    book.on('flip',event=>{
+      if(viewer!==root||token!==viewerDrawToken||storyBook!==book)return
+      onStoryBookPage(Number(event.data),token)
+    })
+    if(viewerStoryIndex>0)book.turnToPage(viewerStoryIndex)
+    onStoryBookPage(viewerStoryIndex,token)
+  }catch(error){
+    console.error('Magazine reader failed to mount',error)
+    destroyStoryBook()
+    // Prefer a visible story over a failed paper-curl engine on an unusual
+    // Android WebView. Basic navigation still works via drawViewer().
+    const fallback=storyBookImages[viewerStoryIndex]
+    if(fallback){
+      fallback.classList.add('family-story-fallback-image')
+      mount.replaceChildren(fallback)
+      storyBookImages=[fallback]
+      storyPageReady(0,token)
+    }
   }
-  image.addEventListener('load',ready,{once:true})
-  image.addEventListener('error',()=>{if(loading)loading.textContent='No se pudo abrir esta historia.'},{once:true})
-  stage.insertBefore(image,stage.querySelector('.family-story-stage-nav'))
-  if(image.complete&&image.naturalWidth>0)ready()
 }
 
 async function openViewer(memberId:string){
