@@ -8,7 +8,7 @@ import { initNavigation, enterView, replaceView, backView, type AppView } from '
 import { closeMediaViewer, isMediaViewerOpen } from './core/media-viewer'
 import { clearPrivateMediaCache } from './core/private-media'
 import { getLocationState, refreshLocationState, saveOwnLocation, subscribeLocationState, type LocationState } from './core/location-store'
-import { activateNativeLocationSharing, ensureOwnLocationRealtime, hasNativeLocationCapability, isNativeLocationSharingEnabled, refreshMemberLocation, startOwnLocationRealtime } from './core/location-device-sync'
+import { activateNativeLocationSharing, ensureOwnLocationRealtime, hasNativeLocationCapability, isDeviceLocationEnabled, isNativeLocationSharingEnabled, openDeviceLocationSettings, refreshMemberLocation, startOwnLocationRealtime } from './core/location-device-sync'
 
 type Member = { id: string; name: string; active: boolean; must_share_location: boolean }
 type FamilySessionResponse = {
@@ -59,6 +59,48 @@ let mandatoryLocationVerified = false
 let mandatoryLocationGateActive = false
 let locationViewUnsubscribe:(()=>void)|null=null
 let pendingNativeFix:{memberId:string;previousUpdatedAt:string;startedAt:number}|null=null
+let nativeFixTimeout:number|null=null
+let awaitingAndroidLocationSettings=false
+
+function clearPendingNativeFix(){
+  if(nativeFixTimeout!==null)window.clearTimeout(nativeFixTimeout)
+  nativeFixTimeout=null
+  pendingNativeFix=null
+}
+
+function waitForNativeFix(memberId:string,previousUpdatedAt:string,startedAt:number){
+  clearPendingNativeFix()
+  pendingNativeFix={memberId,previousUpdatedAt,startedAt}
+  nativeFixTimeout=window.setTimeout(()=>{
+    if(pendingNativeFix?.memberId!==memberId||pendingNativeFix.startedAt!==startedAt)return
+    clearPendingNativeFix()
+    const label=document.querySelector<HTMLElement>('#locationtext')
+    const button=document.querySelector<HTMLButtonElement>('#sharelocation')
+    if(label)label.textContent='No llegó una posición nueva en 45 segundos. Comprueba que la ubicación del teléfono siga encendida y vuelve a intentarlo.'
+    if(button){button.disabled=false;button.textContent='Reintentar ubicación'}
+  },45_000)
+}
+
+function resumeAndroidLocationSettings(){
+  if(!awaitingAndroidLocationSettings||document.hidden)return
+  awaitingAndroidLocationSettings=false
+  window.setTimeout(()=>{
+    const label=document.querySelector<HTMLElement>('#locationtext')
+    const button=document.querySelector<HTMLButtonElement>('#sharelocation')
+    if(!label||!button)return
+    if(hasNativeLocationCapability()&&!isDeviceLocationEnabled()){
+      label.textContent='La ubicación general del teléfono sigue apagada. Actívala en los ajustes de Android.'
+      button.disabled=false
+      button.textContent='Abrir ajustes de ubicación'
+      return
+    }
+    void shareLocation()
+  },400)
+}
+window.addEventListener('familia-noa:android-resumed',resumeAndroidLocationSettings)
+document.addEventListener('visibilitychange',()=>{
+  if(!document.hidden)resumeAndroidLocationSettings()
+})
 const app = document.querySelector<HTMLDivElement>('#app')!
 document.title = 'FAMILIA NOA'
 
@@ -400,13 +442,15 @@ function confirmNativeLocationFix(state:LocationState){
   const updatedAt=Date.parse(location.updated_at)
   if(!Number.isFinite(updatedAt)||updatedAt<pending.startedAt-5000)return false
 
-  pendingNativeFix=null
+  clearPendingNativeFix()
   mandatoryLocationVerified=true
   const text=document.querySelector<HTMLElement>('#locationtext')
   if(text){
     const accuracy=location.accuracy
     text.textContent=`Ubicación actualizada ahora${Number.isFinite(accuracy)?` · precisión aproximada ${Math.round(accuracy as number)} m`:''}.`
   }
+  const button=document.querySelector<HTMLButtonElement>('#sharelocation')
+  if(button){button.disabled=false;button.textContent='Ubicación verificada ✓'}
   if(mandatoryLocationGateActive){
     mandatoryLocationGateActive=false
     renderHome()
@@ -424,26 +468,37 @@ async function shareLocation() {
     return
   }
 
-  pendingNativeFix=null
+  clearPendingNativeFix()
   button.disabled=true
   button.textContent='Activando ubicación…'
   text.textContent='Preparando ubicación del teléfono…'
   try{
     if(hasNativeLocationCapability()){
+      // System-wide device location requires Android user consent; never claim
+      // that starting the foreground service turned on the phone's GPS switch.
+      if(!isDeviceLocationEnabled()){
+        text.textContent='La ubicación general del teléfono está apagada. Actívala en Android para compartir tu posición.'
+        button.textContent='Abriendo ajustes de ubicación…'
+        awaitingAndroidLocationSettings=openDeviceLocationSettings()
+        if(!awaitingAndroidLocationSettings){
+          text.textContent='No se pudieron abrir los ajustes de ubicación. Actívala desde Ajustes de Android.'
+        }
+        return
+      }
       const previousUpdatedAt=getLocationState().locations.find(row=>row.member_id===memberId)?.updated_at||''
       const startedAt=Date.now()
       button.textContent='Activando GPS de Android…'
       if(await activateNativeLocationSharing(memberId)){
-        pendingNativeFix={memberId,previousUpdatedAt,startedAt}
-        text.textContent='GPS de Android activado. Esperando una posición nueva…'
-        button.textContent='Comprobando ubicación…'
+        waitForNativeFix(memberId,previousUpdatedAt,startedAt)
+        text.textContent='Seguimiento Android iniciado. Esperando una posición nueva confirmada por el servidor…'
+        button.textContent='Esperando señal GPS…'
         const state=await refreshLocationState({force:true})
         confirmNativeLocationFix(state)
         // Realtime confirms the first newly stored fix, even after this
         // button is re-enabled. Starting a service is not a GPS success.
         return
       }
-      text.textContent='El GPS nativo no respondió. Intentando ubicación web…'
+      text.textContent='No se pudo iniciar el seguimiento Android. Intentando obtener una posición desde la app…'
     }
 
     if(!navigator.geolocation){
@@ -481,8 +536,17 @@ async function shareLocation() {
     text.textContent=geolocationErrorText(error)
   }finally{
     if(document.contains(button)){
-      button.disabled=false
-      button.textContent=mandatoryLocationGateActive?'Activar ubicación y continuar':'Activar ubicación'
+      if(pendingNativeFix?.memberId===memberId){
+        button.disabled=true
+        button.textContent='Esperando señal GPS…'
+      }else{
+        button.disabled=false
+        button.textContent=text.textContent?.startsWith('Ubicación actualizada ahora')
+          ?'Ubicación verificada ✓'
+          :awaitingAndroidLocationSettings||(hasNativeLocationCapability()&&!isDeviceLocationEnabled())
+            ?'Abrir ajustes de ubicación'
+            :mandatoryLocationGateActive?'Activar ubicación y continuar':'Activar ubicación'
+      }
     }
   }
 }

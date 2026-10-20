@@ -5,10 +5,12 @@ import android.app.Activity
 import android.content.ClipData
 import android.content.Intent
 import android.content.pm.PackageManager
+import android.location.LocationManager
 import android.graphics.Color
 import android.net.Uri
 import android.os.Bundle
 import android.provider.MediaStore
+import android.provider.Settings
 import android.view.Gravity
 import android.view.View
 import android.view.ViewGroup
@@ -114,6 +116,14 @@ class MainActivity : Activity() {
             loadedMemberId = store.memberId
             webView?.evaluateJavascript(
                 "try{sessionStorage.removeItem('$NATIVE_MARKER');location.reload()}catch(e){}",
+                null
+            )
+        }
+        // A user may have returned from Android's system location settings.
+        // The web UI will verify the switch and retry, not assume GPS is on.
+        webView?.post {
+            webView?.evaluateJavascript(
+                "window.dispatchEvent(new Event('familia-noa:android-resumed'))",
                 null
             )
         }
@@ -484,11 +494,34 @@ class MainActivity : Activity() {
         fun locationCapability(): String = "native-background-location-v1"
 
         @JavascriptInterface
+        fun isDeviceLocationEnabled(): Boolean {
+            val manager = getSystemService(LocationManager::class.java)
+            return if (android.os.Build.VERSION.SDK_INT >= 28) {
+                manager.isLocationEnabled
+            } else {
+                manager.isProviderEnabled(LocationManager.GPS_PROVIDER) ||
+                    manager.isProviderEnabled(LocationManager.NETWORK_PROVIDER)
+            }
+        }
+
+        @JavascriptInterface
+        fun openDeviceLocationSettings(): Boolean {
+            runOnUiThread {
+                try {
+                    startActivity(Intent(Settings.ACTION_LOCATION_SOURCE_SETTINGS))
+                } catch (_: Exception) {
+                    toast("Abre Ajustes de Android y activa Ubicación")
+                }
+            }
+            return true // Settings request queued; this does NOT mean location is enabled.
+        }
+
+        @JavascriptInterface
         fun isLocationSharingEnabled(): Boolean = store.locationSharingEnabled
 
         @JavascriptInterface
         fun startLocationSharing(): Boolean {
-            if (!store.configured || !hasLocationPermission()) return false
+            if (!store.configured || !hasLocationPermission() || !isDeviceLocationEnabled()) return false
             runOnUiThread { EmergencyService.startLocationSharing(this@MainActivity) }
             return true
         }
