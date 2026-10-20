@@ -280,11 +280,32 @@ class MainActivity : Activity() {
               try{
                 var marker='$NATIVE_MARKER';
                 if(!sessionStorage.getItem(marker)){
-                  localStorage.setItem('familia-noa-family-auth', JSON.stringify($auth));
-                  sessionStorage.setItem('familia-noa-identity', JSON.stringify($identity));
+                  // Do not reload a warm WebView whose persisted Supabase session
+                  // and home bootstrap already belong to this same family member.
+                  // A forced reload on every Android process restart previously
+                  // painted the same home screen multiple times.
+                  var expected=$identity;
+                  var current=null;
+                  var cached=null;
+                  var previousIdentity=null;
+                  try{current=JSON.parse(localStorage.getItem('familia-noa-family-auth')||'null')}catch(_){}
+                  try{cached=JSON.parse(localStorage.getItem('familia-noa-home-bootstrap-v1')||'null')}catch(_){}
+                  try{previousIdentity=JSON.parse(sessionStorage.getItem('familia-noa-identity')||'null')}catch(_){}
+                  var sameAuth=current&&current.access_token&&current.refresh_token&&current.user&&
+                    current.user.app_metadata&&current.user.app_metadata.family_member===true&&
+                    String(current.user.app_metadata.member_id)===String(expected.memberId);
+                  var sameMember=previousIdentity&&String(previousIdentity.memberId)===String(expected.memberId);
+                  var sameBootstrap=cached&&String(cached.memberId)===String(expected.memberId)&&
+                    Array.isArray(cached.members)&&cached.members.length>0;
+                  if(!sameAuth||(!sameMember&&!sameBootstrap)){
+                    localStorage.setItem('familia-noa-family-auth', JSON.stringify($auth));
+                    sessionStorage.setItem('familia-noa-identity', JSON.stringify(expected));
+                    sessionStorage.setItem(marker,'1');
+                    location.reload();
+                    return 'reload';
+                  }
+                  if(!sameMember)sessionStorage.setItem('familia-noa-identity',JSON.stringify(expected));
                   sessionStorage.setItem(marker,'1');
-                  location.reload();
-                  return 'reload';
                 }
                 if(!window.__familiaNoaNativeChangeHook){
                   window.__familiaNoaNativeChangeHook=true;
@@ -305,9 +326,26 @@ class MainActivity : Activity() {
 
         view.evaluateJavascript(script) { result ->
             if (result?.contains("reload") == true) return@evaluateJavascript
-            view.visibility = View.VISIBLE
-            loadingView?.visibility = View.GONE
-            deliverFamilyNotice(view)
+            revealWhenFamilyScreenReady(view, 0)
+        }
+    }
+
+    private fun revealWhenFamilyScreenReady(view: WebView, attempt: Int) {
+        if (webView !== view) return
+        // onPageFinished can run before Supabase restores the cached family
+        // session and renders Home. Reveal ONE completed screen, never the
+        // intermediate empty document or a transient loading placeholder.
+        view.evaluateJavascript(
+            "(function(){var root=document.getElementById('app');return !!(root&&root.firstElementChild)})()"
+        ) { ready ->
+            if (webView !== view) return@evaluateJavascript
+            if (ready == "true" || attempt >= 25) {
+                view.visibility = View.VISIBLE
+                loadingView?.visibility = View.GONE
+                deliverFamilyNotice(view)
+            } else {
+                view.postDelayed({ revealWhenFamilyScreenReady(view, attempt + 1) }, 100L)
+            }
         }
     }
 

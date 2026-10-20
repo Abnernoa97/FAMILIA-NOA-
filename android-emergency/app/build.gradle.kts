@@ -14,8 +14,8 @@ android {
         applicationId = "com.familianoa.emergency"
         minSdk = 26
         targetSdk = 35
-        versionCode = 10
-        versionName = "7.1.1"
+        versionCode = 11
+        versionName = "7.1.2"
     }
 
     signingConfigs {

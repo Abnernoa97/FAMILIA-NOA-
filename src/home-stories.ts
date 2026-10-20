@@ -112,9 +112,6 @@ function renderRail(){
   const shell=document.querySelector<HTMLElement>('.shell')
   const top=shell?.querySelector<HTMLElement>('.top')
   if(!shell||!top)return
-  shell.querySelector('.family-story-home')?.remove()
-  shell.classList.remove('has-home-stories')
-
   const me=identity()?.memberId||''
   const mine=memberFor(me)
   if(!mine)return
@@ -122,19 +119,41 @@ function renderRail(){
   const currentGroups=groups()
   const ownGroup=currentGroups.find(group=>group.member.id===me)
   const others=currentGroups.filter(group=>group.member.id!==me)
-  const section=document.createElement('section')
-  section.className='family-story-home'
-  section.setAttribute('aria-label','Historias de la familia')
-  section.innerHTML=`<div class="family-story-scroll">${ownGroup?storyTile(ownGroup,true):createTile(mine)}${others.map(group=>storyTile(group)).join('')}</div>`
-  top.insertAdjacentElement('afterend',section)
+  const content=`${ownGroup?storyTile(ownGroup,true):createTile(mine)}${others.map(group=>storyTile(group)).join('')}`
+
+  // The former implementation removed and reinserted the entire story rail
+  // twice at startup (DB data, then signed media). Besides visibly blinking,
+  // this also caused the instant-snapshot observer to repaint a third time.
+  // Keep the rail node and geometry stable; update only when content changes.
+  let section=shell.querySelector<HTMLElement>('.family-story-home')
+  if(!section){
+    section=document.createElement('section')
+    section.className='family-story-home'
+    section.setAttribute('aria-label','Historias de la familia')
+    const scroll=document.createElement('div')
+    scroll.className='family-story-scroll'
+    section.appendChild(scroll)
+    top.insertAdjacentElement('afterend',section)
+  }
+  const scroll=section.querySelector<HTMLElement>('.family-story-scroll')
+  if(scroll&&scroll.innerHTML!==content)scroll.innerHTML=content
+  if(section.hasAttribute('data-instant-snapshot'))section.removeAttribute('data-instant-snapshot')
   shell.classList.add('has-home-stories')
 
-  section.querySelectorAll<HTMLElement>('[data-home-story-member]').forEach(button=>{
-    button.addEventListener('click',()=>void openViewer(button.dataset.homeStoryMember||''))
-  })
-  section.querySelectorAll<HTMLElement>('[data-home-story-create]').forEach(button=>{
-    button.addEventListener('click',event=>{event.stopPropagation();showPicker()})
-  })
+  // Delegation survives cover hydration and instant-snapshot adoption without
+  // stacking a new listener on each database/media refresh.
+  if(section.dataset.storyHandlers!=='1'){
+    section.dataset.storyHandlers='1'
+    section.addEventListener('click',event=>{
+      const target=event.target as Element|null
+      const member=target?.closest<HTMLElement>('[data-home-story-member]')
+      if(member){void openViewer(member.dataset.homeStoryMember||'');return}
+      if(target?.closest('[data-home-story-create]')){
+        event.stopPropagation()
+        showPicker()
+      }
+    })
+  }
 }
 
 function clearExpiryTimer(){
