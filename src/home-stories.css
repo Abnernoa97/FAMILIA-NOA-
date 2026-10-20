@@ -42,7 +42,9 @@
 .family-story-viewer-top{padding:max(9px,env(safe-area-inset-top)) 12px 8px;background:linear-gradient(#0008,transparent);z-index:3}
 .family-story-progress{display:flex;gap:4px;margin-bottom:10px}
 .family-story-progress i{display:block;flex:1;height:3px;border-radius:999px;background:#ffffff42;overflow:hidden}
-.family-story-progress i.seen,.family-story-progress i.active{background:#fff}
+.family-story-progress i span{display:block;height:100%;width:100%;background:#fff;transform:scaleX(0);transform-origin:left center}
+.family-story-progress i.seen span{transform:scaleX(1)}
+.family-story-progress i.active span{will-change:transform}
 .family-story-viewer-head{display:flex;align-items:center;gap:9px}
 .family-story-viewer-avatar{width:34px;height:34px;border-radius:50%;display:grid;place-items:center;background:#fff;color:#111;font:700 12px 'DM Sans',sans-serif;overflow:hidden}
 .family-story-viewer-avatar img{display:block;width:100%;height:100%;object-fit:cover}
@@ -56,8 +58,9 @@
 .family-story-stage img{display:block;width:100%;height:100%;object-fit:contain;user-select:none;-webkit-user-drag:none}
 /* The same PageFlip 2.0.7 paper-curl engine used by HAVANA QUOTES.
    This layer is decorative; the familiar tap targets stay functional. */
-.family-story-magazine-overlay{position:absolute;inset:0;z-index:2;pointer-events:none;overflow:hidden;background:#080808}
-.family-story-magazine-host{position:relative;width:100%;height:100%;overflow:hidden}
+.family-story-magazine-overlay{position:absolute;inset:0;z-index:2;pointer-events:none;overflow:hidden;background:transparent;isolation:isolate}
+.family-story-magazine-underlay{position:absolute;inset:0;z-index:0;display:block;width:100%;height:100%;object-fit:contain;background:#080808}
+.family-story-magazine-host{position:relative;z-index:1;width:100%;height:100%;overflow:visible}
 .family-story-magazine-leaf{width:100%;height:100%;overflow:hidden;background:#080808;box-sizing:border-box;backface-visibility:hidden}
 .family-story-magazine-leaf img{display:block;width:100%;height:100%;object-fit:contain;user-select:none;-webkit-user-drag:none}
 .family-story-stage-nav{position:absolute;inset:0;display:grid;grid-template-columns:1fr 1fr;z-index:1}
