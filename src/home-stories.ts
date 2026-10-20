@@ -496,7 +496,6 @@ async function prepareViewerBook(stage:HTMLElement,group:StoryGroup){
 async function moveViewer(direction:1|-1){
   if(!viewerGroups.length||viewerTurning||!viewer)return
   const currentGroup=viewerGroups[viewerGroupIndex]
-  const currentStory=currentGroup?.stories[viewerStoryIndex]
   let nextGroupIndex=viewerGroupIndex
   let nextStoryIndex=viewerStoryIndex+direction
   if(nextStoryIndex<0||nextStoryIndex>=currentGroup.stories.length){
@@ -519,9 +518,15 @@ async function moveViewer(direction:1|-1){
     if(book){
       // Turning the exact same mounted leaves avoids all Android reflow and
       // image re-scaling between frames. This is HAVANA QUOTES' navigation.
+      if(book.flip.getCurrentPageIndex()!==viewerStoryIndex)book.flip.turnToPage(viewerStoryIndex)
       if(direction===1)book.flip.flipNext('bottom')
       else book.flip.flipPrev('bottom')
       await new Promise<void>(resolve=>window.setTimeout(resolve,1100))
+      if(book.flip.getCurrentPageIndex()!==nextStoryIndex){
+        // Android may throttle animations under heavy load. Synchronize the
+        // existing book without rebuilding or exposing an incorrect page.
+        book.flip.turnToPage(nextStoryIndex)
+      }
     }
   }catch(error){
     console.warn('Story page turn failed; continuing navigation',error)
