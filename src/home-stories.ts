@@ -35,6 +35,12 @@ let viewerTurning=false
 let viewerMediaReady=false
 let viewerStartedAt=0
 let viewerRemainingMs=STORY_MS
+// One PageFlip instance per person's story sequence, as in HAVANA QUOTES.
+// No temporary book overlay and no PageFlip reconstruction on each tap.
+type StoryBook={flip:PageFlip;host:HTMLElement;stage:HTMLElement;memberId:string;storyIds:string[]}
+let viewerBook:StoryBook|null=null
+let viewerBookBuildId=0
+let viewerBookPreparing=false
 const wiredStoryRails=new WeakSet<HTMLElement>()
 let snapshotStoryAction:{kind:'member'|'create';memberId?:string}|null=null
 let picker:HTMLElement|null=null
@@ -375,6 +381,7 @@ function resumeViewer(){
 }
 
 function closeViewerDirect(){
+  destroyViewerBook()
   viewerTurning=false
   viewerMediaReady=false
   viewerStartedAt=0
@@ -397,114 +404,92 @@ function closeViewer(){
   else closeViewerDirect()
 }
 
-// Same physical paper-turn engine and timing family used in HAVANA QUOTES.
-// The overlay is purely visual: existing story media, permissions, progress,
-// view tracking and navigation continue to use the original viewer controller.
-// HAVANA QUOTES uses PageFlip 2.0.7 with a stretchable single-page
-// portrait reader. Keep that geometry here; a full-screen leaf configured
-// to the raw WebView height rendered half the picture outside the viewport.
-// An isolated single-page book, following HAVANA QUOTES' PageFlip pattern.
-// The previous full-screen stretch implementation mixed a full-screen
-// underlay with independently scaled page leaves. On Android this produced
-// duplicated photo strips and a black half-screen during the turn.
-async function animateMagazineTurn(next:Story,direction:1|-1){
-  if(window.matchMedia('(prefers-reduced-motion: reduce)').matches)return
+// HAVANA QUOTES' successful approach is a persistent PageFlip instance:
+// all HTML leaves are loaded once, and flipNext/flipPrev animate within it.
+// A temporary book created for every tap was the source of shrinking images,
+// split frames and repeated photographs in FAMILIA NOA's Android WebView.
+function destroyViewerBook(){
+  viewerBookBuildId++
+  const book=viewerBook
+  viewerBook=null
+  viewerBookPreparing=false
+  if(!book)return
+  try{book.flip.destroy()}catch(error){console.warn('Story book cleanup',error)}
+  book.host.remove()
+  const image=book.stage.querySelector<HTMLImageElement>(':scope > img')
+  if(image)image.style.visibility=''
+}
+
+function matchesViewerBook(group:StoryGroup){
+  return !!viewerBook&&viewerBook.host.isConnected&&
+    viewerBook.memberId===group.member.id&&
+    viewerBook.storyIds.length===group.stories.length&&
+    group.stories.every((story,index)=>viewerBook?.storyIds[index]===story.id)
+}
+
+// Build the book after the first photograph is visible. The normal image
+// remains displayed during private-media signing and image preparation.
+async function prepareViewerBook(stage:HTMLElement,group:StoryGroup){
+  if(viewerBook||viewerBookPreparing||group.stories.length<2)return
   const activeViewer=viewer
-  const stage=activeViewer?.querySelector<HTMLElement>('.family-story-stage')
-  const currentImage=stage?.querySelector<HTMLImageElement>(':scope > img')
-  if(!stage||!currentImage?.src)return
-
-  let nextUrl=mediaUrl(next.media_path)
-  if(!nextUrl){
-    try{nextUrl=await signMedia(next.media_path)}catch(error){
-      console.warn('Could not prepare magazine page',error)
-      return
-    }
-  }
-  if(!nextUrl||viewer!==activeViewer||!stage.isConnected)return
-
-  const ready=await new Promise<boolean>(resolve=>{
-    const preload=new Image()
-    let settled=false
-    const finish=(ok:boolean)=>{if(settled)return;settled=true;resolve(ok)}
-    preload.onload=()=>finish(true)
-    preload.onerror=()=>finish(false)
-    preload.src=nextUrl
-    if(preload.complete&&preload.naturalWidth>0)finish(true)
-    window.setTimeout(()=>finish(false),450)
-  })
-  if(!ready||viewer!==activeViewer||!stage.isConnected)return
-
-  // Fixed, centered paper dimensions: the PageFlip engine MUST receive the
-  // same viewport size as its HTML leaves. A stretch book inside a taller
-  // full-screen overlay causes pages to be positioned outside the visible area.
-  const stageWidth=stage.clientWidth
-  const stageHeight=stage.clientHeight
-  if(stageWidth<180||stageHeight<250)return
-  const width=Math.round(Math.min(stageWidth,stageHeight*.70))
-  const height=Math.round(Math.min(stageHeight,width*1.63))
-
-  const overlay=document.createElement('div')
-  overlay.className='family-story-magazine-overlay'
-  overlay.style.visibility='hidden'
-  const frame=document.createElement('div')
-  frame.className='family-story-magazine-frame'
-  frame.style.width=`${width}px`
-  frame.style.height=`${height}px`
-  // The new image lives BEHIND exactly the same paper rectangle, not across
-  // the whole stage. No duplicated strips above or below the curling sheet.
-  const underlay=document.createElement('img')
-  underlay.className='family-story-magazine-underlay'
-  underlay.src=nextUrl
-  underlay.alt=''
-  const host=document.createElement('div')
-  host.className='family-story-magazine-host'
-  const makePage=(url:string)=>{
-    const page=document.createElement('div')
-    page.className='family-story-magazine-leaf'
-    page.setAttribute('data-density','soft')
-    const image=document.createElement('img')
-    image.src=url
-    image.alt=''
-    image.draggable=false
-    page.appendChild(image)
-    return page
-  }
-  const pages=direction===1
-    ?[makePage(currentImage.src),makePage(nextUrl)]
-    :[makePage(nextUrl),makePage(currentImage.src)]
-  host.replaceChildren(...pages)
-  frame.append(underlay,host)
-  overlay.appendChild(frame)
-
+  const buildId=++viewerBookBuildId
+  viewerBookPreparing=true
   let flip:PageFlip|null=null
-  stage.appendChild(overlay)
+  let host:HTMLElement|null=null
   try{
+    const urls=await Promise.all(group.stories.map(async story=>{
+      const cached=mediaUrl(story.media_path)
+      if(cached)return cached
+      try{return await signMedia(story.media_path)}catch{return ''}
+    }))
+    if(urls.some(url=>!url)||viewerBookBuildId!==buildId||viewer!==activeViewer||!stage.isConnected)return
+    const width=Math.round(stage.clientWidth)
+    const height=Math.round(stage.clientHeight)
+    if(width<180||height<250)return
+
+    host=document.createElement('div')
+    host.className='family-story-book-host'
+    host.style.visibility='hidden'
+    const pages=urls.map((url,index)=>{
+      const leaf=document.createElement('div')
+      leaf.className='family-story-book-leaf'
+      leaf.setAttribute('data-density','soft')
+      const img=document.createElement('img')
+      img.src=url
+      img.alt=`Historia ${index+1} de ${group.member.name}`
+      img.draggable=false
+      img.decoding='async'
+      if(Math.abs(index-viewerStoryIndex)>2)img.loading='lazy'
+      leaf.appendChild(img)
+      return leaf
+    })
+    host.replaceChildren(...pages)
+    stage.insertBefore(host,stage.querySelector('.family-story-stage-nav'))
+    // Same page-turn timing, paper density and shadow as HAVANA QUOTES.
+    // Portrait pages use the ENTIRE media stage, never a reduced 410px book.
     flip=new PageFlip(host,{
       width,height,size:'fixed',
-      drawShadow:true,maxShadowOpacity:.62,flippingTime:940,
+      drawShadow:true,maxShadowOpacity:.72,flippingTime:1080,
       usePortrait:true,autoSize:false,showCover:false,
       mobileScrollSupport:false,swipeDistance:25,
       showPageCorners:true,disableFlipByClick:true
     })
-    // Exactly as HAVANA QUOTES: load HTML leaves inside the book host.
-    flip.loadFromHTML(host.querySelectorAll<HTMLElement>('.family-story-magazine-leaf'))
-    if(direction===-1)flip.turnToPage(1)
+    flip.loadFromHTML(host.querySelectorAll<HTMLElement>('.family-story-book-leaf'))
+    flip.turnToPage(viewerStoryIndex)
     await new Promise<void>(resolve=>requestAnimationFrame(()=>requestAnimationFrame(()=>resolve())))
-    if(viewer!==activeViewer||!stage.isConnected)return
-    overlay.style.visibility='visible'
-    if(direction===1)flip.flipNext('bottom')
-    else flip.flipPrev('bottom')
-    await new Promise<void>(resolve=>window.setTimeout(resolve,1000))
+    if(viewerBookBuildId!==buildId||viewer!==activeViewer||!stage.isConnected)return
+    viewerBook={flip,host,stage,memberId:group.member.id,storyIds:group.stories.map(story=>story.id)}
+    flip=null
+    const image=stage.querySelector<HTMLImageElement>(':scope > img')
+    if(image)image.style.visibility='hidden'
+    host.style.visibility='visible'
+    host=null
   }catch(error){
-    // A low-memory WebView must keep the actual story navigation functional.
-    console.warn('Magazine curl unavailable, showing next story normally',error)
+    console.warn('Persistent story magazine unavailable; normal viewer remains usable',error)
   }finally{
-    try{flip?.destroy()}catch{}
-    // The next image was already decoded. Match the underlying stage before
-    // removing the book, so the previous photo cannot flash between turns.
-    if(viewer===activeViewer&&stage.isConnected)currentImage.src=nextUrl
-    overlay.remove()
+    if(flip)try{flip.destroy()}catch{}
+    host?.remove()
+    if(viewerBookBuildId===buildId)viewerBookPreparing=false
   }
 }
 
