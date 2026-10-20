@@ -379,6 +379,7 @@ async function applyState(state:LocationState){
 
   const locations=await locationsFromState(state)
   if(run!==generation||!document.contains(shell))return
+  const previouslyEmpty=currentLocations.length===0
   const signature=locations
     .map(item=>[item.member_id,item.latitude.toFixed(6),item.longitude.toFixed(6),item.updated_at,item.avatarPath||''].join(':'))
     .sort()
@@ -389,6 +390,9 @@ async function applyState(state:LocationState){
   if(!locations.length){
     lastLocationSignature=''
     clearMarkers()
+    if(activePopup){try{activePopup.remove()}catch{}}
+    activePopup=null
+    activePopupMemberId=''
     showOverlay(shell,'empty')
     return
   }
@@ -397,6 +401,7 @@ async function applyState(state:LocationState){
 
   if(map&&!changed){
     hideOverlay(shell)
+    revealPendingFocus()
     setTimeout(()=>{try{map.resize()}catch{}},20)
     return
   }
@@ -444,6 +449,7 @@ async function applyState(state:LocationState){
           .sort().join('|')
         // Do not fly to an overview on entry: start at the current member.
         hideOverlay(shell)
+        revealPendingFocus()
       })
       map.on('error',(event:any)=>console.warn('Family map resource error',event?.error||event))
       return
@@ -453,6 +459,11 @@ async function applyState(state:LocationState){
     syncActivePopup()
     lastLocationSignature=signature
     hideOverlay(shell)
+    if(pendingFocusMemberId)revealPendingFocus()
+    else if(previouslyEmpty&&!selectedHistoricalMemberId){
+      const mine=locations.find(item=>item.mine)||locations[0]
+      if(mine)focus(mine)
+    }
     setTimeout(()=>{try{map.resize()}catch{}},40)
   }catch(error){
     console.error('Family 3D map failed to load',error)
@@ -460,18 +471,46 @@ async function applyState(state:LocationState){
   }
 }
 
+// Saved locations are not placed on the live map automatically. A member of
+// the family can still tap an offline row to inspect its last-known coordinate.
+function revealPendingFocus(){
+  if(!pendingFocusMemberId||!map||!mapLoaded)return
+  const item=currentLocations.find(row=>row.member_id===pendingFocusMemberId)
+  if(!item)return
+  pendingFocusMemberId=''
+  focus(item,true)
+}
+
+function requestMemberFocus(memberId:string){
+  if(!memberId)return
+  const current=currentLocations.find(row=>row.member_id===memberId)
+  if(current){focus(current,true);return}
+  if(!getLocationState().locations.some(row=>row.member_id===memberId))return
+  selectedHistoricalMemberId=memberId
+  pendingFocusMemberId=memberId
+  void applyState(getLocationState())
+}
+
 function handleFocusEvent(event:Event){
   const custom=event as CustomEvent<{memberId?:string}>
   const memberId=String(custom.detail?.memberId||'')
   if(!memberId)return
-  const item=currentLocations.find(location=>location.member_id===memberId)
-  if(item)focus(item,true)
+  requestMemberFocus(memberId)
 }
 
 window.addEventListener('familia-noa:focus-location',handleFocusEvent as EventListener)
+window.addEventListener('familia-noa:android-resumed',()=>{
+  if(activePage)void applyState(getLocationState())
+})
 
 function attachPage(page:HTMLElement){
   ensurePanel(page)
+  if(liveRefreshTimer!==null)window.clearInterval(liveRefreshTimer)
+  // Positions expire from the live map automatically, even without a new
+  // database event. A fresh update brings the marker back on Realtime.
+  liveRefreshTimer=window.setInterval(()=>{
+    if(!document.hidden)void applyState(getLocationState())
+  },30_000)
   // Start engine and location data fetching concurrently.
   void loadMapLibre().catch(error=>console.warn('Family map engine unavailable',error))
   stateUnsubscribe?.()
@@ -484,6 +523,7 @@ function attachPage(page:HTMLElement){
 function scan(){
   const page=document.querySelector<HTMLElement>('.location-page')
   if(page===activePage)return
+  if(liveRefreshTimer!==null){window.clearInterval(liveRefreshTimer);liveRefreshTimer=null}
   stateUnsubscribe?.()
   stateUnsubscribe=null
   destroyMap()
@@ -495,6 +535,7 @@ ensureAssets()
 pageObserver=new MutationObserver(scan)
 pageObserver.observe(document.body,{childList:true,subtree:true})
 window.addEventListener('beforeunload',()=>{
+  if(liveRefreshTimer!==null)window.clearInterval(liveRefreshTimer)
   stateUnsubscribe?.()
   stateUnsubscribe=null
   pageObserver?.disconnect()
