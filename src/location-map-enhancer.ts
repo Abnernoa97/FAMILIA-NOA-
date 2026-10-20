@@ -262,8 +262,41 @@ function syncActivePopup(){
     .setHTML(popupHtml(item))
 }
 
+function updateLiveSelection(){
+  document.querySelectorAll<HTMLButtonElement>('[data-map-live-member]').forEach(button=>{
+    const selected=button.dataset.mapLiveMember===selectedLiveMemberId
+    button.classList.toggle('selected',selected)
+    button.setAttribute('aria-pressed',String(selected))
+  })
+}
+
+function renderLivePeople(shell:HTMLElement){
+  const root=shell.querySelector<HTMLElement>('[data-map-people]')
+  if(!root)return
+  const live=currentLocations
+    .filter(item=>isLiveFamilyLocation(item.updated_at)&&!(item.mine&&hasNativeLocationCapability()&&!isDeviceLocationEnabled()))
+    .sort((a,b)=>Number(b.mine)-Number(a.mine)||a.name.localeCompare(b.name,'es'))
+  const signature=live.map(item=>[item.member_id,item.name,item.mine].join(':')).join('|')
+  root.hidden=live.length===0
+  if(root.dataset.signature===signature){updateLiveSelection();return}
+  root.dataset.signature=signature
+  root.innerHTML=live.map(item=>`<button class="family-map-name-pill" type="button" data-map-live-member="${esc(item.member_id)}" aria-pressed="false" aria-label="Mostrar a ${esc(item.name)} en el mapa"><span class="live-dot" aria-hidden="true"></span>${esc(item.name)}${item.mine?' · tú':''}</button>`).join('')
+  root.querySelectorAll<HTMLButtonElement>('[data-map-live-member]').forEach(button=>{
+    button.addEventListener('click',event=>{
+      event.stopPropagation()
+      const item=currentLocations.find(row=>row.member_id===button.dataset.mapLiveMember)
+      if(!item)return
+      focus(item,true)
+      void refreshMemberLocation(item.member_id)
+    })
+  })
+  updateLiveSelection()
+}
+
 function focus(item:MapLocation,showPopup=false){
   if(!map)return
+  selectedLiveMemberId=isLiveFamilyLocation(item.updated_at)?item.member_id:''
+  updateLiveSelection()
   // Hide stale DOM projections until MapLibre has rendered the new camera.
   // Otherwise markers outside the view can flash beside the selected person.
   const token=++focusGeneration
@@ -396,9 +429,19 @@ async function applyState(state:LocationState){
     .join('|')
   const changed=signature!==lastLocationSignature
   currentLocations=locations
+  // Each new active relative replaces one full-size list row with a tiny
+  // name pill on the map. Reclaim part of that room for map height.
+  const liveCount=locations.filter(item=>
+    isLiveFamilyLocation(item.updated_at)&&!(item.mine&&hasNativeLocationCapability()&&!isDeviceLocationEnabled())
+  ).length
+  const heightDvh=Math.min(46+liveCount*7,77)
+  const heightPx=Math.min(470+liveCount*60,790)
+  shell.style.setProperty('--family-map-dynamic-height',`min(${heightDvh}dvh,${heightPx}px)`)
+  renderLivePeople(shell)
 
   if(!locations.length){
     lastLocationSignature=''
+    selectedLiveMemberId=''
     clearMarkers()
     if(activePopup){try{activePopup.remove()}catch{}}
     activePopup=null
