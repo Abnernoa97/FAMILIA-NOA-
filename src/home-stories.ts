@@ -420,17 +420,19 @@ async function animateMagazineTurn(next:Story,direction:1|-1){
 
   // Preload the target image before beginning the curl. Avoid ever showing a
   // completely black half-page on Android while the new image is loading.
-  await new Promise<void>(resolve=>{
+  const nextImageReady=await new Promise<boolean>(resolve=>{
     const preload=new Image()
     let finished=false
-    const finish=()=>{if(finished)return;finished=true;resolve()}
-    preload.onload=finish
-    preload.onerror=finish
+    const finish=(ready:boolean)=>{if(finished)return;finished=true;resolve(ready)}
+    preload.onload=()=>finish(true)
+    preload.onerror=()=>finish(false)
     preload.src=nextUrl
-    if(preload.complete)finish()
-    window.setTimeout(finish,350)
+    if(preload.complete&&preload.naturalWidth>0)finish(true)
+    window.setTimeout(()=>finish(false),350)
   })
-  if(viewer!==activeViewer||!stage.isConnected)return
+  // Slow media never leaves the user waiting on an empty black magazine page.
+  // Continue with normal story navigation instead of blocking for the effect.
+  if(!nextImageReady||viewer!==activeViewer||!stage.isConnected)return
 
   const overlay=document.createElement('div')
   overlay.className='family-story-magazine-overlay'
