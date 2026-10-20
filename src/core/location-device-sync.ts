@@ -48,8 +48,10 @@ export function isNativeLocationSharingEnabled(){
 // from whether the FAMILIA NOA foreground service has been requested.
 export function isDeviceLocationEnabled(){
   const bridge=nativeBridge()
-  if(!bridge)return true
-  try{return bridge.isDeviceLocationEnabled?.()===true}catch{return false}
+  // Older installed APKs lack this bridge. Preserve their previous behavior
+  // until the matching Android update is installed.
+  if(!bridge||typeof bridge.isDeviceLocationEnabled!=='function')return true
+  try{return bridge.isDeviceLocationEnabled()===true}catch{return false}
 }
 
 export function openDeviceLocationSettings(){
