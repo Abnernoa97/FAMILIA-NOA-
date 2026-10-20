@@ -24,6 +24,7 @@ let maplibrePromise:Promise<any>|null=null
 let map:any=null
 let markers=new Map<string,any>()
 let mapLoaded=false
+let selectedLiveMemberId=''
 let focusGeneration=0
 let activePopup:any=null
 let activePopupMemberId=''
@@ -75,11 +76,17 @@ function ensureAssets(){
   const style=document.createElement('style')
   style.id='family-map-styles'
   style.textContent=`
-  .family-map-shell{position:relative;height:min(64dvh,610px);min-height:390px;margin:14px 16px 18px;border-radius:32px;overflow:hidden;background:#ddd8ce;border:1px solid rgba(218,211,198,.9);box-shadow:0 22px 56px rgba(35,31,25,.14);isolation:isolate}.family-map-canvas{position:absolute;inset:0}.family-map-canvas .maplibregl-canvas{outline:none}.family-map-shell::after{content:"";position:absolute;inset:0;pointer-events:none;background:linear-gradient(180deg,rgba(12,12,12,.16),transparent 28%,transparent 62%,rgba(12,12,12,.14));z-index:2}
+  .family-map-shell{position:relative;height:var(--family-map-dynamic-height,min(52dvh,560px));min-height:310px;margin:14px 16px 18px;border-radius:32px;overflow:hidden;background:#ddd8ce;border:1px solid rgba(218,211,198,.9);box-shadow:0 22px 56px rgba(35,31,25,.14);isolation:isolate}.family-map-canvas{position:absolute;inset:0}.family-map-canvas .maplibregl-canvas{outline:none}.family-map-shell::after{content:"";position:absolute;inset:0;pointer-events:none;background:linear-gradient(180deg,rgba(12,12,12,.16),transparent 28%,transparent 62%,rgba(12,12,12,.14));z-index:2}
   .family-map-head{position:absolute;left:14px;right:14px;top:14px;z-index:4;display:flex;align-items:flex-start;justify-content:space-between;gap:10px;pointer-events:none}.family-map-head>div{padding:10px 13px;border-radius:18px;background:rgba(250,248,242,.92);backdrop-filter:blur(18px);-webkit-backdrop-filter:blur(18px);box-shadow:0 6px 22px #0001}.family-map-head small{display:block;font-size:8.5px;letter-spacing:.16em;font-weight:800;color:#77736b}.family-map-head b{display:block;margin-top:2px;font:500 19px var(--display-font,Georgia,serif);color:#171716}.family-map-actions{display:flex;gap:7px;pointer-events:auto}.family-map-all,.family-map-mine{height:42px;padding:0 14px;border:0;border-radius:21px;font-weight:750;font-size:11px;backdrop-filter:blur(16px);-webkit-backdrop-filter:blur(16px);box-shadow:0 6px 18px #0002}.family-map-all{background:rgba(23,23,22,.92);color:#fff}.family-map-mine{background:rgba(250,248,242,.92);color:#171716}
+  .family-map-people{position:absolute;z-index:5;top:86px;left:12px;right:12px;display:flex;align-items:center;gap:6px;overflow-x:auto;scrollbar-width:none;padding:3px 0 5px;touch-action:pan-x;overscroll-behavior-x:contain}
+  .family-map-people::-webkit-scrollbar{display:none}
+  .family-map-people[hidden]{display:none!important}
+  .family-map-name-pill{flex:0 0 auto;min-height:30px;max-width:180px;display:inline-flex;align-items:center;gap:6px;padding:6px 11px;border:1px solid rgba(255,255,255,.18);border-radius:99px;background:rgba(18,18,17,.88);color:#fff;box-shadow:0 3px 12px rgba(0,0,0,.16);backdrop-filter:blur(10px);-webkit-backdrop-filter:blur(10px);font-size:10px;font-weight:720;line-height:1.15;white-space:nowrap;cursor:pointer}
+  .family-map-name-pill.selected{background:#111;color:#fff;border-color:#fff}
+  .family-map-name-pill .live-dot{width:5px;height:5px;flex:0 0 5px;border-radius:50%;background:#89d8a2}
   .family-map-marker.historical{opacity:.65}.family-map-marker{transition:none!important;position:relative;display:flex;flex-direction:column;align-items:center;filter:drop-shadow(0 5px 10px rgba(0,0,0,.28));cursor:pointer;border:0;background:transparent;padding:0}.family-map-marker-dot{position:relative;width:48px;height:48px;border:3px solid #fff;border-radius:50%;overflow:hidden;display:grid;place-items:center;background:#4c367f;color:#fff;font-weight:800;font-size:13px;box-shadow:0 4px 15px rgba(0,0,0,.22)}.family-map-marker.fresh .family-map-marker-dot::before{content:"";position:absolute;inset:-9px;border:2px solid rgba(73,157,105,.4);border-radius:50%;animation:familyLocationPulse 2s ease-out infinite;pointer-events:none}@keyframes familyLocationPulse{0%{transform:scale(.72);opacity:.85}100%{transform:scale(1.35);opacity:0}}.family-map-marker-dot img{width:100%;height:100%;object-fit:cover;display:block}.family-map-marker.mine .family-map-marker-dot{background:#171716}.family-map-marker::after{content:"";width:3px;height:12px;border-radius:3px;background:#fff;margin-top:-1px}.family-map-marker-label{margin-top:3px;padding:4px 7px;border-radius:9px;background:rgba(23,23,22,.86);color:#fff;font-size:9px;font-weight:700;white-space:nowrap}
   .family-map-loading{position:absolute;top:47%;left:50%;transform:translate(-50%,-50%);width:max-content;max-width:80%;z-index:3;padding:12px 17px;text-align:center;border:1px solid #ffffffa9;border-radius:18px;background:rgba(250,248,242,.94);color:#5f5a52;font-size:12px;pointer-events:none;box-shadow:0 8px 22px #0001}.family-map-error{position:absolute;inset:0;z-index:6;display:grid;place-items:center;padding:30px;text-align:center;background:linear-gradient(145deg,#d9d3c7,#f2eee6);color:#5f5a52;font-size:13px}.family-map-error b{display:block;color:#171716;font:500 22px var(--display-font,Georgia,serif);margin-bottom:7px}.family-map-loading[hidden],.family-map-error[hidden],[data-map-loading][hidden]{display:none!important}.family-map-popup .maplibregl-popup-content{border-radius:16px;padding:12px 14px;box-shadow:0 12px 34px #0003;font-family:system-ui,sans-serif}.family-map-popup b{display:block;font-size:13px}.family-map-popup small{display:block;margin-top:3px;color:#77736b}.family-map-popup .maplibregl-popup-close-button{font-size:18px;padding:2px 7px}.family-map-shell .maplibregl-ctrl-attrib{font-size:9px;background:rgba(255,255,255,.75)}.family-map-shell .maplibregl-ctrl-group{border-radius:14px;overflow:hidden;box-shadow:0 5px 18px #0002}
-  @media(max-width:480px){.family-map-shell{height:58dvh;min-height:360px;margin:10px 12px 16px;border-radius:28px}.family-map-head{left:10px;right:10px;top:10px}.family-map-head>div{padding:9px 11px}.family-map-head b{font-size:17px}.family-map-all,.family-map-mine{height:39px;padding:0 12px}.family-map-marker-label{display:none}}
+  @media(max-width:480px){.family-map-shell{height:var(--family-map-dynamic-height,min(52dvh,560px));min-height:310px;margin:10px 12px 16px;border-radius:28px}.family-map-head{left:10px;right:10px;top:10px}.family-map-people{top:78px;left:10px;right:10px}.family-map-head>div{padding:9px 11px}.family-map-head b{font-size:17px}.family-map-all,.family-map-mine{height:39px;padding:0 12px}.family-map-marker-label{display:none}}
   `
   document.head.appendChild(style)
 }
@@ -104,6 +111,7 @@ function destroyMap(){
   resizeObserver?.disconnect()
   resizeObserver=null
   clearMarkers()
+  selectedLiveMemberId=''
   currentLocations=[]
   lastLocationSignature=''
   if(activePopup){try{activePopup.remove()}catch{}}
@@ -121,11 +129,13 @@ function ensurePanel(page:HTMLElement){
   shell=document.createElement('section')
   shell.className='family-map-shell'
   shell.dataset.familyMap='true'
-  shell.innerHTML=`<div class="family-map-canvas" data-family-map-canvas></div><div class="family-map-head"><div><small>FAMILY MAP · 3D</small><b data-map-title>Familia cerca</b></div><div class="family-map-actions"><button type="button" class="family-map-mine" data-map-mine>Yo</button><button type="button" class="family-map-all" data-map-all>Todos</button></div></div><div class="family-map-loading" data-map-loading>Preparando mapa 3D…</div>`
+  shell.innerHTML=`<div class="family-map-canvas" data-family-map-canvas></div><div class="family-map-head"><div><small>FAMILY MAP · 3D</small><b data-map-title>Familia cerca</b></div><div class="family-map-actions"><button type="button" class="family-map-mine" data-map-mine>Yo</button><button type="button" class="family-map-all" data-map-all>Todos</button></div></div><div class="family-map-people" data-map-people aria-label="Familia compartiendo ubicación" hidden></div><div class="family-map-loading" data-map-loading>Preparando mapa 3D…</div>`
   const gated=!!page.querySelector('#sharelocation')?.textContent?.toLowerCase().includes('continuar')
   if(gated)locationBox.insertAdjacentElement('afterend',shell)
   else locationBox.insertAdjacentElement('beforebegin',shell)
   shell.querySelector('[data-map-all]')?.addEventListener('click',()=>{
+    selectedLiveMemberId=''
+    updateLiveSelection()
     focusGeneration++
     selectedHistoricalMemberId=''
     pendingFocusMemberId=''
@@ -252,8 +262,41 @@ function syncActivePopup(){
     .setHTML(popupHtml(item))
 }
 
+function updateLiveSelection(){
+  document.querySelectorAll<HTMLButtonElement>('[data-map-live-member]').forEach(button=>{
+    const selected=button.dataset.mapLiveMember===selectedLiveMemberId
+    button.classList.toggle('selected',selected)
+    button.setAttribute('aria-pressed',String(selected))
+  })
+}
+
+function renderLivePeople(shell:HTMLElement){
+  const root=shell.querySelector<HTMLElement>('[data-map-people]')
+  if(!root)return
+  const live=currentLocations
+    .filter(item=>isLiveFamilyLocation(item.updated_at)&&!(item.mine&&hasNativeLocationCapability()&&!isDeviceLocationEnabled()))
+    .sort((a,b)=>Number(b.mine)-Number(a.mine)||a.name.localeCompare(b.name,'es'))
+  const signature=live.map(item=>[item.member_id,item.name,item.mine].join(':')).join('|')
+  root.hidden=live.length===0
+  if(root.dataset.signature===signature){updateLiveSelection();return}
+  root.dataset.signature=signature
+  root.innerHTML=live.map(item=>`<button class="family-map-name-pill" type="button" data-map-live-member="${esc(item.member_id)}" aria-pressed="false" aria-label="Mostrar a ${esc(item.name)} en el mapa"><span class="live-dot" aria-hidden="true"></span>${esc(item.name)}${item.mine?' · tú':''}</button>`).join('')
+  root.querySelectorAll<HTMLButtonElement>('[data-map-live-member]').forEach(button=>{
+    button.addEventListener('click',event=>{
+      event.stopPropagation()
+      const item=currentLocations.find(row=>row.member_id===button.dataset.mapLiveMember)
+      if(!item)return
+      focus(item,true)
+      void refreshMemberLocation(item.member_id)
+    })
+  })
+  updateLiveSelection()
+}
+
 function focus(item:MapLocation,showPopup=false){
   if(!map)return
+  selectedLiveMemberId=isLiveFamilyLocation(item.updated_at)?item.member_id:''
+  updateLiveSelection()
   // Hide stale DOM projections until MapLibre has rendered the new camera.
   // Otherwise markers outside the view can flash beside the selected person.
   const token=++focusGeneration
@@ -386,9 +429,19 @@ async function applyState(state:LocationState){
     .join('|')
   const changed=signature!==lastLocationSignature
   currentLocations=locations
+  // Each new active relative replaces one full-size list row with a tiny
+  // name pill on the map. Reclaim part of that room for map height.
+  const liveCount=locations.filter(item=>
+    isLiveFamilyLocation(item.updated_at)&&!(item.mine&&hasNativeLocationCapability()&&!isDeviceLocationEnabled())
+  ).length
+  const heightDvh=Math.min(46+liveCount*7,77)
+  const heightPx=Math.min(470+liveCount*60,790)
+  shell.style.setProperty('--family-map-dynamic-height',`min(${heightDvh}dvh,${heightPx}px)`)
+  renderLivePeople(shell)
 
   if(!locations.length){
     lastLocationSignature=''
+    selectedLiveMemberId=''
     clearMarkers()
     if(activePopup){try{activePopup.remove()}catch{}}
     activePopup=null
@@ -423,8 +476,11 @@ async function applyState(state:LocationState){
         bearing:-24,
         maxPitch:70,
         attributionControl:false,
-        // One finger scrolls the page; two fingers move and zoom the map.
-        cooperativeGestures:true,
+        // Restore original gestures: one finger pans; two fingers tilt/pinch.
+        cooperativeGestures:false,
+        dragPan:true,
+        touchZoomRotate:true,
+        touchPitch:true,
         canvasContextAttributes:{antialias:true},
       })
       map.addControl(new MapLibre.NavigationControl({showZoom:false,showCompass:true,visualizePitch:true}),'top-right')
