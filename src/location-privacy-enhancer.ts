@@ -1,6 +1,6 @@
 import { getIdentity } from './core/identity'
 import { stopSharingOwnLocation, subscribeLocationState, type LocationState } from './core/location-store'
-import { hasNativeLocationCapability, isNativeLocationSharingEnabled, stopOwnLocationRealtime } from './core/location-device-sync'
+import { hasNativeLocationCapability, isDeviceLocationEnabled, isNativeLocationSharingEnabled, stopOwnLocationRealtime } from './core/location-device-sync'
 
 let latestState:LocationState|null=null
 let busy=false
@@ -112,22 +112,43 @@ function apply(){
   activePage=page
   if(!page||!latestState||!isOptionalLocationPage(page))return
 
-  const hasOwnLocation=!!ownLocation(latestState)
+  const row=ownLocation(latestState)
   const nativeRequired=hasNativeLocationCapability()
-  const sharing=hasOwnLocation&&(!nativeRequired||isNativeLocationSharingEnabled())
-  page.classList.toggle('location-sharing-active',sharing)
+  const sharing=!!row&&(!nativeRequired||isNativeLocationSharingEnabled())
+  const deviceLocationOff=nativeRequired&&!isDeviceLocationEnabled()
+  const age=row?Date.now()-Date.parse(row.updated_at):NaN
+  const stalled=sharing&&Number.isFinite(age)&&age>120_000
+  // An Android sharing preference means the user requested tracking, not that
+  // system GPS is on or that the server is currently receiving new positions.
+  // Always expose the existing activation button if either condition fails.
+  const needsRecovery=sharing&&(deviceLocationOff||stalled)
+  page.classList.toggle('location-sharing-active',sharing&&!needsRecovery)
 
   if(sharing){
     ensureStopControl(page)
-    const row=ownLocation(latestState)
-    const age=row?Date.now()-Date.parse(row.updated_at):NaN
-    const stalled=Number.isFinite(age)&&age>120_000
     const notice=page.querySelector<HTMLElement>('[data-location-native-stale]')
     if(notice){
-      notice.classList.toggle('visible',stalled)
-      notice.textContent=stalled?'Tu ubicación no se está actualizando. FAMILIA NOA intenta obtener una nueva posición.':''
+      notice.classList.toggle('visible',needsRecovery)
+      notice.textContent=deviceLocationOff
+        ?'La ubicación del teléfono está apagada. Reactívala para volver a compartir en tiempo real.'
+        :stalled
+          ?'No hemos recibido una posición nueva. Puedes volver a intentar el seguimiento.'
+          :''
     }
   }else removeStopControl(page)
+
+  const button=page.querySelector<HTMLButtonElement>('#sharelocation')
+  const description=page.querySelector<HTMLElement>('#locationtext')
+  if(needsRecovery&&button&&!button.disabled){
+    // The original click handler in main.ts opens Android location settings
+    // when GPS is off, otherwise restarts the existing native tracking owner.
+    button.textContent=deviceLocationOff?'Activar GPS del teléfono':'Reintentar ubicación'
+    if(description){
+      description.textContent=deviceLocationOff
+        ?'El GPS general del teléfono está apagado. Toca el botón para abrir los ajustes de Android.'
+        :'Tu última ubicación ya no está actualizada. Toca el botón para obtener una posición nueva.'
+    }
+  }
 }
 
 function scanPage(){
@@ -150,6 +171,8 @@ if(app){
 }
 
 window.addEventListener('familia-noa:native-location-state',apply)
+window.addEventListener('familia-noa:android-resumed',apply)
+window.addEventListener('focus',apply)
 const staleRefresh=window.setInterval(()=>{if(!document.hidden)apply()},30_000)
 
 window.addEventListener('beforeunload',()=>{
