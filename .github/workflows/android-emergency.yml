@@ -1,6 +1,12 @@
 name: Build FAMILIA NOA Unified Android APK
 
 on:
+  pull_request:
+    branches:
+      - main
+    paths:
+      - android-emergency/**
+      - .github/workflows/android-emergency.yml
   push:
     branches:
       - main
@@ -43,6 +49,7 @@ jobs:
           gradle --project-dir android-emergency :app:assembleDebug --stacktrace
 
   signed-release:
+    if: github.event_name != 'pull_request'
     runs-on: ubuntu-latest
     needs: verify-android
     env:
