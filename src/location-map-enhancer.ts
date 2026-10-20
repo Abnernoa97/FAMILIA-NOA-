@@ -1,7 +1,7 @@
 import { getMemberId } from './core/identity'
 import { mediaUrl, primeMedia } from './core/private-media'
-import { getLocationState, refreshLocationState, subscribeLocationState, type LocationState } from './core/location-store'
-import { refreshMemberLocation } from './core/location-device-sync'
+import { getLocationState, refreshLocationState, subscribeLocationState, isLiveFamilyLocation, type LocationState } from './core/location-store'
+import { hasNativeLocationCapability, isDeviceLocationEnabled, refreshMemberLocation } from './core/location-device-sync'
 
 const MAPLIBRE_JS='https://unpkg.com/maplibre-gl@6.10.0/dist/maplibre-gl.mjs'
 const MAPLIBRE_CSS='https://unpkg.com/maplibre-gl@6.10.0/dist/maplibre-gl.css'
@@ -34,6 +34,9 @@ let pageObserver:MutationObserver|null=null
 let stateUnsubscribe:(()=>void)|null=null
 let resizeObserver:ResizeObserver|null=null
 let generation=0
+let liveRefreshTimer:number|null=null
+let selectedHistoricalMemberId=''
+let pendingFocusMemberId=''
 
 function esc(value:string){return value.replace(/[&<>"']/g,char=>({'&':'&amp;','<':'&lt;','>':'&gt;','"':'&quot;',"'":'&#039;'}[char]||char))}
 function initial(item:MapLocation){return item.name.charAt(0).toUpperCase()||'•'}
@@ -72,11 +75,11 @@ function ensureAssets(){
   const style=document.createElement('style')
   style.id='family-map-styles'
   style.textContent=`
-  .family-map-shell{position:relative;height:min(72dvh,680px);min-height:450px;margin:14px 16px 18px;border-radius:32px;overflow:hidden;background:#ddd8ce;border:1px solid rgba(218,211,198,.9);box-shadow:0 22px 56px rgba(35,31,25,.14);isolation:isolate}.family-map-canvas{position:absolute;inset:0}.family-map-canvas .maplibregl-canvas{outline:none}.family-map-shell::after{content:"";position:absolute;inset:0;pointer-events:none;background:linear-gradient(180deg,rgba(12,12,12,.16),transparent 28%,transparent 62%,rgba(12,12,12,.14));z-index:2}
+  .family-map-shell{position:relative;height:min(64dvh,610px);min-height:390px;margin:14px 16px 18px;border-radius:32px;overflow:hidden;background:#ddd8ce;border:1px solid rgba(218,211,198,.9);box-shadow:0 22px 56px rgba(35,31,25,.14);isolation:isolate}.family-map-canvas{position:absolute;inset:0}.family-map-canvas .maplibregl-canvas{outline:none}.family-map-shell::after{content:"";position:absolute;inset:0;pointer-events:none;background:linear-gradient(180deg,rgba(12,12,12,.16),transparent 28%,transparent 62%,rgba(12,12,12,.14));z-index:2}
   .family-map-head{position:absolute;left:14px;right:14px;top:14px;z-index:4;display:flex;align-items:flex-start;justify-content:space-between;gap:10px;pointer-events:none}.family-map-head>div{padding:10px 13px;border-radius:18px;background:rgba(250,248,242,.92);backdrop-filter:blur(18px);-webkit-backdrop-filter:blur(18px);box-shadow:0 6px 22px #0001}.family-map-head small{display:block;font-size:8.5px;letter-spacing:.16em;font-weight:800;color:#77736b}.family-map-head b{display:block;margin-top:2px;font:500 19px var(--display-font,Georgia,serif);color:#171716}.family-map-actions{display:flex;gap:7px;pointer-events:auto}.family-map-all,.family-map-mine{height:42px;padding:0 14px;border:0;border-radius:21px;font-weight:750;font-size:11px;backdrop-filter:blur(16px);-webkit-backdrop-filter:blur(16px);box-shadow:0 6px 18px #0002}.family-map-all{background:rgba(23,23,22,.92);color:#fff}.family-map-mine{background:rgba(250,248,242,.92);color:#171716}
-  .family-map-marker{transition:none!important;position:relative;display:flex;flex-direction:column;align-items:center;filter:drop-shadow(0 5px 10px rgba(0,0,0,.28));cursor:pointer;border:0;background:transparent;padding:0}.family-map-marker-dot{position:relative;width:48px;height:48px;border:3px solid #fff;border-radius:50%;overflow:hidden;display:grid;place-items:center;background:#4c367f;color:#fff;font-weight:800;font-size:13px;box-shadow:0 4px 15px rgba(0,0,0,.22)}.family-map-marker.fresh .family-map-marker-dot::before{content:"";position:absolute;inset:-9px;border:2px solid rgba(73,157,105,.4);border-radius:50%;animation:familyLocationPulse 2s ease-out infinite;pointer-events:none}@keyframes familyLocationPulse{0%{transform:scale(.72);opacity:.85}100%{transform:scale(1.35);opacity:0}}.family-map-marker-dot img{width:100%;height:100%;object-fit:cover;display:block}.family-map-marker.mine .family-map-marker-dot{background:#171716}.family-map-marker::after{content:"";width:3px;height:12px;border-radius:3px;background:#fff;margin-top:-1px}.family-map-marker-label{margin-top:3px;padding:4px 7px;border-radius:9px;background:rgba(23,23,22,.86);color:#fff;font-size:9px;font-weight:700;white-space:nowrap}
+  .family-map-marker.historical{opacity:.65}.family-map-marker{transition:none!important;position:relative;display:flex;flex-direction:column;align-items:center;filter:drop-shadow(0 5px 10px rgba(0,0,0,.28));cursor:pointer;border:0;background:transparent;padding:0}.family-map-marker-dot{position:relative;width:48px;height:48px;border:3px solid #fff;border-radius:50%;overflow:hidden;display:grid;place-items:center;background:#4c367f;color:#fff;font-weight:800;font-size:13px;box-shadow:0 4px 15px rgba(0,0,0,.22)}.family-map-marker.fresh .family-map-marker-dot::before{content:"";position:absolute;inset:-9px;border:2px solid rgba(73,157,105,.4);border-radius:50%;animation:familyLocationPulse 2s ease-out infinite;pointer-events:none}@keyframes familyLocationPulse{0%{transform:scale(.72);opacity:.85}100%{transform:scale(1.35);opacity:0}}.family-map-marker-dot img{width:100%;height:100%;object-fit:cover;display:block}.family-map-marker.mine .family-map-marker-dot{background:#171716}.family-map-marker::after{content:"";width:3px;height:12px;border-radius:3px;background:#fff;margin-top:-1px}.family-map-marker-label{margin-top:3px;padding:4px 7px;border-radius:9px;background:rgba(23,23,22,.86);color:#fff;font-size:9px;font-weight:700;white-space:nowrap}
   .family-map-loading{position:absolute;top:47%;left:50%;transform:translate(-50%,-50%);width:max-content;max-width:80%;z-index:3;padding:12px 17px;text-align:center;border:1px solid #ffffffa9;border-radius:18px;background:rgba(250,248,242,.94);color:#5f5a52;font-size:12px;pointer-events:none;box-shadow:0 8px 22px #0001}.family-map-error{position:absolute;inset:0;z-index:6;display:grid;place-items:center;padding:30px;text-align:center;background:linear-gradient(145deg,#d9d3c7,#f2eee6);color:#5f5a52;font-size:13px}.family-map-error b{display:block;color:#171716;font:500 22px var(--display-font,Georgia,serif);margin-bottom:7px}.family-map-loading[hidden],.family-map-error[hidden],[data-map-loading][hidden]{display:none!important}.family-map-popup .maplibregl-popup-content{border-radius:16px;padding:12px 14px;box-shadow:0 12px 34px #0003;font-family:system-ui,sans-serif}.family-map-popup b{display:block;font-size:13px}.family-map-popup small{display:block;margin-top:3px;color:#77736b}.family-map-popup .maplibregl-popup-close-button{font-size:18px;padding:2px 7px}.family-map-shell .maplibregl-ctrl-attrib{font-size:9px;background:rgba(255,255,255,.75)}.family-map-shell .maplibregl-ctrl-group{border-radius:14px;overflow:hidden;box-shadow:0 5px 18px #0002}
-  @media(max-width:480px){.family-map-shell{height:64dvh;min-height:440px;margin:10px 12px 16px;border-radius:28px}.family-map-head{left:10px;right:10px;top:10px}.family-map-head>div{padding:9px 11px}.family-map-head b{font-size:17px}.family-map-all,.family-map-mine{height:39px;padding:0 12px}.family-map-marker-label{display:none}}
+  @media(max-width:480px){.family-map-shell{height:58dvh;min-height:360px;margin:10px 12px 16px;border-radius:28px}.family-map-head{left:10px;right:10px;top:10px}.family-map-head>div{padding:9px 11px}.family-map-head b{font-size:17px}.family-map-all,.family-map-mine{height:39px;padding:0 12px}.family-map-marker-label{display:none}}
   `
   document.head.appendChild(style)
 }
@@ -96,6 +99,8 @@ function destroyMap(){
   generation++
   mapLoaded=false
   focusGeneration++
+  selectedHistoricalMemberId=''
+  pendingFocusMemberId=''
   resizeObserver?.disconnect()
   resizeObserver=null
   clearMarkers()
@@ -122,14 +127,16 @@ function ensurePanel(page:HTMLElement){
   else locationBox.insertAdjacentElement('beforebegin',shell)
   shell.querySelector('[data-map-all]')?.addEventListener('click',()=>{
     focusGeneration++
-    fitAll()
+    selectedHistoricalMemberId=''
+    pendingFocusMemberId=''
+    void applyState(getLocationState()).then(fitAll)
     void refreshLocationState({force:true})
   })
   shell.querySelector('[data-map-mine]')?.addEventListener('click',()=>{
     const mine=currentLocations.find(item=>item.mine)
-    if(!mine)return
-    focus(mine,true)
-    void refreshMemberLocation(mine.member_id)
+    if(mine){focus(mine,true);void refreshMemberLocation(mine.member_id);return}
+    const memberId=getMemberId()
+    if(memberId)requestMemberFocus(memberId)
   })
   return shell
 }
@@ -139,7 +146,13 @@ async function locationsFromState(state:LocationState):Promise<MapLocation[]>{
   const names=new Map(state.members.map(member=>[member.id,member.name]))
   const profileMap=new Map(state.profiles.map(profile=>[profile.member_id,profile.avatar_path]))
   // Avatar authorization is optional: it must never hold family markers hostage.
-  const paths=state.locations.map(row=>profileMap.get(row.member_id)||null)
+  const ownGpsOff=hasNativeLocationCapability()&&!isDeviceLocationEnabled()
+  const now=Date.now()
+  const visible=state.locations.filter(row=>
+    (isLiveFamilyLocation(row.updated_at,now)&&!(row.member_id===me&&ownGpsOff))||
+    row.member_id===selectedHistoricalMemberId
+  )
+  const paths=visible.map(row=>profileMap.get(row.member_id)||null)
   void primeMedia(paths).then(()=>{
     if(!map||!mapLoaded)return
     let changed=false
@@ -155,7 +168,7 @@ async function locationsFromState(state:LocationState):Promise<MapLocation[]>{
       syncActivePopup()
     }
   }).catch(error=>console.warn('Family avatar loading unavailable',error))
-  return state.locations.map(row=>{
+  return visible.map(row=>{
     const avatarPath=profileMap.get(row.member_id)||null
     return {
       ...row,
@@ -226,7 +239,8 @@ function fitAll(){
 }
 
 function popupHtml(item:MapLocation){
-  return `<b>${esc(item.name)}${item.mine?' · tú':''}</b><small>${esc(age(item.updated_at))}${Number.isFinite(item.accuracy)?` · ±${Math.round(item.accuracy as number)} m`:''}</small>`
+  const isLive=isLiveFamilyLocation(item.updated_at)&&!(item.mine&&hasNativeLocationCapability()&&!isDeviceLocationEnabled())
+  return `<b>${esc(item.name)}${item.mine?' · tú':''}</b><small>${isLive?'Ubicación reciente':'Última ubicación'} · ${esc(age(item.updated_at))}${Number.isFinite(item.accuracy)?` · ±${Math.round(item.accuracy as number)} m`:''}</small>`
 }
 
 function syncActivePopup(){
@@ -286,7 +300,7 @@ function renderMarkers(MapLibre:any){
     markers.delete(id)
   }
   for(const item of currentLocations){
-    const fresh=Date.now()-Date.parse(item.updated_at)<5*60*1000
+    const fresh=isLiveFamilyLocation(item.updated_at)&&!(item.mine&&hasNativeLocationCapability()&&!isDeviceLocationEnabled())
     let marker=markers.get(item.member_id)
     let element:HTMLButtonElement
     if(marker){
@@ -313,7 +327,7 @@ function renderMarkers(MapLibre:any){
         }
       })
     }
-    element.className=`family-map-marker${item.mine?' mine':''}${fresh?' fresh':''}`
+    element.className=`family-map-marker${item.mine?' mine':''}${fresh?' fresh':' historical'}`
     element.setAttribute('aria-label',`Ver ubicación de ${item.name}`)
     const signature=[item.name,item.avatarUrl,item.mine].join('|')
     if(element.dataset.mapAvatar!==signature){
@@ -336,7 +350,7 @@ function showOverlay(shell:HTMLElement,kind:'loading'|'empty'|'error'){
   }
   overlay.className='family-map-error'
   overlay.innerHTML=kind==='empty'
-    ?'<div><b>Aún no hay ubicaciones</b><span>Cuando alguien comparta su ubicación, aparecerá aquí.</span></div>'
+    ?'<div><b>Sin ubicaciones activas</b><span>Los familiares aparecerán aquí cuando compartan una posición reciente.</span></div>'
     :'<div><b>Mapa no disponible</b><span>La lista de ubicaciones sigue funcionando normalmente.</span></div>'
 }
 
@@ -404,6 +418,8 @@ async function applyState(state:LocationState){
         bearing:-24,
         maxPitch:70,
         attributionControl:false,
+        // One finger scrolls the page; two fingers move and zoom the map.
+        cooperativeGestures:true,
         canvasContextAttributes:{antialias:true},
       })
       map.addControl(new MapLibre.NavigationControl({showZoom:false,showCompass:true,visualizePitch:true}),'top-right')
