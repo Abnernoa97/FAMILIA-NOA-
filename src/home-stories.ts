@@ -372,28 +372,103 @@ function closeViewer(){
   else closeViewerDirect()
 }
 
-function moveViewer(direction:1|-1){
-  if(!viewerGroups.length)return
-  const group=viewerGroups[viewerGroupIndex]
-  const nextStory=viewerStoryIndex+direction
-  if(nextStory>=0&&nextStory<group.stories.length){
-    viewerStoryIndex=nextStory
-    void drawViewer()
-    return
+// Same physical paper-turn engine and timing family used in HAVANA QUOTES.
+// The overlay is purely visual: existing story media, permissions, progress,
+// view tracking and navigation continue to use the original viewer controller.
+async function animateMagazineTurn(next:Story,direction:1|-1){
+  const stage=viewer?.querySelector<HTMLElement>('.family-story-stage')
+  const currentImage=stage?.querySelector<HTMLImageElement>('img')
+  if(!stage||!currentImage?.src)return
+  let nextUrl=mediaUrl(next.media_path)
+  if(!nextUrl){
+    try{nextUrl=await signMedia(next.media_path)}catch(error){
+      console.warn('Could not prepare magazine page',error)
+      return
+    }
   }
-  const nextGroup=viewerGroupIndex+direction
-  if(nextGroup<0||nextGroup>=viewerGroups.length){
-    closeViewer()
-    return
+  if(!nextUrl||!viewer||!document.contains(stage))return
+
+  const overlay=document.createElement('div')
+  overlay.className='family-story-magazine-overlay'
+  const host=document.createElement('div')
+  host.className='family-story-magazine-host'
+  overlay.appendChild(host)
+  const makePage=(url:string)=>{
+    const page=document.createElement('div')
+    page.className='family-story-magazine-leaf'
+    const img=document.createElement('img')
+    img.src=url
+    img.alt=''
+    img.draggable=false
+    page.appendChild(img)
+    return page
   }
-  viewerGroupIndex=nextGroup
-  viewerStoryIndex=direction===1?0:viewerGroups[nextGroup].stories.length-1
+  const oldPage=makePage(currentImage.src)
+  const newPage=makePage(nextUrl)
+  const pages=direction===1?[oldPage,newPage]:[newPage,oldPage]
+  host.append(...pages)
+  stage.appendChild(overlay)
+
+  let flip:PageFlip|null=null
+  try{
+    const width=Math.max(260,Math.round(stage.clientWidth))
+    const height=Math.max(360,Math.round(stage.clientHeight))
+    flip=new PageFlip(host,{
+      width,height,size:'stretch',
+      minWidth:width,maxWidth:width,minHeight:height,maxHeight:height,
+      drawShadow:true,maxShadowOpacity:.72,flippingTime:920,
+      usePortrait:true,autoSize:true,showCover:false,
+      mobileScrollSupport:false,swipeDistance:25,
+      showPageCorners:true,disableFlipByClick:true
+    })
+    flip.loadFromHTML(pages)
+    await new Promise<void>(resolve=>requestAnimationFrame(()=>requestAnimationFrame(()=>resolve())))
+    if(direction===-1)flip.turnToPage(1)
+    if(direction===1)flip.flipNext('bottom')
+    else flip.flipPrev('bottom')
+    await new Promise<void>(resolve=>window.setTimeout(resolve,990))
+  }catch(error){
+    // Never let an animation failure stop a real story from opening.
+    console.warn('Magazine turn unavailable, continuing normally',error)
+  }finally{
+    try{flip?.destroy()}catch{}
+    overlay.remove()
+  }
+}
+
+async function moveViewer(direction:1|-1){
+  if(!viewerGroups.length||viewerTurning||!viewer)return
+  const currentGroup=viewerGroups[viewerGroupIndex]
+  const currentStory=currentGroup?.stories[viewerStoryIndex]
+  let nextGroupIndex=viewerGroupIndex
+  let nextStoryIndex=viewerStoryIndex+direction
+  if(nextStoryIndex<0||nextStoryIndex>=currentGroup.stories.length){
+    nextGroupIndex+=direction
+    if(nextGroupIndex<0||nextGroupIndex>=viewerGroups.length){
+      closeViewer()
+      return
+    }
+    nextStoryIndex=direction===1?0:viewerGroups[nextGroupIndex].stories.length-1
+  }
+  const next=viewerGroups[nextGroupIndex]?.stories[nextStoryIndex]
+  if(!next)return
+  const openedViewer=viewer
+  viewerTurning=true
+  clearViewerTimer()
+  try{
+    if(currentStory)await animateMagazineTurn(next,direction)
+  }finally{
+    viewerTurning=false
+  }
+  if(!viewer||viewer!==openedViewer)return
+  viewerGroupIndex=nextGroupIndex
+  viewerStoryIndex=nextStoryIndex
   void drawViewer()
 }
 
 function scheduleViewer(){
   clearViewerTimer()
-  if(viewerPaused||!viewer)return
+  if(viewerPaused||viewerTurning||!viewer)return
   viewerTimer=window.setTimeout(()=>moveViewer(1),STORY_MS)
 }
 
@@ -520,6 +595,7 @@ async function openViewer(memberId:string){
   viewerGroupIndex=groupIndex
   viewerStoryIndex=firstUnseen>=0?firstUnseen:0
   viewerPaused=false
+  viewerTurning=false
 
   const root=document.createElement('div')
   root.className='family-story-viewer'
