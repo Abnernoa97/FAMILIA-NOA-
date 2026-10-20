@@ -513,12 +513,23 @@ async function moveViewer(direction:1|-1){
   viewerTurning=true
   clearViewerTimer()
   viewerStartedAt=0
+  const sameGroup=nextGroupIndex===viewerGroupIndex
+  const book=sameGroup&&viewerBook&&currentGroup&&matchesViewerBook(currentGroup)?viewerBook:null
   try{
-    if(currentStory)await animateMagazineTurn(next,direction)
+    if(book){
+      // Turning the exact same mounted leaves avoids all Android reflow and
+      // image re-scaling between frames. This is HAVANA QUOTES' navigation.
+      if(direction===1)book.flip.flipNext('bottom')
+      else book.flip.flipPrev('bottom')
+      await new Promise<void>(resolve=>window.setTimeout(resolve,1100))
+    }
+  }catch(error){
+    console.warn('Story page turn failed; continuing navigation',error)
   }finally{
     viewerTurning=false
   }
   if(!viewer||viewer!==openedViewer)return
+  if(!sameGroup)destroyViewerBook()
   viewerGroupIndex=nextGroupIndex
   viewerStoryIndex=nextStoryIndex
   void drawViewer()
@@ -591,6 +602,8 @@ async function deleteOwnStory(story:Story){
   if(storageError)console.warn('Deleted story left an orphaned media object',storageError)
 
   if(!viewer)return
+  // Deleting a page invalidates PageFlip's fixed set of leaves.
+  destroyViewerBook()
   const nextGroups=groups()
   const sameGroupIndex=nextGroups.findIndex(group=>group.member.id===me)
   if(sameGroupIndex<0){
@@ -672,6 +685,7 @@ async function openViewer(memberId:string){
   const firstUnseen=targetGroup.member.id===me?-1:targetGroup.stories.findIndex(story=>!viewedStoryIds.has(story.id))
   viewerGroupIndex=groupIndex
   viewerStoryIndex=firstUnseen>=0?firstUnseen:0
+  destroyViewerBook()
   viewerPaused=false
   viewerTurning=false
   viewerMediaReady=false
