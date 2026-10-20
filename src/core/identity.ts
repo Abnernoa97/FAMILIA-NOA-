@@ -58,6 +58,11 @@ export function isAuthenticated(): boolean {
 export function setIdentity(identity: FamilyIdentity): void {
   const normalized = normalize(identity)
   if (!normalized) return
+  const previous=getIdentity()
+  // Refreshing the *same* family session must not broadcast an identity
+  // change: home stories, snapshots and profile listeners would otherwise
+  // discard and rebuild a fully rendered home screen on every validation.
+  if(previous?.memberId===normalized.memberId&&previous.name===normalized.name)return
   sessionStorage.setItem(IDENTITY_KEY, JSON.stringify(normalized))
   sessionStorage.removeItem(LEGACY_PROFILE_KEY)
   localStorage.removeItem(LEGACY_MEMBER_KEY)
