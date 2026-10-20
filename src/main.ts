@@ -8,7 +8,7 @@ import { initNavigation, enterView, replaceView, backView, type AppView } from '
 import { closeMediaViewer, isMediaViewerOpen } from './core/media-viewer'
 import { clearPrivateMediaCache } from './core/private-media'
 import { getLocationState, refreshLocationState, saveOwnLocation, subscribeLocationState, type LocationState } from './core/location-store'
-import { activateNativeLocationSharing, ensureOwnLocationRealtime, hasNativeLocationCapability, isNativeLocationSharingEnabled, refreshMemberLocation, startOwnLocationRealtime } from './core/location-device-sync'
+import { activateNativeLocationSharing, ensureOwnLocationRealtime, hasNativeLocationCapability, isDeviceLocationEnabled, isNativeLocationSharingEnabled, openDeviceLocationSettings, refreshMemberLocation, startOwnLocationRealtime } from './core/location-device-sync'
 
 type Member = { id: string; name: string; active: boolean; must_share_location: boolean }
 type FamilySessionResponse = {
@@ -59,6 +59,48 @@ let mandatoryLocationVerified = false
 let mandatoryLocationGateActive = false
 let locationViewUnsubscribe:(()=>void)|null=null
 let pendingNativeFix:{memberId:string;previousUpdatedAt:string;startedAt:number}|null=null
+let nativeFixTimeout:number|null=null
+let awaitingAndroidLocationSettings=false
+
+function clearPendingNativeFix(){
+  if(nativeFixTimeout!==null)window.clearTimeout(nativeFixTimeout)
+  nativeFixTimeout=null
+  pendingNativeFix=null
+}
+
+function waitForNativeFix(memberId:string,previousUpdatedAt:string,startedAt:number){
+  clearPendingNativeFix()
+  pendingNativeFix={memberId,previousUpdatedAt,startedAt}
+  nativeFixTimeout=window.setTimeout(()=>{
+    if(pendingNativeFix?.memberId!==memberId||pendingNativeFix.startedAt!==startedAt)return
+    clearPendingNativeFix()
+    const label=document.querySelector<HTMLElement>('#locationtext')
+    const button=document.querySelector<HTMLButtonElement>('#sharelocation')
+    if(label)label.textContent='No llegó una posición nueva en 45 segundos. Comprueba que la ubicación del teléfono siga encendida y vuelve a intentarlo.'
+    if(button){button.disabled=false;button.textContent='Reintentar ubicación'}
+  },45_000)
+}
+
+function resumeAndroidLocationSettings(){
+  if(!awaitingAndroidLocationSettings||document.hidden)return
+  awaitingAndroidLocationSettings=false
+  window.setTimeout(()=>{
+    const label=document.querySelector<HTMLElement>('#locationtext')
+    const button=document.querySelector<HTMLButtonElement>('#sharelocation')
+    if(!label||!button)return
+    if(hasNativeLocationCapability()&&!isDeviceLocationEnabled()){
+      label.textContent='La ubicación general del teléfono sigue apagada. Actívala en los ajustes de Android.'
+      button.disabled=false
+      button.textContent='Abrir ajustes de ubicación'
+      return
+    }
+    void shareLocation()
+  },400)
+}
+window.addEventListener('familia-noa:android-resumed',resumeAndroidLocationSettings)
+document.addEventListener('visibilitychange',()=>{
+  if(!document.hidden)resumeAndroidLocationSettings()
+})
 const app = document.querySelector<HTMLDivElement>('#app')!
 document.title = 'FAMILIA NOA'
 
@@ -400,13 +442,15 @@ function confirmNativeLocationFix(state:LocationState){
   const updatedAt=Date.parse(location.updated_at)
   if(!Number.isFinite(updatedAt)||updatedAt<pending.startedAt-5000)return false
 
-  pendingNativeFix=null
+  clearPendingNativeFix()
   mandatoryLocationVerified=true
   const text=document.querySelector<HTMLElement>('#locationtext')
   if(text){
     const accuracy=location.accuracy
     text.textContent=`Ubicación actualizada ahora${Number.isFinite(accuracy)?` · precisión aproximada ${Math.round(accuracy as number)} m`:''}.`
   }
+  const button=document.querySelector<HTMLButtonElement>('#sharelocation')
+  if(button){button.disabled=false;button.textContent='Ubicación verificada ✓'}
   if(mandatoryLocationGateActive){
     mandatoryLocationGateActive=false
     renderHome()
