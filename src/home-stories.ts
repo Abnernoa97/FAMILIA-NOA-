@@ -355,6 +355,7 @@ function clearViewerTimer(){
 
 function closeViewerDirect(){
   viewerTurning=false
+  snapshotStoryAction=null
   clearViewerTimer()
   closeActionSheet()
   viewerDrawToken++
@@ -604,6 +605,26 @@ async function openViewer(memberId:string){
   history.pushState({...(history.state||{}),[HISTORY_KEY]:1},'',location.href)
   await drawViewer()
 }
+
+// The instant startup snapshot contains HTML but never the original event
+// handlers. Queue a tap until the authoritative, current story list is ready.
+function consumeSnapshotStoryAction(){
+  if(!snapshotStoryAction||!dataReady||loading)return
+  const action=snapshotStoryAction
+  snapshotStoryAction=null
+  if(action.kind==='create'){showPicker();return}
+  if(action.memberId&&!viewer){
+    void openViewer(action.memberId).catch(error=>console.warn('Story could not open',error))
+  }
+}
+
+window.addEventListener('familia-noa:snapshot-story-press',event=>{
+  const action=(event as CustomEvent<{kind:'member'|'create';memberId?:string}>).detail
+  if(!action||!['member','create'].includes(action.kind))return
+  snapshotStoryAction=action
+  if(!dataReady){if(!loading)void refreshStories();return}
+  consumeSnapshotStoryAction()
+})
 
 window.addEventListener('familia-noa:open-story-notification',event=>{
   const memberId=(event as CustomEvent<{memberId?:string}>).detail?.memberId||''
