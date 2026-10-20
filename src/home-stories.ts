@@ -32,6 +32,9 @@ let viewerStoryIndex=0
 let viewerPaused=false
 let viewerDrawToken=0
 let viewerTurning=false
+let viewerMediaReady=false
+let viewerStartedAt=0
+let viewerRemainingMs=STORY_MS
 const wiredStoryRails=new WeakSet<HTMLElement>()
 let snapshotStoryAction:{kind:'member'|'create';memberId?:string}|null=null
 let picker:HTMLElement|null=null
@@ -352,9 +355,30 @@ async function markViewed(story:Story){
 function clearViewerTimer(){
   if(viewerTimer!==null){window.clearTimeout(viewerTimer);viewerTimer=null}
 }
+function pauseViewer(){
+  if(viewerStartedAt){
+    viewerRemainingMs=Math.max(100,viewerRemainingMs-(Date.now()-viewerStartedAt))
+    viewerStartedAt=0
+  }
+  clearViewerTimer()
+  viewerPaused=true
+  const bar=viewer?.querySelector<HTMLElement>('.family-story-progress i.active span')
+  if(bar){
+    bar.style.transition='none'
+    bar.style.transform=`scaleX(${Math.max(0,Math.min(1,(STORY_MS-viewerRemainingMs)/STORY_MS))})`
+  }
+}
+function resumeViewer(){
+  if(!viewerPaused)return
+  viewerPaused=false
+  scheduleViewer()
+}
 
 function closeViewerDirect(){
   viewerTurning=false
+  viewerMediaReady=false
+  viewerStartedAt=0
+  viewerRemainingMs=STORY_MS
   snapshotStoryAction=null
   clearViewerTimer()
   closeActionSheet()
@@ -456,6 +480,7 @@ async function moveViewer(direction:1|-1){
   const openedViewer=viewer
   viewerTurning=true
   clearViewerTimer()
+  viewerStartedAt=0
   try{
     if(currentStory)await animateMagazineTurn(next,direction)
   }finally{
@@ -469,14 +494,28 @@ async function moveViewer(direction:1|-1){
 
 function scheduleViewer(){
   clearViewerTimer()
-  if(viewerPaused||viewerTurning||!viewer)return
-  viewerTimer=window.setTimeout(()=>moveViewer(1),STORY_MS)
+  if(viewerPaused||viewerTurning||!viewer||!viewerMediaReady)return
+  viewerRemainingMs=Math.max(100,viewerRemainingMs)
+  viewerStartedAt=Date.now()
+  const bar=viewer.querySelector<HTMLElement>('.family-story-progress i.active span')
+  if(bar){
+    bar.style.transition='none'
+    bar.style.transform=`scaleX(${Math.max(0,Math.min(1,(STORY_MS-viewerRemainingMs)/STORY_MS))})`
+    // Ensure the browser sees the starting position before animating.
+    void bar.offsetWidth
+    bar.style.transition=`transform ${viewerRemainingMs}ms linear`
+    bar.style.transform='scaleX(1)'
+  }
+  viewerTimer=window.setTimeout(()=>{
+    viewerStartedAt=0
+    void moveViewer(1)
+  },viewerRemainingMs)
 }
 
 function showOwnStoryActions(story:Story,position:number,total:number){
   closeActionSheet()
   clearViewerTimer()
-  viewerPaused=true
+  pauseViewer()
   const root=document.createElement('div')
   root.className='family-story-actions'
   root.innerHTML=`<div class="family-story-actions-card"><div class="family-story-actions-copy"><b>Tu historia</b><span>${total===1?'1 historia activa':`${position} de ${total} historias activas`}</span></div><button class="family-story-delete" data-story-delete>Eliminar historia</button><button class="family-story-cancel" data-story-cancel>Cancelar</button></div>`
@@ -484,8 +523,7 @@ function showOwnStoryActions(story:Story,position:number,total:number){
   actionSheet=root
   const resume=()=>{
     closeActionSheet()
-    viewerPaused=false
-    scheduleViewer()
+    resumeViewer()
   }
   root.addEventListener('click',event=>{if(event.target===root)resume()})
   root.querySelector('[data-story-cancel]')?.addEventListener('click',resume)
@@ -538,6 +576,9 @@ async function drawViewer(){
   if(!viewer)return
   const token=++viewerDrawToken
   clearViewerTimer()
+  viewerStartedAt=0
+  viewerRemainingMs=STORY_MS
+  viewerMediaReady=false
   closeActionSheet()
   const group=viewerGroups[viewerGroupIndex]
   const story=group?.stories[viewerStoryIndex]
@@ -545,7 +586,7 @@ async function drawViewer(){
 
   const own=group.member.id===identity()?.memberId
   const ownerActions=own?'<button class="family-story-viewer-more" data-story-more aria-label="Opciones de tu historia">⋯</button>':''
-  viewer.innerHTML=`<div class="family-story-viewer-top"><div class="family-story-progress">${group.stories.map((_,index)=>`<i class="${index<viewerStoryIndex?'seen':index===viewerStoryIndex?'active':''}"></i>`).join('')}</div><div class="family-story-viewer-head">${avatarMarkup(group.member,'family-story-viewer-avatar')}<div class="family-story-viewer-who"><b>${esc(group.member.name)}</b><span>${age(story.created_at)}</span></div>${ownerActions}<button class="family-story-viewer-close" aria-label="Cerrar">×</button></div></div><div class="family-story-stage"><div class="family-story-loading">Cargando historia…</div><div class="family-story-stage-nav"><button data-story-prev aria-label="Historia anterior"></button><button data-story-next aria-label="Historia siguiente"></button></div></div>`
+  viewer.innerHTML=`<div class="family-story-viewer-top"><div class="family-story-progress">${group.stories.map((_,index)=>`<i class="${index<viewerStoryIndex?'seen':index===viewerStoryIndex?'active':''}"><span></span></i>`).join('')}</div><div class="family-story-viewer-head">${avatarMarkup(group.member,'family-story-viewer-avatar')}<div class="family-story-viewer-who"><b>${esc(group.member.name)}</b><span>${age(story.created_at)}</span></div>${ownerActions}<button class="family-story-viewer-close" aria-label="Cerrar">×</button></div></div><div class="family-story-stage"><div class="family-story-loading">Cargando historia…</div><div class="family-story-stage-nav"><button data-story-prev aria-label="Historia anterior"></button><button data-story-next aria-label="Historia siguiente"></button></div></div>`
 
   viewer.querySelector('.family-story-viewer-close')?.addEventListener('click',closeViewer)
   viewer.querySelector('[data-story-more]')?.addEventListener('click',()=>showOwnStoryActions(story,viewerStoryIndex+1,group.stories.length))
@@ -554,10 +595,9 @@ async function drawViewer(){
   const stage=viewer.querySelector<HTMLElement>('.family-story-stage')!
   stage.addEventListener('pointerdown',event=>{
     if((event.target as Element).closest('button'))return
-    viewerPaused=true
-    clearViewerTimer()
+    pauseViewer()
   })
-  const resume=()=>{if(!viewerPaused)return;viewerPaused=false;scheduleViewer()}
+  const resume=()=>resumeViewer()
   stage.addEventListener('pointerup',resume)
   stage.addEventListener('pointercancel',resume)
   stage.addEventListener('pointerleave',resume)
@@ -570,20 +610,23 @@ async function drawViewer(){
   const loading=stage.querySelector('.family-story-loading')
   if(!url){
     if(loading)loading.textContent='No se pudo abrir esta historia.'
-    scheduleViewer()
     return
   }
   const image=document.createElement('img')
   image.src=url
   image.alt=`Historia de ${group.member.name}`
   image.decoding='async'
-  image.addEventListener('load',()=>{
+  const ready=()=>{
+    if(viewer!==stage.closest('.family-story-viewer')||token!==viewerDrawToken)return
     loading?.remove()
+    viewerMediaReady=true
     void markViewed(story)
-  },{once:true})
+    scheduleViewer()
+  }
+  image.addEventListener('load',ready,{once:true})
   image.addEventListener('error',()=>{if(loading)loading.textContent='No se pudo abrir esta historia.'},{once:true})
   stage.insertBefore(image,stage.querySelector('.family-story-stage-nav'))
-  scheduleViewer()
+  if(image.complete&&image.naturalWidth>0)ready()
 }
 
 async function openViewer(memberId:string){
@@ -597,6 +640,7 @@ async function openViewer(memberId:string){
   viewerStoryIndex=firstUnseen>=0?firstUnseen:0
   viewerPaused=false
   viewerTurning=false
+  viewerMediaReady=false
 
   const root=document.createElement('div')
   root.className='family-story-viewer'
