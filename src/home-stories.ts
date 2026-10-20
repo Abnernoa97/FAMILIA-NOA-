@@ -32,6 +32,10 @@ let viewerStoryIndex=0
 let viewerPaused=false
 let viewerDrawToken=0
 let viewerTurning=false
+let storyBook:PageFlip|null=null
+let storyBookGroup=-1
+let storyBookImages:HTMLImageElement[]=[]
+let storyBookFlipTimeout:number|null=null
 let viewerMediaReady=false
 let viewerStartedAt=0
 let viewerRemainingMs=STORY_MS
@@ -375,6 +379,7 @@ function resumeViewer(){
 }
 
 function closeViewerDirect(){
+  destroyStoryBook()
   viewerTurning=false
   viewerMediaReady=false
   viewerStartedAt=0
@@ -397,146 +402,132 @@ function closeViewer(){
   else closeViewerDirect()
 }
 
-// Same physical paper-turn engine and timing family used in HAVANA QUOTES.
-// The overlay is purely visual: existing story media, permissions, progress,
-// view tracking and navigation continue to use the original viewer controller.
-// HAVANA QUOTES uses PageFlip 2.0.7 with a stretchable single-page
-// portrait reader. Keep that geometry here; a full-screen leaf configured
-// to the raw WebView height rendered half the picture outside the viewport.
-// An isolated single-page book, following HAVANA QUOTES' PageFlip pattern.
-// The previous full-screen stretch implementation mixed a full-screen
-// underlay with independently scaled page leaves. On Android this produced
-// duplicated photo strips and a black half-screen during the turn.
-async function animateMagazineTurn(next:Story,direction:1|-1){
-  if(window.matchMedia('(prefers-reduced-motion: reduce)').matches)return
-  const activeViewer=viewer
-  const stage=activeViewer?.querySelector<HTMLElement>('.family-story-stage')
-  const currentImage=stage?.querySelector<HTMLImageElement>(':scope > img')
-  if(!stage||!currentImage?.src)return
-
-  let nextUrl=mediaUrl(next.media_path)
-  if(!nextUrl){
-    try{nextUrl=await signMedia(next.media_path)}catch(error){
-      console.warn('Could not prepare magazine page',error)
-      return
-    }
-  }
-  if(!nextUrl||viewer!==activeViewer||!stage.isConnected)return
-
-  const ready=await new Promise<boolean>(resolve=>{
-    const preload=new Image()
-    let settled=false
-    const finish=(ok:boolean)=>{if(settled)return;settled=true;resolve(ok)}
-    preload.onload=()=>finish(true)
-    preload.onerror=()=>finish(false)
-    preload.src=nextUrl
-    if(preload.complete&&preload.naturalWidth>0)finish(true)
-    window.setTimeout(()=>finish(false),450)
-  })
-  if(!ready||viewer!==activeViewer||!stage.isConnected)return
-
-  // Fixed, centered paper dimensions: the PageFlip engine MUST receive the
-  // same viewport size as its HTML leaves. A stretch book inside a taller
-  // full-screen overlay causes pages to be positioned outside the visible area.
-  const stageWidth=stage.clientWidth
-  const stageHeight=stage.clientHeight
-  if(stageWidth<180||stageHeight<250)return
-  const width=Math.round(Math.min(stageWidth,stageHeight*.70))
-  const height=Math.round(Math.min(stageHeight,width*1.63))
-
-  const overlay=document.createElement('div')
-  overlay.className='family-story-magazine-overlay'
-  overlay.style.visibility='hidden'
-  const frame=document.createElement('div')
-  frame.className='family-story-magazine-frame'
-  frame.style.width=`${width}px`
-  frame.style.height=`${height}px`
-  // The new image lives BEHIND exactly the same paper rectangle, not across
-  // the whole stage. No duplicated strips above or below the curling sheet.
-  const underlay=document.createElement('img')
-  underlay.className='family-story-magazine-underlay'
-  underlay.src=nextUrl
-  underlay.alt=''
-  const host=document.createElement('div')
-  host.className='family-story-magazine-host'
-  const makePage=(url:string)=>{
-    const page=document.createElement('div')
-    page.className='family-story-magazine-leaf'
-    page.setAttribute('data-density','soft')
-    const image=document.createElement('img')
-    image.src=url
-    image.alt=''
-    image.draggable=false
-    page.appendChild(image)
-    return page
-  }
-  const pages=direction===1
-    ?[makePage(currentImage.src),makePage(nextUrl)]
-    :[makePage(nextUrl),makePage(currentImage.src)]
-  host.replaceChildren(...pages)
-  frame.append(underlay,host)
-  overlay.appendChild(frame)
-
-  let flip:PageFlip|null=null
-  stage.appendChild(overlay)
-  try{
-    flip=new PageFlip(host,{
-      width,height,size:'fixed',
-      drawShadow:true,maxShadowOpacity:.62,flippingTime:940,
-      usePortrait:true,autoSize:false,showCover:false,
-      mobileScrollSupport:false,swipeDistance:25,
-      showPageCorners:true,disableFlipByClick:true
-    })
-    // Exactly as HAVANA QUOTES: load HTML leaves inside the book host.
-    flip.loadFromHTML(host.querySelectorAll<HTMLElement>('.family-story-magazine-leaf'))
-    if(direction===-1)flip.turnToPage(1)
-    await new Promise<void>(resolve=>requestAnimationFrame(()=>requestAnimationFrame(()=>resolve())))
-    if(viewer!==activeViewer||!stage.isConnected)return
-    overlay.style.visibility='visible'
-    if(direction===1)flip.flipNext('bottom')
-    else flip.flipPrev('bottom')
-    await new Promise<void>(resolve=>window.setTimeout(resolve,1000))
-  }catch(error){
-    // A low-memory WebView must keep the actual story navigation functional.
-    console.warn('Magazine curl unavailable, showing next story normally',error)
-  }finally{
-    try{flip?.destroy()}catch{}
-    // The next image was already decoded. Match the underlying stage before
-    // removing the book, so the previous photo cannot flash between turns.
-    if(viewer===activeViewer&&stage.isConnected)currentImage.src=nextUrl
-    overlay.remove()
-  }
+// HAVANA QUOTES' crucial behavior is a single persistent PageFlip instance.
+// It mounts all leaves once and calls flipNext/flipPrev on the SAME book.
+// Never put a newly constructed, differently sized book over a full-screen
+// photograph on each tap: Android renders the old and new copies as fragments.
+function destroyStoryBook(){
+  if(storyBookFlipTimeout!==null){window.clearTimeout(storyBookFlipTimeout);storyBookFlipTimeout=null}
+  const oldBook=storyBook
+  storyBook=null
+  storyBookGroup=-1
+  storyBookImages=[]
+  if(oldBook){try{oldBook.destroy()}catch(error){console.warn('Story magazine cleanup',error)}}
 }
 
+// The viewer HUD is independent of the magazine's persistent DOM. Updating
+// the active story never destroys the pages, engine or their sizing.
+function updateStoryHud(){
+  if(!viewer)return
+  const group=viewerGroups[viewerGroupIndex]
+  const story=group?.stories[viewerStoryIndex]
+  if(!group||!story)return
+  const progress=viewer.querySelector<HTMLElement>('.family-story-progress')
+  if(progress){
+    progress.innerHTML=group.stories.map((_,i)=>
+      `<i class="${i<viewerStoryIndex?'seen':i===viewerStoryIndex?'active':''}"><span></span></i>`
+    ).join('')
+  }
+  const ageLabel=viewer.querySelector<HTMLElement>('[data-story-created]')
+  if(ageLabel)ageLabel.textContent=age(story.created_at)
+}
+
+function storyPageReady(index:number,token:number){
+  if(token!==viewerDrawToken||!viewer)return
+  const image=storyBookImages[index]
+  const group=viewerGroups[viewerGroupIndex]
+  const story=group?.stories[index]
+  if(!story||!image||index!==viewerStoryIndex)return
+  const loading=viewer.querySelector<HTMLElement>('.family-story-loading')
+  if(image.complete&&image.naturalWidth>0){
+    loading?.remove()
+    if(!viewerMediaReady){
+      viewerMediaReady=true
+      void markViewed(story)
+      scheduleViewer()
+    }
+    return
+  }
+  if(image.complete&&image.naturalWidth===0){
+    if(loading)loading.textContent='No se pudo abrir esta historia.'
+    return
+  }
+  image.addEventListener('load',()=>storyPageReady(index,token),{once:true})
+  image.addEventListener('error',()=>{
+    if(index!==viewerStoryIndex||token!==viewerDrawToken)return
+    if(loading)loading.textContent='No se pudo abrir esta historia.'
+  },{once:true})
+}
+
+function onStoryBookPage(index:number,token:number){
+  if(token!==viewerDrawToken||!viewer)return
+  const group=viewerGroups[viewerGroupIndex]
+  if(!group||!Number.isFinite(index)||index<0||index>=group.stories.length)return
+  if(storyBookFlipTimeout!==null){window.clearTimeout(storyBookFlipTimeout);storyBookFlipTimeout=null}
+  viewerTurning=false
+  viewerStoryIndex=index
+  viewerMediaReady=false
+  viewerStartedAt=0
+  viewerRemainingMs=STORY_MS
+  clearViewerTimer()
+  updateStoryHud()
+  const loading=viewer.querySelector<HTMLElement>('.family-story-loading')
+  if(loading){loading.textContent='Cargando historia…';loading.style.display=''}
+  storyPageReady(index,token)
+}
+
+// The next page is turned INSIDE the already mounted full-height magazine.
+// A different family starts a new book with its own pages and progress bar.
 async function moveViewer(direction:1|-1){
   if(!viewerGroups.length||viewerTurning||!viewer)return
-  const currentGroup=viewerGroups[viewerGroupIndex]
-  const currentStory=currentGroup?.stories[viewerStoryIndex]
-  let nextGroupIndex=viewerGroupIndex
-  let nextStoryIndex=viewerStoryIndex+direction
-  if(nextStoryIndex<0||nextStoryIndex>=currentGroup.stories.length){
-    nextGroupIndex+=direction
-    if(nextGroupIndex<0||nextGroupIndex>=viewerGroups.length){
-      closeViewer()
-      return
-    }
-    nextStoryIndex=direction===1?0:viewerGroups[nextGroupIndex].stories.length-1
+  const group=viewerGroups[viewerGroupIndex]
+  if(!group)return
+  const nextStoryIndex=viewerStoryIndex+direction
+  const nextGroupIndex=nextStoryIndex<0
+    ?viewerGroupIndex-1
+    :nextStoryIndex>=group.stories.length
+      ?viewerGroupIndex+1
+      :viewerGroupIndex
+  if(nextGroupIndex<0||nextGroupIndex>=viewerGroups.length){
+    closeViewer()
+    return
   }
-  const next=viewerGroups[nextGroupIndex]?.stories[nextStoryIndex]
-  if(!next)return
-  const openedViewer=viewer
-  viewerTurning=true
+
   clearViewerTimer()
   viewerStartedAt=0
-  try{
-    if(currentStory)await animateMagazineTurn(next,direction)
-  }finally{
+  viewerTurning=true
+  if(nextGroupIndex!==viewerGroupIndex){
+    viewerGroupIndex=nextGroupIndex
+    const nextGroup=viewerGroups[nextGroupIndex]
+    viewerStoryIndex=direction===1?0:nextGroup.stories.length-1
     viewerTurning=false
+    await drawViewer()
+    return
   }
-  if(!viewer||viewer!==openedViewer)return
-  viewerGroupIndex=nextGroupIndex
-  viewerStoryIndex=nextStoryIndex
-  void drawViewer()
+
+  const book=storyBook
+  if(!book||storyBookGroup!==viewerGroupIndex){
+    // No animation should ever prevent advancing to the next photograph.
+    viewerStoryIndex=nextStoryIndex
+    viewerTurning=false
+    await drawViewer()
+    return
+  }
+  const token=viewerDrawToken
+  try{
+    if(direction===1)book.flipNext('bottom')
+    else book.flipPrev('bottom')
+    // PageFlip emits "flip" after the real paper motion. Failsafe for old
+    // Android WebViews where the animation event may not arrive.
+    storyBookFlipTimeout=window.setTimeout(()=>{
+      if(token!==viewerDrawToken||!viewer||storyBook!==book)return
+      onStoryBookPage(nextStoryIndex,token)
+    },1280)
+  }catch(error){
+    console.warn('Story page curl could not start, using direct navigation',error)
+    onStoryBookPage(nextStoryIndex,token)
+    try{book.turnToPage(nextStoryIndex)}catch{}
+  }
 }
 
 function scheduleViewer(){
@@ -621,25 +612,34 @@ async function deleteOwnStory(story:Story){
 
 async function drawViewer(){
   if(!viewer)return
+  const root=viewer
   const token=++viewerDrawToken
+  destroyStoryBook()
   clearViewerTimer()
+  closeActionSheet()
   viewerStartedAt=0
   viewerRemainingMs=STORY_MS
   viewerMediaReady=false
-  closeActionSheet()
+  viewerTurning=false
   const group=viewerGroups[viewerGroupIndex]
   const story=group?.stories[viewerStoryIndex]
   if(!group||!story){closeViewer();return}
 
   const own=group.member.id===identity()?.memberId
   const ownerActions=own?'<button class="family-story-viewer-more" data-story-more aria-label="Opciones de tu historia">⋯</button>':''
-  viewer.innerHTML=`<div class="family-story-viewer-top"><div class="family-story-progress">${group.stories.map((_,index)=>`<i class="${index<viewerStoryIndex?'seen':index===viewerStoryIndex?'active':''}"><span></span></i>`).join('')}</div><div class="family-story-viewer-head">${avatarMarkup(group.member,'family-story-viewer-avatar')}<div class="family-story-viewer-who"><b>${esc(group.member.name)}</b><span>${age(story.created_at)}</span></div>${ownerActions}<button class="family-story-viewer-close" aria-label="Cerrar">×</button></div></div><div class="family-story-stage"><div class="family-story-loading">Cargando historia…</div><div class="family-story-stage-nav"><button data-story-prev aria-label="Historia anterior"></button><button data-story-next aria-label="Historia siguiente"></button></div></div>`
-
-  viewer.querySelector('.family-story-viewer-close')?.addEventListener('click',closeViewer)
-  viewer.querySelector('[data-story-more]')?.addEventListener('click',()=>showOwnStoryActions(story,viewerStoryIndex+1,group.stories.length))
-  viewer.querySelector('[data-story-prev]')?.addEventListener('click',event=>{event.stopPropagation();moveViewer(-1)})
-  viewer.querySelector('[data-story-next]')?.addEventListener('click',event=>{event.stopPropagation();moveViewer(1)})
-  const stage=viewer.querySelector<HTMLElement>('.family-story-stage')!
+  // Unlike the previous implementation, this container is created ONCE for
+  // the whole person's story. It stays mounted while the book flips pages.
+  root.innerHTML=`<div class="family-story-viewer-top"><div class="family-story-progress"></div><div class="family-story-viewer-head">${avatarMarkup(group.member,'family-story-viewer-avatar')}<div class="family-story-viewer-who"><b>${esc(group.member.name)}</b><span data-story-created></span></div>${ownerActions}<button class="family-story-viewer-close" aria-label="Cerrar">×</button></div></div><div class="family-story-stage"><div class="family-story-book-surface"></div><div class="family-story-loading">Cargando historia…</div><div class="family-story-stage-nav"><button data-story-prev aria-label="Historia anterior"></button><button data-story-next aria-label="Historia siguiente"></button></div></div>`
+  updateStoryHud()
+  root.querySelector('.family-story-viewer-close')?.addEventListener('click',closeViewer)
+  root.querySelector('[data-story-more]')?.addEventListener('click',()=> {
+    const current=viewerGroups[viewerGroupIndex]?.stories[viewerStoryIndex]
+    const total=viewerGroups[viewerGroupIndex]?.stories.length||0
+    if(current)showOwnStoryActions(current,viewerStoryIndex+1,total)
+  })
+  root.querySelector('[data-story-prev]')?.addEventListener('click',event=>{event.stopPropagation();void moveViewer(-1)})
+  root.querySelector('[data-story-next]')?.addEventListener('click',event=>{event.stopPropagation();void moveViewer(1)})
+  const stage=root.querySelector<HTMLElement>('.family-story-stage')!
   stage.addEventListener('pointerdown',event=>{
     if((event.target as Element).closest('button'))return
     pauseViewer()
@@ -649,33 +649,86 @@ async function drawViewer(){
   stage.addEventListener('pointercancel',resume)
   stage.addEventListener('pointerleave',resume)
 
-  let url=mediaUrl(story.media_path)
-  if(!url){
-    try{url=await signMedia(story.media_path)}catch(error){console.error('Story media signing failed',error)}
-  }
-  if(!viewer||token!==viewerDrawToken)return
-  const loading=stage.querySelector('.family-story-loading')
-  if(!url){
-    if(loading)loading.textContent='No se pudo abrir esta historia.'
+  const paths=group.stories.map(item=>item.media_path)
+  // Signed photo URLs are normally already cached by refreshStories().
+  // A missing signature should not blank the entire album.
+  const urls=await Promise.all(paths.map(async path=>{
+    const cached=mediaUrl(path)
+    if(cached)return cached
+    try{return await signMedia(path)}catch(error){
+      console.warn('Story image signature unavailable',error)
+      return ''
+    }
+  }))
+  if(viewer!==root||token!==viewerDrawToken)return
+  const mount=stage.querySelector<HTMLElement>('.family-story-book-surface')!
+  const host=document.createElement('div')
+  host.className='family-story-book-host'
+  // Same persistent PageFlip structure as HAVANA QUOTES: original pages
+  // are constructed separately, then cloned into one live book host.
+  const source=urls.map((url,i)=>{
+    const leaf=document.createElement('div')
+    leaf.className='family-story-book-leaf'
+    leaf.setAttribute('data-density','soft')
+    const image=document.createElement('img')
+    image.src=url
+    image.alt=`Historia de ${group.member.name} · ${i+1}`
+    image.decoding='async'
+    image.draggable=false
+    leaf.appendChild(image)
+    return leaf
+  })
+  host.replaceChildren(...source.map(leaf=>leaf.cloneNode(true)))
+  mount.replaceChildren(host)
+  storyBookImages=Array.from(host.querySelectorAll<HTMLImageElement>('.family-story-book-leaf img'))
+
+  await new Promise<void>(resolve=>requestAnimationFrame(()=>resolve()))
+  if(viewer!==root||token!==viewerDrawToken)return
+  const width=Math.round(stage.clientWidth)
+  const height=Math.round(stage.clientHeight)
+  if(width<180||height<250){
+    const loading=stage.querySelector<HTMLElement>('.family-story-loading')
+    if(loading)loading.textContent='No se pudo preparar el visor.'
     return
   }
-  const image=document.createElement('img')
-  image.src=url
-  image.alt=`Historia de ${group.member.name}`
-  image.decoding='async'
-  let imageReadyOnce=false
-  const ready=()=>{
-    if(imageReadyOnce||viewer!==stage.closest('.family-story-viewer')||token!==viewerDrawToken)return
-    imageReadyOnce=true
-    loading?.remove()
-    viewerMediaReady=true
-    void markViewed(story)
-    scheduleViewer()
+
+  try{
+    // HAVANA QUOTES uses size=stretch, autoSize and a persistent host.
+    // Keep exactly that book lifecycle while binding the aspect ratio to the
+    // ACTUAL full-screen story stage. Never shrink it to an inset 410×580
+    // rectangle: that was why photo content jumped in size during every tap.
+    const book=new PageFlip(host,{
+      width,height,size:'stretch',
+      minWidth:width,maxWidth:width,minHeight:height,maxHeight:height,
+      drawShadow:true,maxShadowOpacity:.72,flippingTime:1080,
+      usePortrait:true,autoSize:true,showCover:false,
+      mobileScrollSupport:false,swipeDistance:25,
+      showPageCorners:true,disableFlipByClick:true
+    })
+    book.loadFromHTML(host.querySelectorAll<HTMLElement>('.family-story-book-leaf'))
+    storyBook=book
+    storyBookGroup=viewerGroupIndex
+    book.on('flip',event=>{
+      if(viewer!==root||token!==viewerDrawToken||storyBook!==book)return
+      onStoryBookPage(Number(event.data),token)
+    })
+    if(viewerStoryIndex>0)book.turnToPage(viewerStoryIndex)
+    onStoryBookPage(viewerStoryIndex,token)
+  }catch(error){
+    console.warn('Magazine reader unavailable; keeping stories accessible',error)
+    // A low-memory WebView must never make photographs inaccessible.
+    const fallback=storyBookImages[viewerStoryIndex]
+    destroyStoryBook()
+    if(fallback){
+      fallback.classList.add('family-story-fallback-image')
+      mount.replaceChildren(fallback)
+      storyBookImages=Array.from({length:group.stories.length},(_,i)=>i===viewerStoryIndex?fallback:null as unknown as HTMLImageElement)
+      storyPageReady(viewerStoryIndex,token)
+    }else{
+      const loading=stage.querySelector<HTMLElement>('.family-story-loading')
+      if(loading)loading.textContent='No se pudo abrir esta historia.'
+    }
   }
-  image.addEventListener('load',ready,{once:true})
-  image.addEventListener('error',()=>{if(loading)loading.textContent='No se pudo abrir esta historia.'},{once:true})
-  stage.insertBefore(image,stage.querySelector('.family-story-stage-nav'))
-  if(image.complete&&image.naturalWidth>0)ready()
 }
 
 async function openViewer(memberId:string){
