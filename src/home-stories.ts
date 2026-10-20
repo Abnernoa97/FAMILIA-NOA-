@@ -631,12 +631,28 @@ async function drawViewer(){
 
   const own=group.member.id===identity()?.memberId
   const ownerActions=own?'<button class="family-story-viewer-more" data-story-more aria-label="Opciones de tu historia">⋯</button>':''
-  viewer.innerHTML=`<div class="family-story-viewer-top"><div class="family-story-progress">${group.stories.map((_,index)=>`<i class="${index<viewerStoryIndex?'seen':index===viewerStoryIndex?'active':''}"><span></span></i>`).join('')}</div><div class="family-story-viewer-head">${avatarMarkup(group.member,'family-story-viewer-avatar')}<div class="family-story-viewer-who"><b>${esc(group.member.name)}</b><span>${age(story.created_at)}</span></div>${ownerActions}<button class="family-story-viewer-close" aria-label="Cerrar">×</button></div></div><div class="family-story-stage"><div class="family-story-loading">Cargando historia…</div><div class="family-story-stage-nav"><button data-story-prev aria-label="Historia anterior"></button><button data-story-next aria-label="Historia siguiente"></button></div></div>`
-
+  const topContent=`<div class="family-story-progress">${group.stories.map((_,index)=>`<i class="${index<viewerStoryIndex?'seen':index===viewerStoryIndex?'active':''}"><span></span></i>`).join('')}</div><div class="family-story-viewer-head">${avatarMarkup(group.member,'family-story-viewer-avatar')}<div class="family-story-viewer-who"><b>${esc(group.member.name)}</b><span>${age(story.created_at)}</span></div>${ownerActions}<button class="family-story-viewer-close" aria-label="Cerrar">×</button></div>`
+  const keepBook=matchesViewerBook(group)
+  if(!keepBook&&(viewerBook||viewerBookPreparing))destroyViewerBook()
+  if(keepBook){
+    // Update only the chrome; the photographs and PageFlip's DOM remain
+    // mounted throughout the entire sequence, precisely as HAVANA QUOTES.
+    const top=viewer.querySelector<HTMLElement>('.family-story-viewer-top')
+    if(!top)return
+    top.innerHTML=topContent
+  }else{
+    viewer.innerHTML=`<div class="family-story-viewer-top">${topContent}</div><div class="family-story-stage"><div class="family-story-loading">Cargando historia…</div><div class="family-story-stage-nav"><button data-story-prev aria-label="Historia anterior"></button><button data-story-next aria-label="Historia siguiente"></button></div></div>`
+  }
   viewer.querySelector('.family-story-viewer-close')?.addEventListener('click',closeViewer)
   viewer.querySelector('[data-story-more]')?.addEventListener('click',()=>showOwnStoryActions(story,viewerStoryIndex+1,group.stories.length))
-  viewer.querySelector('[data-story-prev]')?.addEventListener('click',event=>{event.stopPropagation();moveViewer(-1)})
-  viewer.querySelector('[data-story-next]')?.addEventListener('click',event=>{event.stopPropagation();moveViewer(1)})
+  if(keepBook){
+    viewerMediaReady=true
+    void markViewed(story)
+    scheduleViewer()
+    return
+  }
+  viewer.querySelector('[data-story-prev]')?.addEventListener('click',event=>{event.stopPropagation();void moveViewer(-1)})
+  viewer.querySelector('[data-story-next]')?.addEventListener('click',event=>{event.stopPropagation();void moveViewer(1)})
   const stage=viewer.querySelector<HTMLElement>('.family-story-stage')!
   stage.addEventListener('pointerdown',event=>{
     if((event.target as Element).closest('button'))return
@@ -669,6 +685,8 @@ async function drawViewer(){
     viewerMediaReady=true
     void markViewed(story)
     scheduleViewer()
+    // The first photograph stays full-size while the persistent book loads.
+    void prepareViewerBook(stage,group)
   }
   image.addEventListener('load',ready,{once:true})
   image.addEventListener('error',()=>{if(loading)loading.textContent='No se pudo abrir esta historia.'},{once:true})
