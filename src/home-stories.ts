@@ -407,7 +407,7 @@ async function animateMagazineTurn(next:Story,direction:1|-1){
   if(window.matchMedia('(prefers-reduced-motion: reduce)').matches)return
   const activeViewer=viewer
   const stage=activeViewer?.querySelector<HTMLElement>('.family-story-stage')
-  const currentImage=stage?.querySelector<HTMLImageElement>('img:not(.family-story-magazine-underlay img)')
+  const currentImage=stage?.querySelector<HTMLImageElement>(':scope > img')
   if(!stage||!currentImage?.src)return
   let nextUrl=mediaUrl(next.media_path)
   if(!nextUrl){
@@ -648,8 +648,10 @@ async function drawViewer(){
   image.src=url
   image.alt=`Historia de ${group.member.name}`
   image.decoding='async'
+  let imageReadyOnce=false
   const ready=()=>{
-    if(viewer!==stage.closest('.family-story-viewer')||token!==viewerDrawToken)return
+    if(imageReadyOnce||viewer!==stage.closest('.family-story-viewer')||token!==viewerDrawToken)return
+    imageReadyOnce=true
     loading?.remove()
     viewerMediaReady=true
     void markViewed(story)
