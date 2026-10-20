@@ -7,6 +7,8 @@ const MIN_MOVE_METERS=2.5
 
 type NativeLocationBridge={
   locationCapability?:()=>string
+  isDeviceLocationEnabled?:()=>boolean
+  openDeviceLocationSettings?:()=>boolean
   isLocationSharingEnabled?:()=>boolean
   startLocationSharing?:()=>boolean
   stopLocationSharing?:()=>boolean
@@ -40,6 +42,23 @@ export function hasNativeLocationCapability(){
 
 export function isNativeLocationSharingEnabled(){
   return nativeSharingEnabled()
+}
+
+// The Android system-wide location switch is separate from app permissions and
+// from whether the FAMILIA NOA foreground service has been requested.
+export function isDeviceLocationEnabled(){
+  const bridge=nativeBridge()
+  if(!bridge)return true
+  try{return bridge.isDeviceLocationEnabled?.()===true}catch{return false}
+}
+
+export function openDeviceLocationSettings(){
+  const bridge=nativeBridge()
+  if(!bridge||typeof bridge.openDeviceLocationSettings!=='function')return false
+  try{return bridge.openDeviceLocationSettings()===true}catch(error){
+    console.warn('Could not open Android location settings',error)
+    return false
+  }
 }
 
 function publishNativeLocationState(){
