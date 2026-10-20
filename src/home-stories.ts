@@ -400,9 +400,14 @@ function closeViewer(){
 // Same physical paper-turn engine and timing family used in HAVANA QUOTES.
 // The overlay is purely visual: existing story media, permissions, progress,
 // view tracking and navigation continue to use the original viewer controller.
+// HAVANA QUOTES uses PageFlip 2.0.7 with a stretchable single-page
+// portrait reader. Keep that geometry here; a full-screen leaf configured
+// to the raw WebView height rendered half the picture outside the viewport.
 async function animateMagazineTurn(next:Story,direction:1|-1){
-  const stage=viewer?.querySelector<HTMLElement>('.family-story-stage')
-  const currentImage=stage?.querySelector<HTMLImageElement>('img')
+  if(window.matchMedia('(prefers-reduced-motion: reduce)').matches)return
+  const activeViewer=viewer
+  const stage=activeViewer?.querySelector<HTMLElement>('.family-story-stage')
+  const currentImage=stage?.querySelector<HTMLImageElement>('img:not(.family-story-magazine-underlay img)')
   if(!stage||!currentImage?.src)return
   let nextUrl=mediaUrl(next.media_path)
   if(!nextUrl){
@@ -411,50 +416,77 @@ async function animateMagazineTurn(next:Story,direction:1|-1){
       return
     }
   }
-  if(!nextUrl||!viewer||!document.contains(stage))return
+  if(!nextUrl||viewer!==activeViewer||!stage.isConnected)return
+
+  // Preload the target image before beginning the curl. Avoid ever showing a
+  // completely black half-page on Android while the new image is loading.
+  await new Promise<void>(resolve=>{
+    const preload=new Image()
+    let finished=false
+    const finish=()=>{if(finished)return;finished=true;resolve()}
+    preload.onload=finish
+    preload.onerror=finish
+    preload.src=nextUrl
+    if(preload.complete)finish()
+    window.setTimeout(finish,350)
+  })
+  if(viewer!==activeViewer||!stage.isConnected)return
 
   const overlay=document.createElement('div')
   overlay.className='family-story-magazine-overlay'
+  // Real next photograph fills the stage underneath the turning paper.
+  // With a black background the right half used to be a black rectangle.
+  const underlay=document.createElement('img')
+  underlay.className='family-story-magazine-underlay'
+  underlay.src=nextUrl
+  underlay.alt=''
+  overlay.appendChild(underlay)
+
   const host=document.createElement('div')
   host.className='family-story-magazine-host'
   overlay.appendChild(host)
   const makePage=(url:string)=>{
     const page=document.createElement('div')
     page.className='family-story-magazine-leaf'
-    const img=document.createElement('img')
-    img.src=url
-    img.alt=''
-    img.draggable=false
-    page.appendChild(img)
+    const image=document.createElement('img')
+    image.src=url
+    image.alt=''
+    image.draggable=false
+    page.appendChild(image)
     return page
   }
   const oldPage=makePage(currentImage.src)
-  const newPage=makePage(nextUrl)
-  const pages=direction===1?[oldPage,newPage]:[newPage,oldPage]
+  const nextPage=makePage(nextUrl)
+  const pages=direction===1?[oldPage,nextPage]:[nextPage,oldPage]
   host.append(...pages)
   stage.appendChild(overlay)
 
   let flip:PageFlip|null=null
   try{
-    const width=Math.max(260,Math.round(stage.clientWidth))
-    const height=Math.max(360,Math.round(stage.clientHeight))
+    const stageWidth=Math.max(270,Math.round(stage.clientWidth))
+    const stageHeight=Math.max(382,Math.round(stage.clientHeight))
+    // Match HAVANA QUOTES page dimensions and responsive bounds rather than
+    // forcing each page to the entire stage (which breaks portrait rendering).
     flip=new PageFlip(host,{
-      width,height,size:'stretch',
-      minWidth:width,maxWidth:width,minHeight:height,maxHeight:height,
-      drawShadow:true,maxShadowOpacity:.72,flippingTime:920,
+      width:410,height:580,size:'stretch',
+      minWidth:Math.min(270,stageWidth),
+      maxWidth:Math.max(560,stageWidth),
+      minHeight:Math.min(382,stageHeight),
+      maxHeight:Math.max(792,stageHeight),
+      drawShadow:true,maxShadowOpacity:.42,flippingTime:680,
       usePortrait:true,autoSize:true,showCover:false,
       mobileScrollSupport:false,swipeDistance:25,
       showPageCorners:true,disableFlipByClick:true
     })
     flip.loadFromHTML(pages)
     await new Promise<void>(resolve=>requestAnimationFrame(()=>requestAnimationFrame(()=>resolve())))
+    if(viewer!==activeViewer||!stage.isConnected)return
     if(direction===-1)flip.turnToPage(1)
     if(direction===1)flip.flipNext('bottom')
     else flip.flipPrev('bottom')
-    await new Promise<void>(resolve=>window.setTimeout(resolve,990))
+    await new Promise<void>(resolve=>window.setTimeout(resolve,720))
   }catch(error){
-    // Never let an animation failure stop a real story from opening.
-    console.warn('Magazine turn unavailable, continuing normally',error)
+    console.warn('Magazine page curl unavailable; showing next story',error)
   }finally{
     try{flip?.destroy()}catch{}
     overlay.remove()
