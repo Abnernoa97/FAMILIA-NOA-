@@ -58,7 +58,6 @@ let familySyncChannel: ReturnType<typeof supabase.channel> | null = null
 let mandatoryLocationVerified = false
 let mandatoryLocationGateActive = false
 let locationViewUnsubscribe:(()=>void)|null=null
-let showPendingFamily=false
 let pendingNativeFix:{memberId:string;previousUpdatedAt:string;startedAt:number}|null=null
 let nativeFixTimeout:number|null=null
 let awaitingAndroidLocationSettings=false
@@ -602,18 +601,10 @@ function renderLocationList(state:LocationState){
     // focuses that historical location and labels its real age on the map.
     return `<article class="locationrow locationrow-active${stale?' stale':''}" data-location-member="${esc(member.id)}"><button type="button" class="location-focus" data-focus-location="${esc(member.id)}" aria-label="Ver última ubicación de ${esc(member.name)} en el mapa"><span class="location-avatar-fallback">${initial}</span><span class="location-person"><span><b>${esc(member.name)}${mine?' · tú':''}</b><small>Última ubicación · ${locationAge(item.updated_at)}${accuracy}</small></span></span><span class="location-state-pill">${status}</span><span class="location-chevron">›</span></button></article>`
   }).join('')
-  // Keep the screen compact when the map already has active relatives.
-  // Offline/historical entries remain available with one explicit tap.
-  const canCollapse=liveCount>0&&ordered.length>0
-  const expanded=!canCollapse||showPendingFamily
-  const toggle=canCollapse
-    ?`<button type="button" class="family-pending-toggle" data-pending-family-toggle aria-expanded="${expanded}">${expanded?'Ocultar':'Ver'} ${ordered.length} familiares sin ubicación actual <span aria-hidden="true">${expanded?'⌃':'⌄'}</span></button>`
-    :''
-  element.innerHTML=`<div class="location-section-title"><div><b>Familia</b><span>Sin ubicación en tiempo real</span></div><small>${summary}</small></div>${toggle}${expanded?cards:''}${!ordered.length?'<div class="empty">Todos los familiares aparecen en el mapa.</div>':''}`
-  element.querySelector<HTMLButtonElement>('[data-pending-family-toggle]')?.addEventListener('click',()=>{
-    showPendingFamily=!showPendingFamily
-    renderLocationList(getLocationState())
-  })
+  // Keep relatives without a recent GPS fix visible in the original family
+  // list. As a person starts sharing, their row moves to the live map; as
+  // tracking goes stale, it returns here automatically, without a drawer.
+  element.innerHTML=`<div class="location-section-title"><div><b>Familia</b><span>Sin ubicación en tiempo real</span></div><small>${summary}</small></div>${cards||'<div class="empty">Todos los familiares aparecen en el mapa.</div>'}`
   element.querySelectorAll<HTMLButtonElement>('[data-focus-location]').forEach(button=>{
     button.addEventListener('click',()=>{
       const targetId=button.dataset.focusLocation||''
