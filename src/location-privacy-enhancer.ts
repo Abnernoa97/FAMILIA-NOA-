@@ -15,8 +15,8 @@ function ensureStyles(){
   style.textContent=`
     .location-page.location-sharing-active .locationbox{display:none!important}
     .location-page.location-sharing-active .family-map-shell{
-      height:min(86dvh,840px)!important;
-      min-height:560px!important;
+      height:min(66dvh,620px)!important;
+      min-height:390px!important;
       margin-top:10px!important;
       margin-bottom:20px!important;
     }
@@ -41,8 +41,8 @@ function ensureStyles(){
     .location-native-stale.visible{display:block}
     @media(max-width:480px){
       .location-page.location-sharing-active .family-map-shell{
-        height:84dvh!important;
-        min-height:520px!important;
+        height:60dvh!important;
+        min-height:360px!important;
         margin-left:10px!important;
         margin-right:10px!important;
       }
