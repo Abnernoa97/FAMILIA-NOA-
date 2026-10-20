@@ -17,8 +17,6 @@ type HomeSnapshot={
 
 let captureTimer:number|null=null
 let restoreAt=0
-let queuedAction:{kind:'member'|'create';memberId?:string}|null=null
-let actionTimer:number|null=null
 
 try{LEGACY_KEYS.forEach(key=>localStorage.removeItem(key))}catch{}
 
@@ -155,36 +153,9 @@ function mutationMatters(mutation:MutationRecord){
   })
 }
 
-function replayQueuedAction(){
-  if(!queuedAction)return
-  const live=document.querySelector<HTMLElement>('.family-story-home:not([data-instant-snapshot])')
-  if(!live)return
-  const action=queuedAction
-  queuedAction=null
-  if(actionTimer!==null){window.clearTimeout(actionTimer);actionTimer=null}
-  if(action.kind==='create'){
-    live.querySelector<HTMLElement>('[data-home-story-create]')?.click()
-    return
-  }
-  if(action.memberId){
-    live.querySelector<HTMLElement>(`[data-home-story-member="${CSS.escape(action.memberId)}"]`)?.click()
-  }
-}
-
-function queueAction(action:{kind:'member'|'create';memberId?:string}){
-  queuedAction=action
-  replayQueuedAction()
-  if(!queuedAction)return
-  if(actionTimer!==null)window.clearTimeout(actionTimer)
-  const started=Date.now()
-  const tryAgain=()=>{
-    replayQueuedAction()
-    if(!queuedAction||Date.now()-started>3000){queuedAction=null;actionTimer=null;return}
-    actionTimer=window.setTimeout(tryAgain,60)
-  }
-  actionTimer=window.setTimeout(tryAgain,30)
-}
-
+// Cached story rail nodes look interactive, but their HTML cannot preserve
+// event listeners across a WebView restart. Forward the tap straight to the
+// canonical story controller and keep the rail stable while it hydrates.
 document.addEventListener('click',event=>{
   const target=event.target as Element|null
   const cached=target?.closest<HTMLElement>('.family-story-home[data-instant-snapshot="1"]')
@@ -194,22 +165,14 @@ document.addEventListener('click',event=>{
   if(!create&&!member)return
   event.preventDefault()
   event.stopImmediatePropagation()
-
-  // The instant rail is only a painted snapshot and has no live handlers.
-  // Remove it on the first interaction so home-stories can synchronously
-  // replace it with the real rail, then replay the user's tap there.
-  const shell=cached.closest<HTMLElement>('.shell')
-  cached.remove()
-  shell?.classList.remove('has-home-stories')
-
-  if(create)queueAction({kind:'create'})
-  else queueAction({kind:'member',memberId:member?.dataset.homeStoryMember||''})
+  window.dispatchEvent(new CustomEvent('familia-noa:snapshot-story-press',{
+    detail:create?{kind:'create'}:{kind:'member',memberId:member?.dataset.homeStoryMember||''}
+  }))
 },true)
 
 const observer=new MutationObserver(mutations=>{
   if(mutations.some(mutationMatters)){
     restore()
-    replayQueuedAction()
     scheduleCapture()
   }
 })
@@ -217,7 +180,6 @@ observer.observe(document.body,{childList:true,subtree:true})
 
 window.addEventListener('familia-noa:identity-changed',()=>{
   restoreAt=0
-  queuedAction=null
   restore()
   scheduleCapture(300)
 })
@@ -225,7 +187,6 @@ window.addEventListener('pageshow',()=>restore())
 window.addEventListener('beforeunload',()=>{
   observer.disconnect()
   if(captureTimer!==null)window.clearTimeout(captureTimer)
-  if(actionTimer!==null)window.clearTimeout(actionTimer)
   capture()
 },{once:true})
 

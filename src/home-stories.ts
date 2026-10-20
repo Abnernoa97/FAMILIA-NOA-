@@ -1,4 +1,5 @@
 import './home-stories.css'
+import { PageFlip } from 'page-flip'
 import { supabase } from './supabase'
 import { getIdentity } from './core/identity'
 import { mediaUrl, primeMedia, signMedia, forgetMedia } from './core/private-media'
@@ -30,6 +31,9 @@ let viewerGroupIndex=0
 let viewerStoryIndex=0
 let viewerPaused=false
 let viewerDrawToken=0
+let viewerTurning=false
+const wiredStoryRails=new WeakSet<HTMLElement>()
+let snapshotStoryAction:{kind:'member'|'create';memberId?:string}|null=null
 let picker:HTMLElement|null=null
 let preview:HTMLElement|null=null
 let actionSheet:HTMLElement|null=null
@@ -142,8 +146,10 @@ function renderRail(){
 
   // Delegation survives cover hydration and instant-snapshot adoption without
   // stacking a new listener on each database/media refresh.
-  if(section.dataset.storyHandlers!=='1'){
-    section.dataset.storyHandlers='1'
+  // A cached rail is re-created from HTML, so its old dataset attribute does
+  // not mean JavaScript listeners survived. Use live DOM identity, not markup.
+  if(!wiredStoryRails.has(section)){
+    wiredStoryRails.add(section)
     section.addEventListener('click',event=>{
       const target=event.target as Element|null
       const member=target?.closest<HTMLElement>('[data-home-story-member]')
@@ -210,6 +216,7 @@ async function refreshStories(){
     console.error('Home stories failed to load',error)
   }finally{
     loading=false
+    consumeSnapshotStoryAction()
   }
 }
 
@@ -347,6 +354,8 @@ function clearViewerTimer(){
 }
 
 function closeViewerDirect(){
+  viewerTurning=false
+  snapshotStoryAction=null
   clearViewerTimer()
   closeActionSheet()
   viewerDrawToken++
@@ -364,28 +373,103 @@ function closeViewer(){
   else closeViewerDirect()
 }
 
-function moveViewer(direction:1|-1){
-  if(!viewerGroups.length)return
-  const group=viewerGroups[viewerGroupIndex]
-  const nextStory=viewerStoryIndex+direction
-  if(nextStory>=0&&nextStory<group.stories.length){
-    viewerStoryIndex=nextStory
-    void drawViewer()
-    return
+// Same physical paper-turn engine and timing family used in HAVANA QUOTES.
+// The overlay is purely visual: existing story media, permissions, progress,
+// view tracking and navigation continue to use the original viewer controller.
+async function animateMagazineTurn(next:Story,direction:1|-1){
+  const stage=viewer?.querySelector<HTMLElement>('.family-story-stage')
+  const currentImage=stage?.querySelector<HTMLImageElement>('img')
+  if(!stage||!currentImage?.src)return
+  let nextUrl=mediaUrl(next.media_path)
+  if(!nextUrl){
+    try{nextUrl=await signMedia(next.media_path)}catch(error){
+      console.warn('Could not prepare magazine page',error)
+      return
+    }
   }
-  const nextGroup=viewerGroupIndex+direction
-  if(nextGroup<0||nextGroup>=viewerGroups.length){
-    closeViewer()
-    return
+  if(!nextUrl||!viewer||!document.contains(stage))return
+
+  const overlay=document.createElement('div')
+  overlay.className='family-story-magazine-overlay'
+  const host=document.createElement('div')
+  host.className='family-story-magazine-host'
+  overlay.appendChild(host)
+  const makePage=(url:string)=>{
+    const page=document.createElement('div')
+    page.className='family-story-magazine-leaf'
+    const img=document.createElement('img')
+    img.src=url
+    img.alt=''
+    img.draggable=false
+    page.appendChild(img)
+    return page
   }
-  viewerGroupIndex=nextGroup
-  viewerStoryIndex=direction===1?0:viewerGroups[nextGroup].stories.length-1
+  const oldPage=makePage(currentImage.src)
+  const newPage=makePage(nextUrl)
+  const pages=direction===1?[oldPage,newPage]:[newPage,oldPage]
+  host.append(...pages)
+  stage.appendChild(overlay)
+
+  let flip:PageFlip|null=null
+  try{
+    const width=Math.max(260,Math.round(stage.clientWidth))
+    const height=Math.max(360,Math.round(stage.clientHeight))
+    flip=new PageFlip(host,{
+      width,height,size:'stretch',
+      minWidth:width,maxWidth:width,minHeight:height,maxHeight:height,
+      drawShadow:true,maxShadowOpacity:.72,flippingTime:920,
+      usePortrait:true,autoSize:true,showCover:false,
+      mobileScrollSupport:false,swipeDistance:25,
+      showPageCorners:true,disableFlipByClick:true
+    })
+    flip.loadFromHTML(pages)
+    await new Promise<void>(resolve=>requestAnimationFrame(()=>requestAnimationFrame(()=>resolve())))
+    if(direction===-1)flip.turnToPage(1)
+    if(direction===1)flip.flipNext('bottom')
+    else flip.flipPrev('bottom')
+    await new Promise<void>(resolve=>window.setTimeout(resolve,990))
+  }catch(error){
+    // Never let an animation failure stop a real story from opening.
+    console.warn('Magazine turn unavailable, continuing normally',error)
+  }finally{
+    try{flip?.destroy()}catch{}
+    overlay.remove()
+  }
+}
+
+async function moveViewer(direction:1|-1){
+  if(!viewerGroups.length||viewerTurning||!viewer)return
+  const currentGroup=viewerGroups[viewerGroupIndex]
+  const currentStory=currentGroup?.stories[viewerStoryIndex]
+  let nextGroupIndex=viewerGroupIndex
+  let nextStoryIndex=viewerStoryIndex+direction
+  if(nextStoryIndex<0||nextStoryIndex>=currentGroup.stories.length){
+    nextGroupIndex+=direction
+    if(nextGroupIndex<0||nextGroupIndex>=viewerGroups.length){
+      closeViewer()
+      return
+    }
+    nextStoryIndex=direction===1?0:viewerGroups[nextGroupIndex].stories.length-1
+  }
+  const next=viewerGroups[nextGroupIndex]?.stories[nextStoryIndex]
+  if(!next)return
+  const openedViewer=viewer
+  viewerTurning=true
+  clearViewerTimer()
+  try{
+    if(currentStory)await animateMagazineTurn(next,direction)
+  }finally{
+    viewerTurning=false
+  }
+  if(!viewer||viewer!==openedViewer)return
+  viewerGroupIndex=nextGroupIndex
+  viewerStoryIndex=nextStoryIndex
   void drawViewer()
 }
 
 function scheduleViewer(){
   clearViewerTimer()
-  if(viewerPaused||!viewer)return
+  if(viewerPaused||viewerTurning||!viewer)return
   viewerTimer=window.setTimeout(()=>moveViewer(1),STORY_MS)
 }
 
@@ -512,6 +596,7 @@ async function openViewer(memberId:string){
   viewerGroupIndex=groupIndex
   viewerStoryIndex=firstUnseen>=0?firstUnseen:0
   viewerPaused=false
+  viewerTurning=false
 
   const root=document.createElement('div')
   root.className='family-story-viewer'
@@ -520,6 +605,26 @@ async function openViewer(memberId:string){
   history.pushState({...(history.state||{}),[HISTORY_KEY]:1},'',location.href)
   await drawViewer()
 }
+
+// The instant startup snapshot contains HTML but never the original event
+// handlers. Queue a tap until the authoritative, current story list is ready.
+function consumeSnapshotStoryAction(){
+  if(!snapshotStoryAction||!dataReady||loading)return
+  const action=snapshotStoryAction
+  snapshotStoryAction=null
+  if(action.kind==='create'){showPicker();return}
+  if(action.memberId&&!viewer){
+    void openViewer(action.memberId).catch(error=>console.warn('Story could not open',error))
+  }
+}
+
+window.addEventListener('familia-noa:snapshot-story-press',event=>{
+  const action=(event as CustomEvent<{kind:'member'|'create';memberId?:string}>).detail
+  if(!action||!['member','create'].includes(action.kind))return
+  snapshotStoryAction=action
+  if(!dataReady){if(!loading)void refreshStories();return}
+  consumeSnapshotStoryAction()
+})
 
 window.addEventListener('familia-noa:open-story-notification',event=>{
   const memberId=(event as CustomEvent<{memberId?:string}>).detail?.memberId||''
