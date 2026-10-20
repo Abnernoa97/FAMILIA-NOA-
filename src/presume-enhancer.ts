@@ -270,5 +270,15 @@ function hydrateHome(){
 inject()
 document.addEventListener('click',event=>{const target=event.target as Element|null;if(!target?.closest('#ok'))return;event.preventDefault();event.stopPropagation();event.stopImmediatePropagation();void open(true)},true)
 document.addEventListener('presume:open-challenge-camera',event=>{const detail=(event as CustomEvent<{slot?:Slot}>).detail;pendingCapture='challenge';pendingChallengeSlot=detail?.slot==='afternoon'?'afternoon':detail?.slot==='morning'?'morning':null;cameraInput()?.click()})
+document.addEventListener('presume:open-notification',event=>{
+  const postId=(event as CustomEvent<{postId?:string|null}>).detail?.postId||''
+  void open(true).then(()=>{
+    if(!postId)return
+    requestAnimationFrame(()=>{
+      const card=overlay?.querySelector<HTMLElement>(`[data-post="${CSS.escape(postId)}"]`)
+      card?.scrollIntoView({behavior:'smooth',block:'center'})
+    })
+  })
+})
 window.addEventListener('popstate',()=>{const view=rawView();if(view==='presume-story'){if(!storyOverlay&&overlay){const first=activePosts()[0];if(first)openStory(first.member_id,false)}return}closeStory();if(view==='presume'){if(!overlay)void open(false);return}close()})
 const observer=new MutationObserver(()=>hydrateHome());observer.observe(document.body,{childList:true,subtree:true});hydrateHome()
