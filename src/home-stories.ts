@@ -1,4 +1,5 @@
 import './home-stories.css'
+import { PageFlip } from 'page-flip'
 import { supabase } from './supabase'
 import { getIdentity } from './core/identity'
 import { mediaUrl, primeMedia, signMedia, forgetMedia } from './core/private-media'
@@ -30,6 +31,9 @@ let viewerGroupIndex=0
 let viewerStoryIndex=0
 let viewerPaused=false
 let viewerDrawToken=0
+let viewerTurning=false
+const wiredStoryRails=new WeakSet<HTMLElement>()
+let snapshotStoryAction:{kind:'member'|'create';memberId?:string}|null=null
 let picker:HTMLElement|null=null
 let preview:HTMLElement|null=null
 let actionSheet:HTMLElement|null=null
@@ -142,8 +146,10 @@ function renderRail(){
 
   // Delegation survives cover hydration and instant-snapshot adoption without
   // stacking a new listener on each database/media refresh.
-  if(section.dataset.storyHandlers!=='1'){
-    section.dataset.storyHandlers='1'
+  // A cached rail is re-created from HTML, so its old dataset attribute does
+  // not mean JavaScript listeners survived. Use live DOM identity, not markup.
+  if(!wiredStoryRails.has(section)){
+    wiredStoryRails.add(section)
     section.addEventListener('click',event=>{
       const target=event.target as Element|null
       const member=target?.closest<HTMLElement>('[data-home-story-member]')
@@ -210,6 +216,7 @@ async function refreshStories(){
     console.error('Home stories failed to load',error)
   }finally{
     loading=false
+    consumeSnapshotStoryAction()
   }
 }
 
@@ -347,6 +354,7 @@ function clearViewerTimer(){
 }
 
 function closeViewerDirect(){
+  viewerTurning=false
   clearViewerTimer()
   closeActionSheet()
   viewerDrawToken++
