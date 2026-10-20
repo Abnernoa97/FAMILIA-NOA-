@@ -7,7 +7,7 @@ import { startHomeChatUnread, stopHomeChatUnread } from './chat-features'
 import { initNavigation, enterView, replaceView, backView, type AppView } from './core/navigation'
 import { closeMediaViewer, isMediaViewerOpen } from './core/media-viewer'
 import { clearPrivateMediaCache } from './core/private-media'
-import { getLocationState, refreshLocationState, saveOwnLocation, subscribeLocationState, type LocationState } from './core/location-store'
+import { getLocationState, refreshLocationState, saveOwnLocation, subscribeLocationState, isLiveFamilyLocation, type LocationState } from './core/location-store'
 import { activateNativeLocationSharing, ensureOwnLocationRealtime, hasNativeLocationCapability, isDeviceLocationEnabled, isNativeLocationSharingEnabled, openDeviceLocationSettings, refreshMemberLocation, startOwnLocationRealtime } from './core/location-device-sync'
 
 type Member = { id: string; name: string; active: boolean; must_share_location: boolean }
@@ -58,6 +58,7 @@ let familySyncChannel: ReturnType<typeof supabase.channel> | null = null
 let mandatoryLocationVerified = false
 let mandatoryLocationGateActive = false
 let locationViewUnsubscribe:(()=>void)|null=null
+let showPendingFamily=false
 let pendingNativeFix:{memberId:string;previousUpdatedAt:string;startedAt:number}|null=null
 let nativeFixTimeout:number|null=null
 let awaitingAndroidLocationSettings=false
@@ -556,18 +557,25 @@ function renderLocationList(state:LocationState){
   const element=document.querySelector<HTMLElement>('#familylocations')
   if(!element)return
   if(!state.updatedAt&&!state.error){
-    element.innerHTML='<div class="location-section-title"><div><b>Familia</b><span>Quién está compartiendo ahora</span></div><small>Cargando…</small></div><div class="loading">Cargando ubicaciones…</div>'
+    element.innerHTML='<div class="location-section-title"><div><b>Familia</b><span>Ubicaciones pendientes o anteriores</span></div><small>Cargando…</small></div><div class="loading">Cargando ubicaciones…</div>'
     return
   }
   if(state.error&&!state.updatedAt){
-    element.innerHTML='<div class="location-section-title"><div><b>Familia</b><span>Quién está compartiendo ahora</span></div><small>Sin conexión</small></div><div class="empty">No se pudieron cargar las ubicaciones. Inténtalo de nuevo.</div>'
+    element.innerHTML='<div class="location-section-title"><div><b>Familia</b><span>Ubicaciones pendientes o anteriores</span></div><small>Sin conexión</small></div><div class="empty">No se pudieron cargar las ubicaciones. Inténtalo de nuevo.</div>'
     return
   }
 
   const rows=state.locations
   const byMember=new Map(rows.map(row=>[row.member_id,row]))
   const sourceMembers=state.members.length?state.members:members
-  const ordered=[...sourceMembers].sort((a,b)=>{
+  const now=Date.now()
+  const ownGpsOff=hasNativeLocationCapability()&&!isDeviceLocationEnabled()
+  const liveMemberIds=new Set(rows
+    .filter(row=>isLiveFamilyLocation(row.updated_at,now)&&!(row.member_id===memberId&&ownGpsOff))
+    .map(row=>row.member_id))
+  // A member with a recent position is represented by their clickable marker
+  // on the map. Below it, only show people who do NOT have a live position.
+  const ordered=[...sourceMembers].filter(member=>!liveMemberIds.has(member.id)).sort((a,b)=>{
     const aHas=byMember.has(a.id)?0:1
     const bHas=byMember.has(b.id)?0:1
     if(aHas!==bHas)return aHas-bHas
@@ -576,18 +584,8 @@ function renderLocationList(state:LocationState){
     return a.name.localeCompare(b.name,'es')
   })
   if(byMember.has(memberId))ensureOwnLocationRealtime()
-  // A stored coordinate proves a previous update, not that a phone is
-  // currently sharing. Use the same five-minute threshold as member badges.
-  const freshCount=rows.filter(row=>{
-    const ageMs=Date.now()-new Date(row.updated_at).getTime()
-    return Number.isFinite(ageMs)&&ageMs>=0&&ageMs<5*60*1000
-  }).length
-  const oldCount=rows.length-freshCount
-  const summary=rows.length===0
-    ?'Sin ubicaciones'
-    :oldCount===0
-      ?`${freshCount} ahora`
-      :`${freshCount} ahora · ${oldCount} sin actualizar`
+  const liveCount=liveMemberIds.size
+  const summary=`${liveCount} en mapa · ${ordered.length} pendientes`
   const cards=ordered.map(member=>{
     const item=byMember.get(member.id)
     const mine=member.id===memberId
@@ -595,14 +593,27 @@ function renderLocationList(state:LocationState){
     if(!item){
       return `<article class="locationrow locationrow-empty" data-location-member="${esc(member.id)}"><div class="location-person"><span class="location-avatar-fallback">${initial}</span><div><b>${esc(member.name)}${mine?' · tú':''}</b><small>${member.must_share_location?'Ubicación obligatoria pendiente':'Sin ubicación compartida'}</small></div></div><span class="location-state-pill muted">Sin ubicación</span></article>`
     }
-    const ageMs=Date.now()-new Date(item.updated_at).getTime()
+    const ageMs=now-Date.parse(item.updated_at)
     const stale=Number.isFinite(ageMs)&&ageMs>60*60*1000
-    const veryFresh=Number.isFinite(ageMs)&&ageMs<5*60*1000
     const accuracy=Number.isFinite(item.accuracy)?` · ±${Math.round(item.accuracy as number)} m`:''
-    const status=veryFresh?'Ahora':stale?'Última':'Reciente'
-    return `<article class="locationrow locationrow-active${stale?' stale':''}" data-location-member="${esc(member.id)}"><button type="button" class="location-focus" data-focus-location="${esc(member.id)}" aria-label="Ver a ${esc(member.name)} en el mapa"><span class="location-avatar-fallback">${initial}</span><span class="location-person"><span><b>${esc(member.name)}${mine?' · tú':''}</b><small>${stale?'Última ubicación · ':''}${locationAge(item.updated_at)}${accuracy}</small></span></span><span class="location-state-pill${veryFresh?' live':''}">${status}</span><span class="location-chevron">›</span></button></article>`
+    const deviceOff=mine&&ownGpsOff
+    const status=deviceOff?'GPS apagado':'Última'
+    // Old positions stay available on demand: tapping the row temporarily
+    // focuses that historical location and labels its real age on the map.
+    return `<article class="locationrow locationrow-active${stale?' stale':''}" data-location-member="${esc(member.id)}"><button type="button" class="location-focus" data-focus-location="${esc(member.id)}" aria-label="Ver última ubicación de ${esc(member.name)} en el mapa"><span class="location-avatar-fallback">${initial}</span><span class="location-person"><span><b>${esc(member.name)}${mine?' · tú':''}</b><small>Última ubicación · ${locationAge(item.updated_at)}${accuracy}</small></span></span><span class="location-state-pill">${status}</span><span class="location-chevron">›</span></button></article>`
   }).join('')
-  element.innerHTML=`<div class="location-section-title"><div><b>Familia</b><span>Quién está compartiendo ahora</span></div><small>${summary}</small></div>${cards||'<div class="empty">Aún no hay ubicaciones compartidas.</div>'}`
+  // Keep the screen compact when the map already has active relatives.
+  // Offline/historical entries remain available with one explicit tap.
+  const canCollapse=liveCount>0&&ordered.length>0
+  const expanded=!canCollapse||showPendingFamily
+  const toggle=canCollapse
+    ?`<button type="button" class="family-pending-toggle" data-pending-family-toggle aria-expanded="${expanded}">${expanded?'Ocultar':'Ver'} ${ordered.length} familiares sin ubicación actual <span aria-hidden="true">${expanded?'⌃':'⌄'}</span></button>`
+    :''
+  element.innerHTML=`<div class="location-section-title"><div><b>Familia</b><span>Sin ubicación en tiempo real</span></div><small>${summary}</small></div>${toggle}${expanded?cards:''}${!ordered.length?'<div class="empty">Todos los familiares aparecen en el mapa.</div>':''}`
+  element.querySelector<HTMLButtonElement>('[data-pending-family-toggle]')?.addEventListener('click',()=>{
+    showPendingFamily=!showPendingFamily
+    renderLocationList(getLocationState())
+  })
   element.querySelectorAll<HTMLButtonElement>('[data-focus-location]').forEach(button=>{
     button.addEventListener('click',()=>{
       const targetId=button.dataset.focusLocation||''
@@ -612,6 +623,14 @@ function renderLocationList(state:LocationState){
     })
   })
 }
+
+// Reclassify positions automatically as they age, even if Realtime is silent.
+window.setInterval(()=>{
+  if(!document.hidden&&document.querySelector('.location-page'))renderLocationList(getLocationState())
+},30_000)
+window.addEventListener('familia-noa:android-resumed',()=>{
+  if(document.querySelector('.location-page'))renderLocationList(getLocationState())
+})
 
 async function loadLocations(force=false){
   const state=await refreshLocationState({force})

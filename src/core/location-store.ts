@@ -15,6 +15,14 @@ export type FamilyLocation={
   updated_at:string
 }
 
+// One consistent definition of "on the live map" for all family views.
+// A saved coordinate is historical unless the server received it recently.
+export const LIVE_LOCATION_WINDOW_MS=5*60_000
+export function isLiveFamilyLocation(updatedAt:string, now=Date.now()){
+  const age=now-Date.parse(updatedAt)
+  return Number.isFinite(age)&&age>=-30_000&&age<LIVE_LOCATION_WINDOW_MS
+}
+
 export type LocationProfile={
   member_id:string
   avatar_path:string|null
