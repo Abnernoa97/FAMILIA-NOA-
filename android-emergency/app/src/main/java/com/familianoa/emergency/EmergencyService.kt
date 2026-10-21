@@ -394,14 +394,22 @@ class EmergencyService : Service() {
     }
 
     private fun scheduleReconnect() {
-        if (!store.configured) return
-        val delays = longArrayOf(1_000L, 2_000L, 5_000L, 10_000L, 20_000L)
+        if (!store.configured || reconnectTask != null) return
+        // Keep one pending retry. Do not reset the backoff merely because a
+        // TCP socket briefly opened; wait for a successful channel join.
+        val delays = longArrayOf(2_000L, 5_000L, 10_000L, 20_000L, 40_000L, 60_000L)
         val delay = delays[reconnectAttempt.coerceAtMost(delays.lastIndex)]
         reconnectAttempt++
-        handler.postDelayed({ ensureConnected() }, delay)
+        val task = Runnable {
+            reconnectTask = null
+            ensureConnected()
+        }
+        reconnectTask = task
+        handler.postDelayed(task, delay)
     }
 
-    private fun processRealtime(text:String) {
+    private fun processRealtime(webSocket:WebSocket, text:String) {
+        if (socket !== webSocket) return
         try {
             val root = JSONObject(text)
             when (root.optString("event")) {
@@ -417,12 +425,23 @@ class EmergencyService : Service() {
                     val resolved = !record.isNull("resolved_at") && record.optString("resolved_at").isNotBlank()
                     if (resolved) clearEmergency(id) else showEmergency(Api.parseAlert(record))
                 }
-                "phx_error", "phx_close" -> {
-                    socket?.cancel(); socket = null; connecting = false; scheduleReconnect()
+                "phx_error", "phx_close" -> handler.post {
+                    if (socket === webSocket) disconnectRealtime(webSocket)
                 }
                 "phx_reply" -> {
                     val status = root.optJSONObject("payload")?.optString("status")
-                    if (status == "error") { socket?.cancel(); socket = null; connecting = false; scheduleReconnect() }
+                    val topic = root.optString("topic")
+                    if (topic == Config.REALTIME_TOPIC && root.optString("ref") == "1") {
+                        // Supabase's Phoenix JOIN ack is the only valid signal
+                        // that emergency and family-activity changes are live.
+                        if (status == "ok") handler.post { subscribedRealtime(webSocket) }
+                        else handler.post {
+                            android.util.Log.w("FamiliaNoaRealtime", "Realtime subscription rejected")
+                            disconnectRealtime(webSocket)
+                        }
+                    } else if (status == "error" && topic != "phoenix") {
+                        handler.post { disconnectRealtime(webSocket) }
+                    }
                 }
             }
         } catch (_:Throwable) {}
