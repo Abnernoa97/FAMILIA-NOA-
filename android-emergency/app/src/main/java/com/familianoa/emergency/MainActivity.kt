@@ -558,6 +558,24 @@ class MainActivity : Activity() {
         fun isLocationSharingEnabled(): Boolean = store.locationSharingEnabled
 
         @JavascriptInterface
+        fun locationStatus(): String {
+            // Do not expose any coordinates to the WebView status panel.
+            // requested != tracking != recently synchronized on the server.
+            val foreground = hasLocationPermission()
+            val background = android.os.Build.VERSION.SDK_INT < 29 ||
+                checkSelfPermission(Manifest.permission.ACCESS_BACKGROUND_LOCATION) == PackageManager.PERMISSION_GRANTED
+            val enabled = isDeviceLocationEnabled()
+            return JSONObject()
+                .put("requested", store.locationSharingEnabled)
+                .put("tracking", EmergencyService.gpsTrackerRunning && foreground && enabled)
+                .put("deviceEnabled", enabled)
+                .put("permissionGranted", foreground)
+                .put("backgroundGranted", background)
+                .put("lastUploadAt", store.lastLocationUploadAtMs)
+                .toString()
+        }
+
+        @JavascriptInterface
         fun startLocationSharing(): Boolean {
             if (!store.configured || !hasLocationPermission() || !isDeviceLocationEnabled()) return false
             runOnUiThread { EmergencyService.startLocationSharing(this@MainActivity) }
@@ -566,6 +584,10 @@ class MainActivity : Activity() {
 
         @JavascriptInterface
         fun stopLocationSharing(): Boolean {
+            if (!store.configured) return false
+            // Revoke consent synchronously BEFORE posting any service/UI work.
+            // An upload worker checks this flag immediately before sending.
+            store.setLocationSharingEnabled(false)
             runOnUiThread { EmergencyService.stopLocationSharing(this@MainActivity) }
             return true
         }
