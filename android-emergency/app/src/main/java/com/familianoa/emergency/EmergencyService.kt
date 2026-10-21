@@ -36,6 +36,10 @@ class EmergencyService : Service() {
         private const val PROTECTION_NOTIFICATION = 7001
         private const val EMERGENCY_NOTIFICATION = 911
 
+        // Runtime truth: requested sharing is stored separately in SessionStore.
+        @Volatile var gpsTrackerRunning: Boolean = false
+            private set
+
         fun start(context:Context) {
             val intent = Intent(context, EmergencyService::class.java)
             if (Build.VERSION.SDK_INT >= 26) context.startForegroundService(intent) else context.startService(intent)
@@ -79,6 +83,7 @@ class EmergencyService : Service() {
         super.onCreate()
         store = SessionStore(this)
         locationTracker = FamilyLocationTracker(this, store) { validAccessToken() }
+        gpsTrackerRunning = false
         createChannels()
         startAsForeground("Preparando protección…", includeLocation = false)
     }
@@ -89,6 +94,7 @@ class EmergencyService : Service() {
         }
         if (!store.configured) {
             locationTracker.stop()
+            gpsTrackerRunning = false
             updateProtection("Abre la app para configurar este teléfono")
             return START_STICKY
         }
@@ -103,6 +109,7 @@ class EmergencyService : Service() {
             ACTION_LOCATION_STOP -> {
                 store.setLocationSharingEnabled(false)
                 locationTracker.stop()
+                gpsTrackerRunning = false
                 startAsForeground(protectionState(), includeLocation = false)
             }
             ACTION_LOCATION_REFRESH -> {
@@ -112,7 +119,14 @@ class EmergencyService : Service() {
                 }
             }
             else -> {
-                if (store.locationSharingEnabled && hasLocationPermission()) startLocationTracking()
+                if (store.locationSharingEnabled && hasLocationPermission()) {
+                    startLocationTracking()
+                } else {
+                    // Identity changes or a revoked consent must never leave
+                    // the old Android listener attached to GPS providers.
+                    locationTracker.stop()
+                    gpsTrackerRunning = false
+                }
             }
         }
 
@@ -230,10 +244,14 @@ class EmergencyService : Service() {
             checkSelfPermission(Manifest.permission.ACCESS_COARSE_LOCATION) == PackageManager.PERMISSION_GRANTED
 
     private fun startLocationTracking():Boolean {
-        if (!store.locationSharingEnabled || !hasLocationPermission()) return false
+        if (!store.locationSharingEnabled || !hasLocationPermission()) {
+            gpsTrackerRunning = false
+            return false
+        }
         return try {
             startAsForeground(protectionState(), includeLocation = true)
             val started = locationTracker.start()
+            gpsTrackerRunning = started && locationTracker.running
             if (!started) {
                 startAsForeground(protectionState(), includeLocation = false)
             } else {
@@ -242,6 +260,7 @@ class EmergencyService : Service() {
             started
         } catch (_:Throwable) {
             locationTracker.stop()
+            gpsTrackerRunning = false
             startAsForeground(protectionState(), includeLocation = false)
             false
         }
@@ -660,6 +679,7 @@ class EmergencyService : Service() {
         refreshTask?.let(handler::removeCallbacks)
         refreshTask = null
         locationTracker.stop()
+        gpsTrackerRunning = false
         removeOverlay()
         vibrator?.cancel()
         super.onDestroy()

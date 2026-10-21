@@ -7,12 +7,41 @@ const MIN_MOVE_METERS=2.5
 
 type NativeLocationBridge={
   locationCapability?:()=>string
+  locationStatus?:()=>string
   isDeviceLocationEnabled?:()=>boolean
   openDeviceLocationSettings?:()=>boolean
   isLocationSharingEnabled?:()=>boolean
   startLocationSharing?:()=>boolean
   stopLocationSharing?:()=>boolean
   refreshLocationSharing?:()=>boolean
+}
+
+export type NativeLocationStatus={
+  requested:boolean
+  tracking:boolean
+  deviceEnabled:boolean
+  permissionGranted:boolean
+  backgroundGranted:boolean
+  lastUploadAt:number
+}
+
+const PENDING_STOP_KEY='familia-noa-gps-stop-pending-v1'
+
+export function isLocationStopPending(memberId=getMemberId()):boolean{
+  if(!memberId)return false
+  try{
+    return JSON.parse(localStorage.getItem(PENDING_STOP_KEY)||'null')?.memberId===memberId
+  }catch{return false}
+}
+
+export function markLocationStopPending(memberId:string){
+  if(!memberId)return
+  try{localStorage.setItem(PENDING_STOP_KEY,JSON.stringify({memberId,at:Date.now()}))}catch{}
+}
+
+export function clearLocationStopPending(memberId:string){
+  if(!isLocationStopPending(memberId))return
+  try{localStorage.removeItem(PENDING_STOP_KEY)}catch{}
 }
 
 let activeMemberId=''
@@ -44,6 +73,23 @@ export function isNativeLocationSharingEnabled(){
   return nativeSharingEnabled()
 }
 
+export function getNativeLocationStatus():NativeLocationStatus|null{
+  const bridge=nativeBridge()
+  if(!bridge||typeof bridge.locationStatus!=='function')return null
+  try{
+    const value=JSON.parse(bridge.locationStatus()) as Partial<NativeLocationStatus>
+    if(typeof value.requested!=='boolean'||typeof value.tracking!=='boolean')return null
+    return {
+      requested:value.requested,
+      tracking:value.tracking,
+      deviceEnabled:value.deviceEnabled===true,
+      permissionGranted:value.permissionGranted===true,
+      backgroundGranted:value.backgroundGranted===true,
+      lastUploadAt:Number(value.lastUploadAt)||0,
+    }
+  }catch{return null}
+}
+
 // The Android system-wide location switch is separate from app permissions and
 // from whether the FAMILIA NOA foreground service has been requested.
 export function isDeviceLocationEnabled(){
@@ -68,6 +114,7 @@ function publishNativeLocationState(){
     detail:{
       available:hasNativeLocationCapability(),
       enabled:isNativeLocationSharingEnabled(),
+      status:getNativeLocationStatus(),
     },
   }))
 }
@@ -163,6 +210,8 @@ function useNativeIfAlreadyEnabled(memberId:string){
 
 export function startOwnLocationRealtime(memberId=getMemberId(),activateNative=true){
   if(!memberId)return
+  // Only explicit activation calls this path after a pending server deletion.
+  clearLocationStopPending(memberId)
   activeMemberId=memberId
 
   const bridge=nativeBridge()
@@ -223,7 +272,7 @@ export async function activateNativeLocationSharing(memberId=getMemberId()):Prom
 
 export function ensureOwnLocationRealtime(){
   const memberId=getMemberId()
-  if(!memberId)return
+  if(!memberId||isLocationStopPending(memberId))return
   const sharing=getLocationState().locations.some(location=>location.member_id===memberId)
   if(!sharing)return
 
@@ -234,20 +283,26 @@ export function ensureOwnLocationRealtime(){
   startOwnLocationRealtime(memberId,false)
 }
 
-export function stopOwnLocationRealtime(){
+export function stopOwnLocationRealtime():boolean{
   const bridge=nativeBridge()
-  if(bridge&&typeof bridge.stopLocationSharing==='function'){
-    try{bridge.stopLocationSharing()}catch(error){console.warn('Native background location stop failed',error)}
+  let stopped=true
+  if(bridge){
+    try{stopped=bridge.stopLocationSharing?.()===true}
+    catch(error){
+      stopped=false
+      console.warn('Native background location stop failed',error)
+    }
   }
   stopWebWatch()
   activeMemberId=''
   lastPosition=null
   lastWriteAt=0
   publishNativeLocationState()
+  return stopped
 }
 
 export async function syncOwnLocationNow(memberId=getMemberId()){
-  if(!memberId)return false
+  if(!memberId||isLocationStopPending(memberId))return false
 
   const bridge=nativeBridge()
   if(bridge&&nativeSharingEnabled(bridge)&&typeof bridge.refreshLocationSharing==='function'){
@@ -295,7 +350,7 @@ document.addEventListener('visibilitychange',()=>{
     return
   }
 
-  if(activeMemberId){
+  if(activeMemberId&&!isLocationStopPending(activeMemberId)){
     startWebWatch()
     void syncOwnLocationNow(activeMemberId)
   }else{

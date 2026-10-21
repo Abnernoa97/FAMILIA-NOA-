@@ -15,6 +15,7 @@ import android.os.SystemClock
 import android.util.Log
 import java.util.concurrent.TimeUnit
 import java.util.concurrent.atomic.AtomicBoolean
+import java.util.concurrent.atomic.AtomicInteger
 
 class FamilyLocationTracker(
     context: Context,
@@ -32,6 +33,8 @@ class FamilyLocationTracker(
     private val appContext = context.applicationContext
     private val locationManager = appContext.getSystemService(LocationManager::class.java)
     private val uploading = AtomicBoolean(false)
+    // Invalidates queued upload workers as soon as sharing is stopped.
+    private val trackingGeneration = AtomicInteger(0)
     private val heartbeatHandler = Handler(Looper.getMainLooper())
     private var heartbeat:Runnable? = null
     private var currentFix:CancellationSignal? = null
@@ -45,7 +48,7 @@ class FamilyLocationTracker(
 
     fun start(): Boolean {
         if (running) return true
-        if (!store.configured || store.memberId.isBlank() || !hasLocationPermission()) return false
+        if (!store.configured || store.memberId.isBlank() || !store.locationSharingEnabled || !hasLocationPermission()) return false
 
         val providers = buildList {
             if (runCatching { locationManager.isProviderEnabled(LocationManager.GPS_PROVIDER) }.getOrDefault(false)) {
@@ -72,15 +75,16 @@ class FamilyLocationTracker(
                 )
             }
 
+            trackingGeneration.incrementAndGet()
             running = true
             if (lastKnown != null && fresh(lastKnown)) upload(lastKnown, force = true)
             beginHeartbeat()
             true
         } catch (_: SecurityException) {
-            running = false
+            stop() // Also unregister a GPS provider if NETWORK registration failed.
             false
         } catch (_: Throwable) {
-            running = false
+            stop()
             false
         }
     }
@@ -90,7 +94,8 @@ class FamilyLocationTracker(
         heartbeat = null
         currentFix?.cancel()
         currentFix = null
-        if (!running) return
+        // Clear partially registered providers too, even if start() failed.
+        trackingGeneration.incrementAndGet()
         runCatching { locationManager.removeUpdates(this) }
         running = false
         lastUploadedLocation = null
@@ -120,7 +125,7 @@ class FamilyLocationTracker(
     override fun onProviderDisabled(provider: String) = Unit
 
     private fun upload(location: Location, force: Boolean) {
-        if (!running || !valid(location) || !fresh(location) || !uploading.compareAndSet(false, true)) return
+        if (!running || !store.locationSharingEnabled || !valid(location) || !fresh(location) || !uploading.compareAndSet(false, true)) return
 
         val now = System.currentTimeMillis()
         val previous = lastUploadedLocation
@@ -153,9 +158,12 @@ class FamilyLocationTracker(
             return
         }
 
+        val generation = trackingGeneration.get()
         Thread {
             try {
+                if (!running || !store.locationSharingEnabled || generation != trackingGeneration.get()) return@Thread
                 val token = accessTokenProvider()
+                if (!running || !store.locationSharingEnabled || generation != trackingGeneration.get()) return@Thread
                 Api.upsertFamilyLocation(
                     accessToken = token,
                     memberId = store.memberId,
@@ -163,8 +171,11 @@ class FamilyLocationTracker(
                     longitude = location.longitude,
                     accuracy = if (location.hasAccuracy()) location.accuracy else null,
                 )
-                lastUploadedLocation = Location(location)
-                lastUploadAt = System.currentTimeMillis()
+                if (running && store.locationSharingEnabled && generation == trackingGeneration.get()) {
+                    lastUploadedLocation = Location(location)
+                    lastUploadAt = System.currentTimeMillis()
+                    store.recordLocationUpload()
+                }
             } catch (error: Throwable) {
                 Log.w("FamiliaNoaGPS", "Upload failed; the next sample will retry", error)
             } finally {
