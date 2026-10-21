@@ -1,6 +1,6 @@
 import { getMemberId } from './core/identity'
 import { mediaUrl, primeMedia } from './core/private-media'
-import { getLocationState, refreshLocationState, subscribeLocationState, isLiveFamilyLocation, type LocationState } from './core/location-store'
+import { getLocationState, refreshLocationState, subscribeLocationState, isCurrentFamilyLocation, type LocationState } from './core/location-store'
 import { hasNativeLocationCapability, isDeviceLocationEnabled, refreshMemberLocation } from './core/location-device-sync'
 
 const MAPLIBRE_JS='https://unpkg.com/maplibre-gl@6.10.0/dist/maplibre-gl.mjs'
@@ -36,7 +36,6 @@ let stateUnsubscribe:(()=>void)|null=null
 let resizeObserver:ResizeObserver|null=null
 let generation=0
 let liveRefreshTimer:number|null=null
-let selectedHistoricalMemberId=''
 let pendingFocusMemberId=''
 
 function esc(value:string){return value.replace(/[&<>"']/g,char=>({'&':'&amp;','<':'&lt;','>':'&gt;','"':'&quot;',"'":'&#039;'}[char]||char))}
@@ -106,7 +105,6 @@ function destroyMap(){
   generation++
   mapLoaded=false
   focusGeneration++
-  selectedHistoricalMemberId=''
   pendingFocusMemberId=''
   resizeObserver?.disconnect()
   resizeObserver=null
@@ -137,8 +135,7 @@ function ensurePanel(page:HTMLElement){
     selectedLiveMemberId=''
     updateLiveSelection()
     focusGeneration++
-    selectedHistoricalMemberId=''
-    pendingFocusMemberId=''
+      pendingFocusMemberId=''
     void applyState(getLocationState()).then(fitAll)
     void refreshLocationState({force:true})
   })
@@ -159,8 +156,7 @@ async function locationsFromState(state:LocationState):Promise<MapLocation[]>{
   const ownGpsOff=hasNativeLocationCapability()&&!isDeviceLocationEnabled()
   const now=Date.now()
   const visible=state.locations.filter(row=>
-    (isLiveFamilyLocation(row.updated_at,now)&&!(row.member_id===me&&ownGpsOff))||
-    row.member_id===selectedHistoricalMemberId
+    isCurrentFamilyLocation(row,now)&&!(row.member_id===me&&ownGpsOff)
   )
   const paths=visible.map(row=>profileMap.get(row.member_id)||null)
   void primeMedia(paths).then(()=>{
@@ -249,8 +245,7 @@ function fitAll(){
 }
 
 function popupHtml(item:MapLocation){
-  const isLive=isLiveFamilyLocation(item.updated_at)&&!(item.mine&&hasNativeLocationCapability()&&!isDeviceLocationEnabled())
-  return `<b>${esc(item.name)}${item.mine?' · tú':''}</b><small>${isLive?'Ubicación reciente':'Última ubicación'} · ${esc(age(item.updated_at))}${Number.isFinite(item.accuracy)?` · ±${Math.round(item.accuracy as number)} m`:''}</small>`
+  return `<b>${esc(item.name)}${item.mine?' · tú':''}</b><small>Posición actual · ${esc(age(item.updated_at))}${Number.isFinite(item.accuracy)?` · ±${Math.round(item.accuracy as number)} m`:''}</small>`
 }
 
 function syncActivePopup(){
@@ -274,7 +269,7 @@ function renderLivePeople(shell:HTMLElement){
   const root=shell.querySelector<HTMLElement>('[data-map-people]')
   if(!root)return
   const live=currentLocations
-    .filter(item=>isLiveFamilyLocation(item.updated_at)&&!(item.mine&&hasNativeLocationCapability()&&!isDeviceLocationEnabled()))
+    .filter(item=>isCurrentFamilyLocation(item)&&!(item.mine&&hasNativeLocationCapability()&&!isDeviceLocationEnabled()))
     .sort((a,b)=>Number(b.mine)-Number(a.mine)||a.name.localeCompare(b.name,'es'))
   const signature=live.map(item=>[item.member_id,item.name,item.mine].join(':')).join('|')
   root.hidden=live.length===0
@@ -295,7 +290,7 @@ function renderLivePeople(shell:HTMLElement){
 
 function focus(item:MapLocation,showPopup=false){
   if(!map)return
-  selectedLiveMemberId=isLiveFamilyLocation(item.updated_at)?item.member_id:''
+  selectedLiveMemberId=isCurrentFamilyLocation(item)?item.member_id:''
   updateLiveSelection()
   // Hide stale DOM projections until MapLibre has rendered the new camera.
   // Otherwise markers outside the view can flash beside the selected person.
@@ -343,7 +338,7 @@ function renderMarkers(MapLibre:any){
     markers.delete(id)
   }
   for(const item of currentLocations){
-    const fresh=isLiveFamilyLocation(item.updated_at)&&!(item.mine&&hasNativeLocationCapability()&&!isDeviceLocationEnabled())
+    const fresh=isCurrentFamilyLocation(item)&&!(item.mine&&hasNativeLocationCapability()&&!isDeviceLocationEnabled())
     let marker=markers.get(item.member_id)
     let element:HTMLButtonElement
     if(marker){
@@ -432,7 +427,7 @@ async function applyState(state:LocationState){
   // Each new active relative replaces one full-size list row with a tiny
   // name pill on the map. Reclaim part of that room for map height.
   const liveCount=locations.filter(item=>
-    isLiveFamilyLocation(item.updated_at)&&!(item.mine&&hasNativeLocationCapability()&&!isDeviceLocationEnabled())
+    isCurrentFamilyLocation(item)&&!(item.mine&&hasNativeLocationCapability()&&!isDeviceLocationEnabled())
   ).length
   const heightDvh=Math.min(46+liveCount*7,77)
   const heightPx=Math.min(470+liveCount*60,790)
@@ -516,7 +511,7 @@ async function applyState(state:LocationState){
     lastLocationSignature=signature
     hideOverlay(shell)
     if(pendingFocusMemberId)revealPendingFocus()
-    else if(previouslyEmpty&&!selectedHistoricalMemberId){
+    else if(previouslyEmpty){
       const mine=locations.find(item=>item.mine)||locations[0]
       if(mine)focus(mine)
     }
@@ -527,8 +522,7 @@ async function applyState(state:LocationState){
   }
 }
 
-// Saved locations are not placed on the live map automatically. A member of
-// the family can still tap an offline row to inspect its last-known coordinate.
+// A saved location is not eligible for map focus unless it is CURRENT and accurate.
 function revealPendingFocus(){
   if(!pendingFocusMemberId||!map||!mapLoaded)return
   const item=currentLocations.find(row=>row.member_id===pendingFocusMemberId)
@@ -541,8 +535,7 @@ function requestMemberFocus(memberId:string){
   if(!memberId)return
   const current=currentLocations.find(row=>row.member_id===memberId)
   if(current){focus(current,true);return}
-  if(!getLocationState().locations.some(row=>row.member_id===memberId))return
-  selectedHistoricalMemberId=memberId
+  if(!getLocationState().locations.some(row=>row.member_id===memberId&&isCurrentFamilyLocation(row)))return
   pendingFocusMemberId=memberId
   void applyState(getLocationState())
 }
