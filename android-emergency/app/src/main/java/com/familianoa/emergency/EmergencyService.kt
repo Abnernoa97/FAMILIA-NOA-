@@ -63,6 +63,12 @@ class EmergencyService : Service() {
     private var overlayView: View? = null
     private var reconnectAttempt = 0
     private var connecting = false
+    // A single scheduled retry avoids reconnect storms after network changes.
+    private var reconnectTask:Runnable? = null
+    private var reconnectNotice:Runnable? = null
+    private var joinTimeout:Runnable? = null
+    private var realtimeSubscribed = false
+    private var lastProtectionText = ""
     private val refs = AtomicInteger(2)
     private var heartbeat:Runnable? = null
     private var refreshTask:Runnable? = null
@@ -97,7 +103,7 @@ class EmergencyService : Service() {
             ACTION_LOCATION_STOP -> {
                 store.setLocationSharingEnabled(false)
                 locationTracker.stop()
-                startAsForeground("Conectado · AYUDA vigilada en tiempo real", includeLocation = false)
+                startAsForeground(protectionState(), includeLocation = false)
             }
             ACTION_LOCATION_REFRESH -> {
                 if (store.locationSharingEnabled) {
@@ -172,8 +178,52 @@ class EmergencyService : Service() {
 
     private fun updateProtection(state:String) {
         val text = if (::locationTracker.isInitialized && locationTracker.running) "$state · ubicación en tiempo real" else state
+        if (text == lastProtectionText) return
+        lastProtectionText = text
         getSystemService(NotificationManager::class.java).notify(PROTECTION_NOTIFICATION, protectionNotification(text))
     }
+
+    private fun cancelReconnect(){
+        reconnectTask?.let(handler::removeCallbacks)
+        reconnectTask = null
+    }
+
+    private fun cancelReconnectNotice(){
+        reconnectNotice?.let(handler::removeCallbacks)
+        reconnectNotice = null
+    }
+
+    private fun cancelJoinTimeout(){
+        joinTimeout?.let(handler::removeCallbacks)
+        joinTimeout = null
+    }
+
+    private fun expectSubscriptionAck(webSocket:WebSocket){
+        cancelJoinTimeout()
+        val task=Runnable {
+            joinTimeout=null
+            if (socket === webSocket && !realtimeSubscribed) {
+                android.util.Log.w("FamiliaNoaRealtime", "Channel subscription timed out")
+                disconnectRealtime(webSocket)
+            }
+        }
+        joinTimeout=task
+        handler.postDelayed(task, 20_000L)
+    }
+
+    private fun showReconnectOnlyWhenPersistent(){
+        if (reconnectNotice != null || realtimeSubscribed) return
+        reconnectNotice = Runnable {
+            reconnectNotice = null
+            if (!realtimeSubscribed && store.configured)
+                updateProtection("Reconectando con la familia…")
+        }
+        handler.postDelayed(reconnectNotice!!, 8_000L)
+    }
+
+    private fun protectionState() =
+        if (realtimeSubscribed) "Conectado · AYUDA vigilada en tiempo real"
+        else "Protección activa · comprobando conexión"
 
     private fun hasLocationPermission():Boolean =
         checkSelfPermission(Manifest.permission.ACCESS_FINE_LOCATION) == PackageManager.PERMISSION_GRANTED ||
@@ -182,17 +232,17 @@ class EmergencyService : Service() {
     private fun startLocationTracking():Boolean {
         if (!store.locationSharingEnabled || !hasLocationPermission()) return false
         return try {
-            startAsForeground("Conectado · AYUDA vigilada en tiempo real", includeLocation = true)
+            startAsForeground(protectionState(), includeLocation = true)
             val started = locationTracker.start()
             if (!started) {
-                startAsForeground("Conectado · AYUDA vigilada en tiempo real", includeLocation = false)
+                startAsForeground(protectionState(), includeLocation = false)
             } else {
-                updateProtection("Conectado · AYUDA vigilada en tiempo real")
+                updateProtection(protectionState())
             }
             started
         } catch (_:Throwable) {
             locationTracker.stop()
-            startAsForeground("Conectado · AYUDA vigilada en tiempo real", includeLocation = false)
+            startAsForeground(protectionState(), includeLocation = false)
             false
         }
     }
@@ -208,9 +258,12 @@ class EmergencyService : Service() {
                 if (active != null) showEmergency(active) else if (store.activeAlertId.isNotBlank()) clearEmergency(store.activeAlertId)
                 connectRealtime(token)
             } catch (error:Throwable) {
-                connecting = false
-                updateProtection("Reconectando…")
-                scheduleReconnect()
+                handler.post {
+                    connecting = false
+                    android.util.Log.w("FamiliaNoaRealtime", "Could not connect to family activity", error)
+                    showReconnectOnlyWhenPersistent()
+                    scheduleReconnect()
+                }
             }
         }.start()
     }
@@ -229,35 +282,70 @@ class EmergencyService : Service() {
     private fun connectRealtime(accessToken:String) {
         val url = "wss://${Config.SUPABASE_PROJECT_REF}.supabase.co/realtime/v1/websocket?apikey=${Config.PUBLISHABLE_KEY}&vsn=1.0.0"
         val request = Request.Builder().url(url).build()
+        realtimeSubscribed = false
         socket = Api.http.newWebSocket(request, object:WebSocketListener() {
             override fun onOpen(webSocket:WebSocket, response:Response) {
-                connecting = false
-                reconnectAttempt = 0
-                updateProtection("Conectado · AYUDA vigilada en tiempo real")
-                sendJoin(webSocket, accessToken)
-                scheduleHeartbeat(webSocket)
-                scheduleTokenRefresh()
+                handler.post {
+                    if (socket !== webSocket) return@post
+                    connecting = false
+                    // An open TCP/WebSocket connection is not proof that the
+                    // private family's Realtime channel was subscribed.
+                    try{
+                        sendJoin(webSocket, accessToken)
+                        expectSubscriptionAck(webSocket)
+                    }catch(error:Throwable){
+                        android.util.Log.w("FamiliaNoaRealtime", "Realtime join failed", error)
+                        disconnectRealtime(webSocket)
+                    }
+                }
             }
 
             override fun onMessage(webSocket:WebSocket, text:String) {
-                processRealtime(text)
+                if (socket === webSocket) processRealtime(webSocket, text)
             }
 
             override fun onClosed(webSocket:WebSocket, code:Int, reason:String) {
-                socket = null
-                connecting = false
-                cancelHeartbeat()
-                scheduleReconnect()
+                handler.post {
+                    if (socket !== webSocket) return@post
+                    android.util.Log.w("FamiliaNoaRealtime", "Realtime closed: code=$code")
+                    disconnectRealtime(webSocket)
+                }
             }
 
             override fun onFailure(webSocket:WebSocket, t:Throwable, response:Response?) {
-                socket = null
-                connecting = false
-                cancelHeartbeat()
-                updateProtection("Sin conexión · reconectando")
-                scheduleReconnect()
+                handler.post {
+                    if (socket !== webSocket) return@post
+                    android.util.Log.w("FamiliaNoaRealtime", "Realtime failure: HTTP=${response?.code}", t)
+                    disconnectRealtime(webSocket)
+                }
             }
         })
+    }
+
+    private fun disconnectRealtime(webSocket:WebSocket){
+        if (socket !== webSocket) return
+        socket = null
+        realtimeSubscribed = false
+        connecting = false
+        cancelHeartbeat()
+        cancelJoinTimeout()
+        refreshTask?.let(handler::removeCallbacks)
+        refreshTask = null
+        runCatching { webSocket.cancel() }
+        scheduleReconnect()
+        showReconnectOnlyWhenPersistent()
+    }
+
+    private fun subscribedRealtime(webSocket:WebSocket){
+        if (socket !== webSocket || realtimeSubscribed) return
+        realtimeSubscribed = true
+        reconnectAttempt = 0 // reset only after Phoenix confirms subscription
+        cancelReconnect()
+        cancelReconnectNotice()
+        cancelJoinTimeout()
+        updateProtection("Conectado · AYUDA vigilada en tiempo real")
+        scheduleHeartbeat(webSocket)
+        scheduleTokenRefresh()
     }
 
     private fun sendJoin(webSocket:WebSocket, accessToken:String) {
@@ -282,7 +370,8 @@ class EmergencyService : Service() {
             .put("payload", payload)
             .put("ref", "1")
             .put("join_ref", "1")
-        webSocket.send(message.toString())
+        if (!webSocket.send(message.toString()))
+            error("Could not send Realtime subscription")
     }
 
     private fun scheduleHeartbeat(webSocket:WebSocket) {
@@ -316,13 +405,25 @@ class EmergencyService : Service() {
             Thread {
                 try {
                     refreshSession()
-                    socket?.close(1000, "token refresh")
-                    socket = null
-                    connecting = false
-                    ensureConnected()
-                } catch (_:Throwable) {
-                    updateProtection("Sesión vencida · abre Emergency para renovar")
-                    scheduleReconnect()
+                    // Keep socket ownership changes on the service's main
+                    // thread; old onClosed callbacks cannot disconnect a newer
+                    // connection that uses the freshly refreshed token.
+                    handler.post {
+                        val previous=socket
+                        socket=null
+                        realtimeSubscribed=false
+                        connecting=false
+                        cancelHeartbeat()
+                        cancelJoinTimeout()
+                        runCatching { previous?.close(1000, "token refresh") }
+                        ensureConnected()
+                    }
+                } catch (error:Throwable) {
+                    handler.post {
+                        android.util.Log.w("FamiliaNoaRealtime", "Session refresh unavailable", error)
+                        updateProtection("Sesión pendiente · abre FAMILIA NOA si continúa")
+                        scheduleReconnect()
+                    }
                 }
             }.start()
         }
@@ -330,14 +431,22 @@ class EmergencyService : Service() {
     }
 
     private fun scheduleReconnect() {
-        if (!store.configured) return
-        val delays = longArrayOf(1_000L, 2_000L, 5_000L, 10_000L, 20_000L)
+        if (!store.configured || reconnectTask != null) return
+        // Keep one pending retry. Do not reset the backoff merely because a
+        // TCP socket briefly opened; wait for a successful channel join.
+        val delays = longArrayOf(2_000L, 5_000L, 10_000L, 20_000L, 40_000L, 60_000L)
         val delay = delays[reconnectAttempt.coerceAtMost(delays.lastIndex)]
         reconnectAttempt++
-        handler.postDelayed({ ensureConnected() }, delay)
+        val task = Runnable {
+            reconnectTask = null
+            ensureConnected()
+        }
+        reconnectTask = task
+        handler.postDelayed(task, delay)
     }
 
-    private fun processRealtime(text:String) {
+    private fun processRealtime(webSocket:WebSocket, text:String) {
+        if (socket !== webSocket) return
         try {
             val root = JSONObject(text)
             when (root.optString("event")) {
@@ -353,12 +462,23 @@ class EmergencyService : Service() {
                     val resolved = !record.isNull("resolved_at") && record.optString("resolved_at").isNotBlank()
                     if (resolved) clearEmergency(id) else showEmergency(Api.parseAlert(record))
                 }
-                "phx_error", "phx_close" -> {
-                    socket?.cancel(); socket = null; connecting = false; scheduleReconnect()
+                "phx_error", "phx_close" -> handler.post {
+                    if (socket === webSocket) disconnectRealtime(webSocket)
                 }
                 "phx_reply" -> {
                     val status = root.optJSONObject("payload")?.optString("status")
-                    if (status == "error") { socket?.cancel(); socket = null; connecting = false; scheduleReconnect() }
+                    val topic = root.optString("topic")
+                    if (topic == Config.REALTIME_TOPIC && root.optString("ref") == "1") {
+                        // Supabase's Phoenix JOIN ack is the only valid signal
+                        // that emergency and family-activity changes are live.
+                        if (status == "ok") handler.post { subscribedRealtime(webSocket) }
+                        else handler.post {
+                            android.util.Log.w("FamiliaNoaRealtime", "Realtime subscription rejected")
+                            disconnectRealtime(webSocket)
+                        }
+                    } else if (status == "error" && topic != "phoenix") {
+                        handler.post { disconnectRealtime(webSocket) }
+                    }
                 }
             }
         } catch (_:Throwable) {}
@@ -528,8 +648,14 @@ class EmergencyService : Service() {
     }
 
     override fun onDestroy() {
+        // No orphaned retry or join timer may restart protection after the
+        // foreground service has been intentionally stopped.
+        cancelReconnect()
+        cancelReconnectNotice()
+        cancelJoinTimeout()
         socket?.close(1000, "service stop")
         socket = null
+        realtimeSubscribed=false
         cancelHeartbeat()
         refreshTask?.let(handler::removeCallbacks)
         refreshTask = null
