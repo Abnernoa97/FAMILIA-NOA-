@@ -63,6 +63,11 @@ class EmergencyService : Service() {
     private var overlayView: View? = null
     private var reconnectAttempt = 0
     private var connecting = false
+    // A single scheduled retry avoids reconnect storms after network changes.
+    private var reconnectTask:Runnable? = null
+    private var reconnectNotice:Runnable? = null
+    private var realtimeSubscribed = false
+    private var lastProtectionText = ""
     private val refs = AtomicInteger(2)
     private var heartbeat:Runnable? = null
     private var refreshTask:Runnable? = null
@@ -97,7 +102,7 @@ class EmergencyService : Service() {
             ACTION_LOCATION_STOP -> {
                 store.setLocationSharingEnabled(false)
                 locationTracker.stop()
-                startAsForeground("Conectado · AYUDA vigilada en tiempo real", includeLocation = false)
+                startAsForeground(protectionState(), includeLocation = false)
             }
             ACTION_LOCATION_REFRESH -> {
                 if (store.locationSharingEnabled) {
@@ -172,8 +177,34 @@ class EmergencyService : Service() {
 
     private fun updateProtection(state:String) {
         val text = if (::locationTracker.isInitialized && locationTracker.running) "$state · ubicación en tiempo real" else state
+        if (text == lastProtectionText) return
+        lastProtectionText = text
         getSystemService(NotificationManager::class.java).notify(PROTECTION_NOTIFICATION, protectionNotification(text))
     }
+
+    private fun cancelReconnect(){
+        reconnectTask?.let(handler::removeCallbacks)
+        reconnectTask = null
+    }
+
+    private fun cancelReconnectNotice(){
+        reconnectNotice?.let(handler::removeCallbacks)
+        reconnectNotice = null
+    }
+
+    private fun showReconnectOnlyWhenPersistent(){
+        if (reconnectNotice != null || realtimeSubscribed) return
+        reconnectNotice = Runnable {
+            reconnectNotice = null
+            if (!realtimeSubscribed && store.configured)
+                updateProtection("Reconectando con la familia…")
+        }
+        handler.postDelayed(reconnectNotice!!, 8_000L)
+    }
+
+    private fun protectionState() =
+        if (realtimeSubscribed) "Conectado · AYUDA vigilada en tiempo real"
+        else "Protección activa · comprobando conexión"
 
     private fun hasLocationPermission():Boolean =
         checkSelfPermission(Manifest.permission.ACCESS_FINE_LOCATION) == PackageManager.PERMISSION_GRANTED ||
@@ -182,17 +213,17 @@ class EmergencyService : Service() {
     private fun startLocationTracking():Boolean {
         if (!store.locationSharingEnabled || !hasLocationPermission()) return false
         return try {
-            startAsForeground("Conectado · AYUDA vigilada en tiempo real", includeLocation = true)
+            startAsForeground(protectionState(), includeLocation = true)
             val started = locationTracker.start()
             if (!started) {
-                startAsForeground("Conectado · AYUDA vigilada en tiempo real", includeLocation = false)
+                startAsForeground(protectionState(), includeLocation = false)
             } else {
-                updateProtection("Conectado · AYUDA vigilada en tiempo real")
+                updateProtection(protectionState())
             }
             started
         } catch (_:Throwable) {
             locationTracker.stop()
-            startAsForeground("Conectado · AYUDA vigilada en tiempo real", includeLocation = false)
+            startAsForeground(protectionState(), includeLocation = false)
             false
         }
     }
@@ -233,7 +264,7 @@ class EmergencyService : Service() {
             override fun onOpen(webSocket:WebSocket, response:Response) {
                 connecting = false
                 reconnectAttempt = 0
-                updateProtection("Conectado · AYUDA vigilada en tiempo real")
+                updateProtection(protectionState())
                 sendJoin(webSocket, accessToken)
                 scheduleHeartbeat(webSocket)
                 scheduleTokenRefresh()
