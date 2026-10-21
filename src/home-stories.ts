@@ -8,6 +8,7 @@ import { uploadPrivateMedia } from './core/resumable-storage'
 
 const BUCKET='family-photos'
 const STORY_MS=6500
+const PAGE_TURN_MS=700
 const HISTORY_KEY='familiaNoaStoryView'
 
 type Member={id:string;name:string}
@@ -36,6 +37,7 @@ let storyBook:PageFlip|null=null
 let storyBookGroup=-1
 let storyBookImages:HTMLImageElement[]=[]
 let storyBookFlipTimeout:number|null=null
+const preparedStoryImages=new WeakMap<HTMLImageElement,Promise<void>>()
 let viewerMediaReady=false
 let viewerStartedAt=0
 let viewerRemainingMs=STORY_MS
@@ -415,6 +417,25 @@ function destroyStoryBook(){
   if(oldBook){try{oldBook.destroy()}catch(error){console.warn('Story magazine cleanup',error)}}
 }
 
+// Only the visible page and its neighbours receive image URLs. The original
+// implementation assigned src to every full-resolution photo twice (source +
+// cloned leaves), triggering simultaneous decoding and memory pressure in Vivo.
+function warmStoryImage(index:number){
+  const image=storyBookImages[index]
+  if(!image)return null
+  const url=image.dataset.storySrc
+  if(!image.getAttribute('src')&&url)image.src=url
+  if(image.getAttribute('src')&&typeof image.decode==='function'&&!preparedStoryImages.has(image)){
+    preparedStoryImages.set(image,image.decode().catch(()=>undefined))
+  }
+  return image
+}
+function warmStoryNeighbours(index:number){
+  warmStoryImage(index)
+  warmStoryImage(index+1)
+  warmStoryImage(index-1)
+}
+
 // The viewer HUD is independent of the magazine's persistent DOM. Updating
 // the active story never destroys the pages, engine or their sizing.
 function updateStoryHud(){
@@ -434,7 +455,7 @@ function updateStoryHud(){
 
 function storyPageReady(index:number,token:number){
   if(token!==viewerDrawToken||!viewer)return
-  const image=storyBookImages[index]
+  const image=warmStoryImage(index)
   const group=viewerGroups[viewerGroupIndex]
   const story=group?.stories[index]
   if(!story||!image||index!==viewerStoryIndex)return
@@ -444,6 +465,7 @@ function storyPageReady(index:number,token:number){
     if(!viewerMediaReady){
       viewerMediaReady=true
       void markViewed(story)
+      warmStoryNeighbours(index)
       scheduleViewer()
     }
     return
@@ -463,6 +485,7 @@ function onStoryBookPage(index:number,token:number){
   if(token!==viewerDrawToken||!viewer)return
   const group=viewerGroups[viewerGroupIndex]
   if(!group||!Number.isFinite(index)||index<0||index>=group.stories.length)return
+  if(index===viewerStoryIndex&&!viewerTurning&&viewerMediaReady)return
   if(storyBookFlipTimeout!==null){window.clearTimeout(storyBookFlipTimeout);storyBookFlipTimeout=null}
   viewerTurning=false
   viewerStoryIndex=index
@@ -515,14 +538,31 @@ async function moveViewer(direction:1|-1){
   }
   const token=viewerDrawToken
   try{
+    const nextImage=warmStoryImage(nextStoryIndex)
+    // Never animate onto an unrendered page. A rapid tap with uncached media
+    // advances directly and displays the normal loading status instead.
+    if(!nextImage||!nextImage.complete||nextImage.naturalWidth===0){
+      book.turnToPage(nextStoryIndex)
+      onStoryBookPage(nextStoryIndex,token)
+      return
+    }
+    // Decoding is started while viewing the previous photograph. When a page
+    // is already downloaded, wait very briefly for its prepared GPU bitmap.
+    const prepared=preparedStoryImages.get(nextImage)
+    if(prepared)await Promise.race([
+      prepared,
+      new Promise<void>(resolve=>window.setTimeout(resolve,120))
+    ])
+    if(token!==viewerDrawToken||!viewer||storyBook!==book)return
     if(direction===1)book.flipNext('bottom')
     else book.flipPrev('bottom')
-    // PageFlip emits "flip" after the real paper motion. Failsafe for old
-    // Android WebViews where the animation event may not arrive.
+    // PageFlip emits "flip" when paper reaches its destination. A watchdog
+    // maintains navigation if Android drops this event under load.
     storyBookFlipTimeout=window.setTimeout(()=>{
       if(token!==viewerDrawToken||!viewer||storyBook!==book)return
       onStoryBookPage(nextStoryIndex,token)
-    },1280)
+      try{book.turnToPage(nextStoryIndex)}catch{}
+    },PAGE_TURN_MS+220)
   }catch(error){
     console.warn('Story page curl could not start, using direct navigation',error)
     onStoryBookPage(nextStoryIndex,token)
@@ -666,21 +706,23 @@ async function drawViewer(){
   host.className='family-story-book-host'
   // Same persistent PageFlip structure as HAVANA QUOTES: original pages
   // are constructed separately, then cloned into one live book host.
-  const source=urls.map((url,i)=>{
+  const leaves=urls.map((url,i)=>{
     const leaf=document.createElement('div')
     leaf.className='family-story-book-leaf'
     leaf.setAttribute('data-density','soft')
     const image=document.createElement('img')
-    image.src=url
+    image.dataset.storySrc=url
     image.alt=`Historia de ${group.member.name} · ${i+1}`
     image.decoding='async'
     image.draggable=false
     leaf.appendChild(image)
     return leaf
   })
-  host.replaceChildren(...source.map(leaf=>leaf.cloneNode(true)))
+  // Mount exactly one copy of each leaf, with images decoded progressively.
+  host.replaceChildren(...leaves)
   mount.replaceChildren(host)
   storyBookImages=Array.from(host.querySelectorAll<HTMLImageElement>('.family-story-book-leaf img'))
+  warmStoryNeighbours(viewerStoryIndex)
 
   await new Promise<void>(resolve=>requestAnimationFrame(()=>resolve()))
   if(viewer!==root||token!==viewerDrawToken)return
@@ -700,7 +742,7 @@ async function drawViewer(){
     const book=new PageFlip(host,{
       width,height,size:'stretch',
       minWidth:width,maxWidth:width,minHeight:height,maxHeight:height,
-      drawShadow:true,maxShadowOpacity:.72,flippingTime:1080,
+      drawShadow:true,maxShadowOpacity:.32,flippingTime:PAGE_TURN_MS,
       usePortrait:true,autoSize:true,showCover:false,
       mobileScrollSupport:false,swipeDistance:25,
       showPageCorners:true,disableFlipByClick:true
