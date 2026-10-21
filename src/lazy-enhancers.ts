@@ -7,19 +7,31 @@ let albumsLoaded = false
 let locationLoaded = false
 let deviceOnboardingLoaded = false
 
+// Prevent parallel imports of the same enhancer while a WebView page is mounting.
+let presenceLoading = false
+let profileLoading = false
+let assistantLoading = false
+let albumsLoading = false
+let locationLoading = false
+let deviceOnboardingLoading = false
+
 const loadPresence = async () => {
-  if (presenceLoaded || !document.querySelector('.shell')) return
+  if (presenceLoaded || presenceLoading || !document.querySelector('.shell')) return
+  presenceLoading = true
   try {
     await import('./presence-enhancer')
     presenceLoaded = true
   } catch (error) {
     presenceLoaded = false
     console.error('Presence enhancer failed to load', error)
+  } finally {
+    presenceLoading = false
   }
 }
 
 const loadProfile = async () => {
-  if (profileLoaded || !document.querySelector('.shell')) return
+  if (profileLoaded || profileLoading || !document.querySelector('.shell')) return
+  profileLoading = true
   try {
     await import('./profile-native-bridge-fix')
     await import('./profile-enhancer')
@@ -29,11 +41,14 @@ const loadProfile = async () => {
   } catch (error) {
     profileLoaded = false
     console.error('Profile enhancer failed to load', error)
+  } finally {
+    profileLoading = false
   }
 }
 
 const loadAssistant = async () => {
-  if (assistantLoaded || !document.querySelector('.shell')) return
+  if (assistantLoaded || assistantLoading || !document.querySelector('.shell')) return
+  assistantLoading = true
   try {
     await import('./profile-noa-guard')
     await import('./noa-context-enhancer')
@@ -48,6 +63,8 @@ const loadAssistant = async () => {
   } catch (error) {
     assistantLoaded = false
     console.error('NOA assistant failed to load', error)
+  } finally {
+    assistantLoading = false
   }
 }
 
@@ -76,18 +93,22 @@ const loadPresume = async () => {
 }
 
 const loadDeviceOnboarding = async () => {
-  if (deviceOnboardingLoaded || !document.querySelector('.shell')) return
+  if (deviceOnboardingLoaded || deviceOnboardingLoading || !document.querySelector('.shell')) return
+  deviceOnboardingLoading = true
   try {
     await import('./device-onboarding')
     deviceOnboardingLoaded = true
   } catch (error) {
     deviceOnboardingLoaded = false
     console.error('Device onboarding failed to load', error)
+  } finally {
+    deviceOnboardingLoading = false
   }
 }
 
 const loadAlbums = async () => {
-  if (albumsLoaded || !document.querySelector('.photo-page')) return
+  if (albumsLoaded || albumsLoading || !document.querySelector('.photo-page')) return
+  albumsLoading = true
   try {
     await import('./albums-enhancer')
     await import('./album-sections')
@@ -101,11 +122,14 @@ const loadAlbums = async () => {
   } catch (error) {
     albumsLoaded = false
     console.error('Albums enhancer failed to load', error)
+  } finally {
+    albumsLoading = false
   }
 }
 
 const loadLocation = async () => {
-  if (locationLoaded || !document.querySelector('.location-page')) return
+  if (locationLoaded || locationLoading || !document.querySelector('.location-page')) return
+  locationLoading = true
   try {
     await import('./location-map-enhancer')
     await import('./location-privacy-enhancer')
@@ -113,6 +137,8 @@ const loadLocation = async () => {
   } catch (error) {
     locationLoaded = false
     console.error('Location enhancer failed to load', error)
+  } finally {
+    locationLoading = false
   }
 }
 
@@ -132,6 +158,18 @@ function scan() {
   }
 }
 
-observer = new MutationObserver(scan)
+// Coalesce rapid DOM changes into one scan per frame. The loading guards above
+// avoid parallel imports while the app is hydrating or navigating.
+let scanPending = false
+function scheduleScan() {
+  if (scanPending) return
+  scanPending = true
+  requestAnimationFrame(() => {
+    scanPending = false
+    scan()
+  })
+}
+
+observer = new MutationObserver(scheduleScan)
 observer.observe(document.body, { childList:true, subtree:true })
 scan()
