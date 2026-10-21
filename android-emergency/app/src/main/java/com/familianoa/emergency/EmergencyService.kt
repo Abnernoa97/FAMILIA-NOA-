@@ -405,13 +405,25 @@ class EmergencyService : Service() {
             Thread {
                 try {
                     refreshSession()
-                    socket?.close(1000, "token refresh")
-                    socket = null
-                    connecting = false
-                    ensureConnected()
-                } catch (_:Throwable) {
-                    updateProtection("Sesión vencida · abre Emergency para renovar")
-                    scheduleReconnect()
+                    // Keep socket ownership changes on the service's main
+                    // thread; old onClosed callbacks cannot disconnect a newer
+                    // connection that uses the freshly refreshed token.
+                    handler.post {
+                        val previous=socket
+                        socket=null
+                        realtimeSubscribed=false
+                        connecting=false
+                        cancelHeartbeat()
+                        cancelJoinTimeout()
+                        runCatching { previous?.close(1000, "token refresh") }
+                        ensureConnected()
+                    }
+                } catch (error:Throwable) {
+                    handler.post {
+                        android.util.Log.w("FamiliaNoaRealtime", "Session refresh unavailable", error)
+                        updateProtection("Sesión pendiente · abre FAMILIA NOA si continúa")
+                        scheduleReconnect()
+                    }
                 }
             }.start()
         }
@@ -636,8 +648,14 @@ class EmergencyService : Service() {
     }
 
     override fun onDestroy() {
+        // No orphaned retry or join timer may restart protection after the
+        // foreground service has been intentionally stopped.
+        cancelReconnect()
+        cancelReconnectNotice()
+        cancelJoinTimeout()
         socket?.close(1000, "service stop")
         socket = null
+        realtimeSubscribed=false
         cancelHeartbeat()
         refreshTask?.let(handler::removeCallbacks)
         refreshTask = null
