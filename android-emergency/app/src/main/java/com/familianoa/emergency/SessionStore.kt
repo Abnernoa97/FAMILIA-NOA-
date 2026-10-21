@@ -45,6 +45,20 @@ class SessionStore(context: Context) {
             .apply()
     }
 
+    /**
+     * The in-app web session rotates Supabase refresh tokens. Do not allow
+     * the native service to keep trying a token consumed by the WebView.
+     * Same identity and non-regressing expiry are required.
+     */
+    @Synchronized fun adoptWebTokens(memberId:String, accessToken:String, refreshToken:String, expiresAt:Long):Boolean {
+        if (!configured || this.memberId != memberId || memberId.isBlank()) return false
+        if (accessToken.isBlank() || refreshToken.isBlank() || expiresAt < System.currentTimeMillis()/1000L + 30L) return false
+        if (expiresAt + 10L < this.expiresAt) return false
+        if (this.accessToken == accessToken && this.refreshToken == refreshToken) return false
+        updateTokens(accessToken, refreshToken, expiresAt)
+        return true
+    }
+
     fun rememberFamilyActivity(id:Long):Boolean {
         synchronized(this) {
             if (id <= lastFamilyActivityId) return false
