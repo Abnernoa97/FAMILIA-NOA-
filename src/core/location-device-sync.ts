@@ -47,6 +47,7 @@ export function clearLocationStopPending(memberId:string){
 let activeMemberId=''
 let watchId:number|null=null
 let lastPosition:GeolocationPosition|null=null
+let pendingJump:GeolocationPosition|null=null
 let lastWriteAt=0
 let writing=false
 
@@ -151,6 +152,24 @@ function distanceMeters(a:GeolocationPosition,b:GeolocationPosition){
 
 async function persist(position:GeolocationPosition,force=false){
   if(!activeMemberId||writing||!valid(position))return false
+  // Prevent low-quality network geolocation from becoming a "live" address.
+  const accuracy=position.coords.accuracy
+  if(!Number.isFinite(accuracy)||accuracy>65||
+    !Number.isFinite(position.timestamp)||Date.now()-position.timestamp>12_000)return false
+
+  if(lastPosition){
+    const seconds=Math.max(0,(position.timestamp-lastPosition.timestamp)/1000)
+    const limit=Math.max(120,seconds*55+(accuracy+lastPosition.coords.accuracy)*2)
+    if(distanceMeters(lastPosition,position)>limit){
+      const previous=pendingJump
+      if(!previous||Date.now()-previous.timestamp>12_000||
+        distanceMeters(previous,position)>Math.max(65,accuracy+previous.coords.accuracy)){
+        pendingJump=position
+        return false
+      }
+    }
+  }
+  pendingJump=null
 
   const now=Date.now()
   const moved=!lastPosition||distanceMeters(lastPosition,position)>=MIN_MOVE_METERS
@@ -161,20 +180,22 @@ async function persist(position:GeolocationPosition,force=false){
 
   if(!force&&now-lastWriteAt<MIN_WRITE_GAP_MS)return false
   if(!force&&lastPosition&&!moved&&!accuracyImproved&&now-lastWriteAt<MAX_SILENCE_MS){
-    lastPosition=position
     return false
   }
 
-  lastPosition=position
+  const memberId=activeMemberId
   writing=true
   try{
     await saveOwnLocation({
-      memberId:activeMemberId,
+      memberId,
       latitude:position.coords.latitude,
       longitude:position.coords.longitude,
       accuracy:Number.isFinite(position.coords.accuracy)?position.coords.accuracy:null,
     })
-    lastWriteAt=Date.now()
+    if(activeMemberId===memberId){
+      lastPosition=position
+      lastWriteAt=Date.now()
+    }
     return true
   }catch(error){
     console.warn('Realtime family location update failed',error)
@@ -296,6 +317,7 @@ export function stopOwnLocationRealtime():boolean{
   stopWebWatch()
   activeMemberId=''
   lastPosition=null
+  pendingJump=null
   lastWriteAt=0
   publishNativeLocationState()
   return stopped
