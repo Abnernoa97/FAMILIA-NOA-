@@ -119,7 +119,14 @@ class EmergencyService : Service() {
                 }
             }
             else -> {
-                if (store.locationSharingEnabled && hasLocationPermission()) startLocationTracking()
+                if (store.locationSharingEnabled && hasLocationPermission()) {
+                    startLocationTracking()
+                } else {
+                    // Identity changes or a revoked consent must never leave
+                    // the old Android listener attached to GPS providers.
+                    locationTracker.stop()
+                    gpsTrackerRunning = false
+                }
             }
         }
 
