@@ -48,6 +48,7 @@ class FamilyLocationTracker(
     @Volatile private var lastUploadedLocation: Location? = null
     // A single GPS/network outlier is not proof of a sudden physical jump.
     private var candidateJump: Location? = null
+    private var firstNetworkCandidate: Location? = null
     @Volatile private var lastUploadAt = 0L
     @Volatile private var startedElapsedNanos = 0L
 
@@ -104,6 +105,7 @@ class FamilyLocationTracker(
         running = false
         lastUploadedLocation = null
         candidateJump = null
+        firstNetworkCandidate = null
         lastUploadAt = 0L
         startedElapsedNanos = 0L
     }
@@ -133,6 +135,25 @@ class FamilyLocationTracker(
 
         val now = System.currentTimeMillis()
         val previous = lastUploadedLocation
+        // On startup, a quick network fix may appear in a different street.
+        // Prefer an actual satellite reading. If GPS is unavailable indoors,
+        // accept network only after two consistent high-quality observations.
+        if (previous == null && location.provider == LocationManager.NETWORK_PROVIDER &&
+            appContext.checkSelfPermission(Manifest.permission.ACCESS_FINE_LOCATION) == PackageManager.PERMISSION_GRANTED &&
+            runCatching { locationManager.isProviderEnabled(LocationManager.GPS_PROVIDER) }.getOrDefault(false)) {
+            val elapsed = TimeUnit.NANOSECONDS.toMillis(
+                SystemClock.elapsedRealtimeNanos() - startedElapsedNanos
+            )
+            val candidate = firstNetworkCandidate
+            if (elapsed < 15_000L || candidate == null || !fresh(candidate) ||
+                location.accuracy > 30f || candidate.accuracy > 30f ||
+                candidate.distanceTo(location) > 35f) {
+                firstNetworkCandidate = Location(location)
+                uploading.set(false)
+                return
+            }
+        }
+        firstNetworkCandidate = null
         val moved = previous == null || previous.distanceTo(location) >= MIN_DISTANCE_M
         val accuracyImproved = previous != null &&
             location.hasAccuracy() &&
