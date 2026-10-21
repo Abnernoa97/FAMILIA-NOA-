@@ -123,29 +123,6 @@ function clearHomeBootstrap(){
   try{localStorage.removeItem(HOME_BOOTSTRAP_KEY)}catch{}
 }
 
-function locationAge(value:string){
-  const ms=Date.now()-new Date(value).getTime()
-  if(!Number.isFinite(ms)||ms<0)return 'actualizada ahora'
-  const minutes=Math.floor(ms/60000)
-  if(minutes<1)return 'actualizada ahora'
-  if(minutes<60)return `hace ${minutes} min`
-  const hours=Math.floor(minutes/60)
-  if(hours<24)return `hace ${hours} h`
-  const days=Math.floor(hours/24)
-  if(days<7)return `hace ${days} día${days===1?'':'s'}`
-  return new Date(value).toLocaleDateString('es-MX',{day:'numeric',month:'short'})
-}
-
-async function loadMembers(force = false) {
-  if (membersLoaded && !force) return
-  const { data } = await supabase.from('family_members').select('id,name,active,must_share_location').eq('active', true).order('created_at')
-  const loaded=(data || []) as Member[]
-  if(loaded.length)members=loaded
-  else if(!members.length)members = FALLBACK.map((name, index) => ({ id:String(index), name, active:true, must_share_location:name === 'Mamá' || name === 'Papá' }))
-  membersLoaded = true
-  saveHomeBootstrap()
-}
-
 function currentMember(){
   return members.find(member=>member.id===memberId)||null
 }
