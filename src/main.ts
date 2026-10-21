@@ -7,7 +7,7 @@ import { startHomeChatUnread, stopHomeChatUnread } from './chat-features'
 import { initNavigation, enterView, replaceView, backView, type AppView } from './core/navigation'
 import { closeMediaViewer, isMediaViewerOpen } from './core/media-viewer'
 import { clearPrivateMediaCache } from './core/private-media'
-import { getLocationState, refreshLocationState, saveOwnLocation, subscribeLocationState, isCurrentFamilyLocation, type LocationState } from './core/location-store'
+import { getLocationState, refreshLocationState, saveOwnLocation, subscribeLocationState, isCurrentFamilyLocation, requireNewFamilyLocationFix, type LocationState } from './core/location-store'
 import { activateNativeLocationSharing, ensureOwnLocationRealtime, hasNativeLocationCapability, isDeviceLocationEnabled, isNativeLocationSharingEnabled, openDeviceLocationSettings, refreshMemberLocation, startOwnLocationRealtime } from './core/location-device-sync'
 
 type Member = { id: string; name: string; active: boolean; must_share_location: boolean }
@@ -391,6 +391,7 @@ async function renderPhotos(push = true) {
 }
 
 function renderMandatoryLocation(){
+  requireNewFamilyLocationFix()
   mandatoryLocationGateActive=true
   replaceView('location')
   stopHomeChatUnread()
@@ -405,6 +406,7 @@ function renderMandatoryLocation(){
 
 async function renderLocation(push = true) {
   if (requiresMandatoryLocation()) { renderMandatoryLocation(); return }
+  requireNewFamilyLocationFix()
   mandatoryLocationGateActive=false
   if (push) enterView('location')
   stopHomeChatUnread()
@@ -425,6 +427,8 @@ function geolocationErrorText(error:unknown){
   if(code===1)return 'El permiso de ubicación está desactivado. Actívalo en los permisos de la app o del navegador.'
   if(code===2)return 'No pudimos obtener tu ubicación en este momento. Comprueba GPS y conexión.'
   if(code===3)return 'La ubicación tardó demasiado en responder. Inténtalo de nuevo.'
+  if((error as Error)?.message==='WAIT_FOR_PRECISE_GPS')
+    return 'Esperando una señal GPS más precisa. No mostraremos una posición dudosa.'
   return 'No se pudo actualizar tu ubicación. Inténtalo de nuevo.'
 }
 
