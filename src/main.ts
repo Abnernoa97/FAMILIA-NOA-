@@ -7,7 +7,7 @@ import { startHomeChatUnread, stopHomeChatUnread } from './chat-features'
 import { initNavigation, enterView, replaceView, backView, type AppView } from './core/navigation'
 import { closeMediaViewer, isMediaViewerOpen } from './core/media-viewer'
 import { clearPrivateMediaCache } from './core/private-media'
-import { getLocationState, refreshLocationState, saveOwnLocation, subscribeLocationState, isLiveFamilyLocation, type LocationState } from './core/location-store'
+import { getLocationState, refreshLocationState, saveOwnLocation, subscribeLocationState, isCurrentFamilyLocation, type LocationState } from './core/location-store'
 import { activateNativeLocationSharing, ensureOwnLocationRealtime, hasNativeLocationCapability, isDeviceLocationEnabled, isNativeLocationSharingEnabled, openDeviceLocationSettings, refreshMemberLocation, startOwnLocationRealtime } from './core/location-device-sync'
 
 type Member = { id: string; name: string; active: boolean; must_share_location: boolean }
@@ -430,7 +430,7 @@ function geolocationErrorText(error:unknown){
 
 function currentPosition(){
   return new Promise<GeolocationPosition>((resolve,reject)=>{
-    navigator.geolocation.getCurrentPosition(resolve,reject,{enableHighAccuracy:true,timeout:20000,maximumAge:15000})
+    navigator.geolocation.getCurrentPosition(resolve,reject,{enableHighAccuracy:true,timeout:25000,maximumAge:0})
   })
 }
 
@@ -438,7 +438,7 @@ function confirmNativeLocationFix(state:LocationState){
   const pending=pendingNativeFix
   if(!pending||!isNativeLocationSharingEnabled())return false
   const location=state.locations.find(row=>row.member_id===pending.memberId)
-  if(!location||location.updated_at===pending.previousUpdatedAt)return false
+  if(!location||!isCurrentFamilyLocation(location)||location.updated_at===pending.previousUpdatedAt)return false
   const updatedAt=Date.parse(location.updated_at)
   if(!Number.isFinite(updatedAt)||updatedAt<pending.startedAt-5000)return false
 
@@ -515,6 +515,10 @@ async function shareLocation() {
     if(!Number.isFinite(latitude)||!Number.isFinite(longitude)||latitude < -90||latitude > 90||longitude < -180||longitude > 180){
       throw new Error('INVALID_LOCATION')
     }
+    // Never publish a broad browser/network estimate as an exact position.
+    if(!Number.isFinite(accuracy)||accuracy>65||Date.now()-position.timestamp>12_000){
+      throw new Error('WAIT_FOR_PRECISE_GPS')
+    }
     button.textContent='Guardando…'
     await saveOwnLocation({
       memberId,
@@ -556,63 +560,39 @@ function renderLocationList(state:LocationState){
   const element=document.querySelector<HTMLElement>('#familylocations')
   if(!element)return
   if(!state.updatedAt&&!state.error){
-    element.innerHTML='<div class="location-section-title"><div><b>Familia</b><span>Ubicaciones pendientes o anteriores</span></div><small>Cargando…</small></div><div class="loading">Cargando ubicaciones…</div>'
+    element.innerHTML='<div class="location-section-title"><div><b>Familia</b><span>Comprobando posiciones actuales</span></div></div><div class="loading">Buscando ubicación en tiempo real…</div>'
     return
   }
   if(state.error&&!state.updatedAt){
-    element.innerHTML='<div class="location-section-title"><div><b>Familia</b><span>Ubicaciones pendientes o anteriores</span></div><small>Sin conexión</small></div><div class="empty">No se pudieron cargar las ubicaciones. Inténtalo de nuevo.</div>'
+    element.innerHTML='<div class="location-section-title"><div><b>Familia</b><span>Sin conexión</span></div></div><div class="empty">No se pudieron comprobar ubicaciones actuales.</div>'
     return
   }
 
-  const rows=state.locations
-  const byMember=new Map(rows.map(row=>[row.member_id,row]))
   const sourceMembers=state.members.length?state.members:members
   const now=Date.now()
   const ownGpsOff=hasNativeLocationCapability()&&!isDeviceLocationEnabled()
-  const liveMemberIds=new Set(rows
-    .filter(row=>isLiveFamilyLocation(row.updated_at,now)&&!(row.member_id===memberId&&ownGpsOff))
+  const liveMemberIds=new Set(state.locations
+    .filter(row=>isCurrentFamilyLocation(row,now)&&!(row.member_id===memberId&&ownGpsOff))
     .map(row=>row.member_id))
-  // A member with a recent position is represented by their clickable marker
-  // on the map. Below it, only show people who do NOT have a live position.
-  const ordered=[...sourceMembers].filter(member=>!liveMemberIds.has(member.id)).sort((a,b)=>{
-    const aHas=byMember.has(a.id)?0:1
-    const bHas=byMember.has(b.id)?0:1
-    if(aHas!==bHas)return aHas-bHas
+
+  // The marker is the ONLY current-position representation. Never display
+  // a stored coordinate or a clickable "Última ubicación" row in the list.
+  const pending=[...sourceMembers].filter(member=>!liveMemberIds.has(member.id)).sort((a,b)=>{
     if(a.id===memberId)return -1
     if(b.id===memberId)return 1
     return a.name.localeCompare(b.name,'es')
   })
-  if(byMember.has(memberId))ensureOwnLocationRealtime()
-  const liveCount=liveMemberIds.size
-  const summary=`${liveCount} en mapa · ${ordered.length} pendientes`
-  const cards=ordered.map(member=>{
-    const item=byMember.get(member.id)
+  if(state.locations.some(row=>row.member_id===memberId&&isCurrentFamilyLocation(row,now)))
+    ensureOwnLocationRealtime()
+  const count=liveMemberIds.size
+  const cards=pending.map(member=>{
     const mine=member.id===memberId
     const initial=esc(member.name.charAt(0).toUpperCase()||'•')
-    if(!item){
-      return `<article class="locationrow locationrow-empty" data-location-member="${esc(member.id)}"><div class="location-person"><span class="location-avatar-fallback">${initial}</span><div><b>${esc(member.name)}${mine?' · tú':''}</b><small>${member.must_share_location?'Ubicación obligatoria pendiente':'Sin ubicación compartida'}</small></div></div><span class="location-state-pill muted">Sin ubicación</span></article>`
-    }
-    const ageMs=now-Date.parse(item.updated_at)
-    const stale=Number.isFinite(ageMs)&&ageMs>60*60*1000
-    const accuracy=Number.isFinite(item.accuracy)?` · ±${Math.round(item.accuracy as number)} m`:''
-    const deviceOff=mine&&ownGpsOff
-    const status=deviceOff?'GPS apagado':'Última'
-    // Old positions stay available on demand: tapping the row temporarily
-    // focuses that historical location and labels its real age on the map.
-    return `<article class="locationrow locationrow-active${stale?' stale':''}" data-location-member="${esc(member.id)}"><button type="button" class="location-focus" data-focus-location="${esc(member.id)}" aria-label="Ver última ubicación de ${esc(member.name)} en el mapa"><span class="location-avatar-fallback">${initial}</span><span class="location-person"><span><b>${esc(member.name)}${mine?' · tú':''}</b><small>Última ubicación · ${locationAge(item.updated_at)}${accuracy}</small></span></span><span class="location-state-pill">${status}</span><span class="location-chevron">›</span></button></article>`
+    const gpsOff=mine&&ownGpsOff
+    const hint=gpsOff?'GPS apagado':'Esperando ubicación actual'
+    return `<article class="locationrow locationrow-empty" data-location-member="${esc(member.id)}"><div class="location-person"><span class="location-avatar-fallback">${initial}</span><div><b>${esc(member.name)}${mine?' · tú':''}</b><small>${hint}</small></div></div><span class="location-state-pill muted">${gpsOff?'Sin GPS':'Pendiente'}</span></article>`
   }).join('')
-  // Keep relatives without a recent GPS fix visible in the original family
-  // list. As a person starts sharing, their row moves to the live map; as
-  // tracking goes stale, it returns here automatically, without a drawer.
-  element.innerHTML=`<div class="location-section-title"><div><b>Familia</b><span>Sin ubicación en tiempo real</span></div><small>${summary}</small></div>${cards||'<div class="empty">Todos los familiares aparecen en el mapa.</div>'}`
-  element.querySelectorAll<HTMLButtonElement>('[data-focus-location]').forEach(button=>{
-    button.addEventListener('click',()=>{
-      const targetId=button.dataset.focusLocation||''
-      window.dispatchEvent(new CustomEvent('familia-noa:focus-location',{detail:{memberId:targetId}}))
-      document.querySelector<HTMLElement>('[data-family-map]')?.scrollIntoView({behavior:'smooth',block:'center'})
-      void refreshMemberLocation(targetId)
-    })
-  })
+  element.innerHTML=`<div class="location-section-title"><div><b>Familia</b><span>${count?count+' compartiendo ahora':'Esperando posiciones actuales'}</span></div><small>${count} en mapa · ${pending.length} pendientes</small></div>${cards||'<div class="empty">Todos los familiares con ubicación verificada aparecen en el mapa.</div>'}`
 }
 
 // Reclassify positions automatically as they age, even if Realtime is silent.
