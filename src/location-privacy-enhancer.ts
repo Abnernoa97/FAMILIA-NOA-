@@ -1,5 +1,5 @@
 import { getIdentity } from './core/identity'
-import { stopSharingOwnLocation, subscribeLocationState, type LocationState } from './core/location-store'
+import { stopSharingOwnLocation, subscribeLocationState, isCurrentFamilyLocation, type LocationState } from './core/location-store'
 import { hasNativeLocationCapability, isDeviceLocationEnabled, isNativeLocationSharingEnabled, getNativeLocationStatus, stopOwnLocationRealtime, isLocationStopPending, markLocationStopPending, clearLocationStopPending } from './core/location-device-sync'
 
 let latestState:LocationState|null=null
@@ -156,9 +156,8 @@ function apply(){
   const pendingStop=isLocationStopPending(memberId)
   const tracking=status?.tracking??nativeRequested
   const deviceLocationOff=nativeRequired&&!isDeviceLocationEnabled()
-  const age=row?Date.now()-Date.parse(row.updated_at):NaN
-  const serverRecent=!!row&&Number.isFinite(age)&&age>=-30_000&&age<=120_000
-  const sharing=!!row&&(!nativeRequired||tracking)&&!pendingStop
+  const serverRecent=!!row&&isCurrentFamilyLocation(row)
+  const sharing=serverRecent&&(!nativeRequired||tracking)&&!pendingStop
   const needsRecovery=!pendingStop&&nativeRequired&&nativeRequested&&
     (deviceLocationOff||!tracking||!serverRecent)
   page.classList.toggle('location-sharing-active',sharing&&!needsRecovery)
