@@ -239,9 +239,12 @@ class EmergencyService : Service() {
                 if (active != null) showEmergency(active) else if (store.activeAlertId.isNotBlank()) clearEmergency(store.activeAlertId)
                 connectRealtime(token)
             } catch (error:Throwable) {
-                connecting = false
-                updateProtection("Reconectando…")
-                scheduleReconnect()
+                handler.post {
+                    connecting = false
+                    android.util.Log.w("FamiliaNoaRealtime", "Could not connect to family activity", error)
+                    showReconnectOnlyWhenPersistent()
+                    scheduleReconnect()
+                }
             }
         }.start()
     }
@@ -260,35 +263,65 @@ class EmergencyService : Service() {
     private fun connectRealtime(accessToken:String) {
         val url = "wss://${Config.SUPABASE_PROJECT_REF}.supabase.co/realtime/v1/websocket?apikey=${Config.PUBLISHABLE_KEY}&vsn=1.0.0"
         val request = Request.Builder().url(url).build()
+        realtimeSubscribed = false
         socket = Api.http.newWebSocket(request, object:WebSocketListener() {
             override fun onOpen(webSocket:WebSocket, response:Response) {
-                connecting = false
-                reconnectAttempt = 0
-                updateProtection(protectionState())
-                sendJoin(webSocket, accessToken)
-                scheduleHeartbeat(webSocket)
-                scheduleTokenRefresh()
+                handler.post {
+                    if (socket !== webSocket) return@post
+                    connecting = false
+                    // An open TCP/WebSocket connection is not proof that the
+                    // private family's Realtime channel was subscribed.
+                    try{sendJoin(webSocket, accessToken)}catch(error:Throwable){
+                        android.util.Log.w("FamiliaNoaRealtime", "Realtime join failed", error)
+                        disconnectRealtime(webSocket)
+                    }
+                }
             }
 
             override fun onMessage(webSocket:WebSocket, text:String) {
-                processRealtime(text)
+                if (socket === webSocket) processRealtime(webSocket, text)
             }
 
             override fun onClosed(webSocket:WebSocket, code:Int, reason:String) {
-                socket = null
-                connecting = false
-                cancelHeartbeat()
-                scheduleReconnect()
+                handler.post {
+                    if (socket !== webSocket) return@post
+                    android.util.Log.w("FamiliaNoaRealtime", "Realtime closed: code=$code")
+                    disconnectRealtime(webSocket)
+                }
             }
 
             override fun onFailure(webSocket:WebSocket, t:Throwable, response:Response?) {
-                socket = null
-                connecting = false
-                cancelHeartbeat()
-                updateProtection("Sin conexión · reconectando")
-                scheduleReconnect()
+                handler.post {
+                    if (socket !== webSocket) return@post
+                    android.util.Log.w("FamiliaNoaRealtime", "Realtime failure: HTTP=${response?.code}", t)
+                    disconnectRealtime(webSocket)
+                }
             }
         })
+    }
+
+    private fun disconnectRealtime(webSocket:WebSocket){
+        if (socket !== webSocket) return
+        socket = null
+        realtimeSubscribed = false
+        connecting = false
+        cancelHeartbeat()
+        refreshTask?.let(handler::removeCallbacks)
+        refreshTask = null
+        runCatching { webSocket.cancel() }
+        scheduleReconnect()
+        showReconnectOnlyWhenPersistent()
+    }
+
+    private fun subscribedRealtime(webSocket:WebSocket){
+        if (socket !== webSocket || realtimeSubscribed) return
+        realtimeSubscribed = true
+        reconnectAttempt = 0 // reset only after Phoenix confirms subscription
+        cancelReconnect()
+        cancelReconnectNotice()
+        updateProtection("Conectado · AYUDA vigilada en tiempo real")
+        scheduleHeartbeat(webSocket)
+        scheduleTokenRefresh()
     }
 
     private fun sendJoin(webSocket:WebSocket, accessToken:String) {
