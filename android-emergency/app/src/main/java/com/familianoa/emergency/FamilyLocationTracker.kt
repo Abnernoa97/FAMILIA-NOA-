@@ -49,6 +49,7 @@ class FamilyLocationTracker(
     // A single GPS/network outlier is not proof of a sudden physical jump.
     private var candidateJump: Location? = null
     @Volatile private var lastUploadAt = 0L
+    @Volatile private var startedElapsedNanos = 0L
 
     fun start(): Boolean {
         if (running) return true
@@ -65,6 +66,7 @@ class FamilyLocationTracker(
         if (providers.isEmpty()) return false
 
         return try {
+            startedElapsedNanos = SystemClock.elapsedRealtimeNanos()
             // Deliberately do NOT seed the map with cached provider coordinates:
             // the first published fix must be a new, accurate GPS observation.
             providers.forEach { provider ->
@@ -103,6 +105,7 @@ class FamilyLocationTracker(
         lastUploadedLocation = null
         candidateJump = null
         lastUploadAt = 0L
+        startedElapsedNanos = 0L
     }
 
     fun refreshNow() {
@@ -214,7 +217,8 @@ class FamilyLocationTracker(
         val ageMs = TimeUnit.NANOSECONDS.toMillis(
             SystemClock.elapsedRealtimeNanos() - location.elapsedRealtimeNanos
         )
-        return ageMs in -2_000L..MAX_FIX_AGE_MS
+        return ageMs in -2_000L..MAX_FIX_AGE_MS &&
+            location.elapsedRealtimeNanos >= startedElapsedNanos
     }
 
     private fun beginHeartbeat() {
