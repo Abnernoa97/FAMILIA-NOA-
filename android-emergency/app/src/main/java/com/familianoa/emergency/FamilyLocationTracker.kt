@@ -26,7 +26,9 @@ class FamilyLocationTracker(
         private const val MIN_UPDATE_MS = 10_000L
         private const val MAX_SILENCE_MS = 20_000L
         private const val HEARTBEAT_MS = 30_000L
-        private const val MAX_LAST_KNOWN_AGE_MS = 20_000L
+        private const val MAX_FIX_AGE_MS = 12_000L
+        private const val MAX_ACCURACY_M = 65f
+        private const val MAX_NETWORK_ACCURACY_M = 45f
         private const val MIN_DISTANCE_M = 2.5f
     }
 
@@ -43,7 +45,9 @@ class FamilyLocationTracker(
     var running: Boolean = false
         private set
 
-    private var lastUploadedLocation: Location? = null
+    @Volatile private var lastUploadedLocation: Location? = null
+    // A single GPS/network outlier is not proof of a sudden physical jump.
+    private var candidateJump: Location? = null
     @Volatile private var lastUploadAt = 0L
 
     fun start(): Boolean {
@@ -61,10 +65,8 @@ class FamilyLocationTracker(
         if (providers.isEmpty()) return false
 
         return try {
-            val lastKnown = providers
-                .mapNotNull { provider -> runCatching { locationManager.getLastKnownLocation(provider) }.getOrNull() }
-                .maxByOrNull { it.time }
-
+            // Deliberately do NOT seed the map with cached provider coordinates:
+            // the first published fix must be a new, accurate GPS observation.
             providers.forEach { provider ->
                 locationManager.requestLocationUpdates(
                     provider,
@@ -77,8 +79,8 @@ class FamilyLocationTracker(
 
             trackingGeneration.incrementAndGet()
             running = true
-            if (lastKnown != null && fresh(lastKnown)) upload(lastKnown, force = true)
             beginHeartbeat()
+            requestFreshFix()
             true
         } catch (_: SecurityException) {
             stop() // Also unregister a GPS provider if NETWORK registration failed.
@@ -99,6 +101,7 @@ class FamilyLocationTracker(
         runCatching { locationManager.removeUpdates(this) }
         running = false
         lastUploadedLocation = null
+        candidateJump = null
         lastUploadAt = 0L
     }
 
@@ -106,12 +109,9 @@ class FamilyLocationTracker(
         if (!running) {
             if (!start()) return
         }
-        val providers = listOf(LocationManager.GPS_PROVIDER, LocationManager.NETWORK_PROVIDER)
-        val best = providers
-            .mapNotNull { provider -> runCatching { locationManager.getLastKnownLocation(provider) }.getOrNull() }
-            .maxByOrNull { it.time }
-        if (best != null && fresh(best)) upload(best, force = true)
-        else requestFreshFix()
+        // A refresh must obtain a new fix; a saved provider estimate can
+        // momentarily show a different street even when the user never moved.
+        requestFreshFix()
     }
 
     override fun onLocationChanged(location: Location) {
@@ -125,7 +125,8 @@ class FamilyLocationTracker(
     override fun onProviderDisabled(provider: String) = Unit
 
     private fun upload(location: Location, force: Boolean) {
-        if (!running || !store.locationSharingEnabled || !valid(location) || !fresh(location) || !uploading.compareAndSet(false, true)) return
+        if (!running || !store.locationSharingEnabled || !valid(location) || !fresh(location) || !trustworthyAccuracy(location) ||
+            !uploading.compareAndSet(false, true)) return
 
         val now = System.currentTimeMillis()
         val previous = lastUploadedLocation
@@ -138,12 +139,36 @@ class FamilyLocationTracker(
             location.hasAccuracy() &&
             previous.hasAccuracy() &&
             location.accuracy > maxOf(previous.accuracy * 2f, previous.accuracy + 30f)
-        val newerThanPrevious = previous == null || location.time + 5_000L >= previous.time
+        val newerThanPrevious = previous == null ||
+            location.elapsedRealtimeNanos >= previous.elapsedRealtimeNanos
 
         if (!newerThanPrevious) {
             uploading.set(false)
             return
         }
+        // Reject implausible single-point teleports. A second accurate fix
+        // near the candidate confirms a genuine displacement; elapsed time
+        // allows realistic travel after long periods without GPS signal.
+        if (previous != null) {
+            val elapsedSeconds = TimeUnit.NANOSECONDS.toMillis(
+                (location.elapsedRealtimeNanos - previous.elapsedRealtimeNanos).coerceAtLeast(0L)
+            ) / 1000f
+            val plausibleMeters = maxOf(
+                120f,
+                elapsedSeconds * 55f + (previous.accuracy + location.accuracy) * 2f
+            )
+            if (previous.distanceTo(location) > plausibleMeters) {
+                val candidate = candidateJump
+                if (candidate == null || !fresh(candidate) ||
+                    candidate.distanceTo(location) > maxOf(65f, location.accuracy + candidate.accuracy)) {
+                    candidateJump = Location(location)
+                    uploading.set(false)
+                    return
+                }
+            }
+        }
+        candidateJump = null
+
         if (!force && previous != null && muchWorseAccuracy && previous.distanceTo(location) < location.accuracy && now - lastUploadAt < MAX_SILENCE_MS) {
             uploading.set(false)
             return
@@ -189,7 +214,7 @@ class FamilyLocationTracker(
         val ageMs = TimeUnit.NANOSECONDS.toMillis(
             SystemClock.elapsedRealtimeNanos() - location.elapsedRealtimeNanos
         )
-        return ageMs in -5_000L..MAX_LAST_KNOWN_AGE_MS
+        return ageMs in -2_000L..MAX_FIX_AGE_MS
     }
 
     private fun beginHeartbeat() {
@@ -209,7 +234,9 @@ class FamilyLocationTracker(
 
     private fun requestFreshFix() {
         if (!running || Build.VERSION.SDK_INT < 30 || currentFix != null) return
-        val provider = listOf(LocationManager.NETWORK_PROVIDER, LocationManager.GPS_PROVIDER)
+        // Prefer satellite fixes; network-only estimates frequently jump
+        // between blocks without a real movement by the family member.
+        val provider = listOf(LocationManager.GPS_PROVIDER, LocationManager.NETWORK_PROVIDER)
             .firstOrNull { runCatching { locationManager.isProviderEnabled(it) }.getOrDefault(false) }
             ?: return
         val signal = CancellationSignal()
@@ -233,6 +260,13 @@ class FamilyLocationTracker(
             currentFix = null
             Log.w("FamiliaNoaGPS", "Fresh position request failed", error)
         }
+    }
+
+    private fun trustworthyAccuracy(location: Location): Boolean {
+        if (!location.hasAccuracy() || !location.accuracy.isFinite()) return false
+        val limit = if (location.provider == LocationManager.NETWORK_PROVIDER)
+            MAX_NETWORK_ACCURACY_M else MAX_ACCURACY_M
+        return location.accuracy in 0f..limit
     }
 
     private fun valid(location: Location): Boolean =
