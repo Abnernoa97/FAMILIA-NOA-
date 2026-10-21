@@ -11,6 +11,7 @@ import android.net.Uri
 import android.os.Bundle
 import android.provider.MediaStore
 import android.provider.Settings
+import android.util.Base64
 import android.view.Gravity
 import android.view.View
 import android.view.ViewGroup
@@ -126,6 +127,7 @@ class MainActivity : Activity() {
                 "window.dispatchEvent(new Event('familia-noa:android-resumed'))",
                 null
             )
+            webView?.let(::offerNativeSessionToWeb)
         }
     }
 
@@ -263,6 +265,20 @@ class MainActivity : Activity() {
         web.loadUrl(Config.FAMILY_WEB_URL)
     }
 
+    private fun offerNativeSessionToWeb(view: WebView) {
+        if (!store.configured || store.accessToken.isBlank() || store.refreshToken.isBlank()) return
+        val payload = JSONObject()
+            .put("memberId", store.memberId)
+            .put("accessToken", store.accessToken)
+            .put("refreshToken", store.refreshToken)
+            .put("expiresAt", store.expiresAt)
+        // Evaluate only in the top-level trusted FAMILIA NOA page.
+        view.evaluateJavascript(
+            "window.dispatchEvent(new CustomEvent('familia-noa:native-auth-update',{detail:$payload}))",
+            null
+        )
+    }
+
     private fun injectNativeSession(view: WebView) {
         val auth = JSONObject()
             .put("access_token", store.accessToken)
@@ -326,6 +342,7 @@ class MainActivity : Activity() {
 
         view.evaluateJavascript(script) { result ->
             if (result?.contains("reload") == true) return@evaluateJavascript
+            offerNativeSessionToWeb(view)
             revealWhenFamilyScreenReady(view, 0)
         }
     }
@@ -523,6 +540,31 @@ class MainActivity : Activity() {
     }
 
     inner class NativeBridge {
+        @JavascriptInterface
+        fun syncSessionFromWeb(payload:String):Boolean {
+            // This bridge is only for the already-authenticated embedded web
+            // session. Never trust arbitrary claimed member IDs or expiry values.
+            if (payload.length !in 1..8192) return false
+            return try {
+                val value=JSONObject(payload)
+                val memberId=value.optString("memberId")
+                val accessToken=value.optString("accessToken")
+                val refreshToken=value.optString("refreshToken")
+                val expiresAt=value.optLong("expiresAt",0L)
+                val parts=accessToken.split('.')
+                if (parts.size!=3 || refreshToken.isBlank()) return false
+                val claims=JSONObject(String(Base64.decode(parts[1],Base64.URL_SAFE or Base64.NO_WRAP),Charsets.UTF_8))
+                val metadata=claims.optJSONObject("app_metadata")
+                val tokenMember=metadata?.optString("member_id")
+                val familyVerified=metadata?.optBoolean("family_member",false)==true
+                if (!familyVerified || tokenMember!=memberId || claims.optString("sub").isBlank() ||
+                    kotlin.math.abs(claims.optLong("exp",0L)-expiresAt)>30L) return false
+                val changed=store.adoptWebTokens(memberId,accessToken,refreshToken,expiresAt)
+                if (changed) runOnUiThread { EmergencyService.familySessionUpdated(this@MainActivity) }
+                true
+            } catch (_:Throwable) { false }
+        }
+
         @JavascriptInterface
         fun openProtectionSettings() {
             runOnUiThread { openProtection() }
