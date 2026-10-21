@@ -28,6 +28,7 @@ class EmergencyService : Service() {
         const val ACTION_LOCATION_START = "com.familianoa.emergency.LOCATION_START"
         const val ACTION_LOCATION_STOP = "com.familianoa.emergency.LOCATION_STOP"
         const val ACTION_LOCATION_REFRESH = "com.familianoa.emergency.LOCATION_REFRESH"
+        const val ACTION_SESSION_UPDATED = "com.familianoa.emergency.SESSION_UPDATED"
         private const val EXTRA_ALERT_ID = "alert_id"
         private const val PROTECTION_CHANNEL = "familia_noa_protection"
         private const val EMERGENCY_CHANNEL = "familia_noa_emergency"
@@ -55,6 +56,10 @@ class EmergencyService : Service() {
         fun refreshLocationSharing(context:Context) {
             context.startService(Intent(context, EmergencyService::class.java).setAction(ACTION_LOCATION_REFRESH))
         }
+        fun familySessionUpdated(context:Context) {
+            val intent = Intent(context, EmergencyService::class.java).setAction(ACTION_SESSION_UPDATED)
+            if (Build.VERSION.SDK_INT >= 26) context.startForegroundService(intent) else context.startService(intent)
+        }
         fun resolved(context:Context, alertId:String) {
             val intent = Intent(context, EmergencyService::class.java).setAction(ACTION_LOCAL_RESOLVED).putExtra(EXTRA_ALERT_ID, alertId)
             if (Build.VERSION.SDK_INT >= 26) context.startForegroundService(intent) else context.startService(intent)
@@ -78,6 +83,9 @@ class EmergencyService : Service() {
     private var refreshTask:Runnable? = null
     private var vibrator:android.os.Vibrator? = null
     private lateinit var locationTracker: FamilyLocationTracker
+    // A rejected, already-used refresh token must not cause an endless storm.
+    private var lastRejectedRefreshToken = ""
+    private var nextRefreshRetryAtMs = 0L
 
     override fun onCreate() {
         super.onCreate()
@@ -117,6 +125,22 @@ class EmergencyService : Service() {
                     if (!locationTracker.running) startLocationTracking()
                     locationTracker.refreshNow()
                 }
+            }
+            ACTION_SESSION_UPDATED -> {
+                lastRejectedRefreshToken = ""
+                nextRefreshRetryAtMs = 0L
+                cancelReconnect()
+                cancelJoinTimeout()
+                cancelHeartbeat()
+                refreshTask?.let(handler::removeCallbacks)
+                refreshTask = null
+                val previous=socket
+                socket=null
+                realtimeSubscribed=false
+                connecting=false
+                runCatching { previous?.close(1000, "fresh family session") }
+                // The existing GPS listener remains registered: it will use
+                // the freshly synchronized token for the next REST upload.
             }
             else -> {
                 if (store.locationSharingEnabled && hasLocationPermission()) {
@@ -292,9 +316,33 @@ class EmergencyService : Service() {
     }
 
     @Synchronized private fun refreshSession():String {
-        val refreshed = Api.refreshSession(store.refreshToken)
-        val memberId = refreshed.memberId.ifBlank { store.memberId }
-        store.saveSession(memberId, store.memberName, refreshed.accessToken, refreshed.refreshToken, refreshed.expiresAt)
+        if (!store.needsRefresh()) return store.accessToken
+        val usedToken=store.refreshToken
+        if (usedToken.isBlank()) error("FAMILY_SESSION_REFRESH_REQUIRED")
+        if (usedToken==lastRejectedRefreshToken &&
+            System.currentTimeMillis()<nextRefreshRetryAtMs) {
+            error("FAMILY_SESSION_RECONNECT_REQUIRED")
+        }
+        val refreshed=try {
+            Api.refreshSession(usedToken)
+        } catch (error:Throwable) {
+            // WebView may have refreshed successfully while this HTTP call was
+            // running. Use its new token instead of locking into a stale one.
+            if (store.refreshToken!=usedToken && !store.needsRefresh()) {
+                lastRejectedRefreshToken=""
+                nextRefreshRetryAtMs=0L
+                return store.accessToken
+            }
+            lastRejectedRefreshToken=usedToken
+            nextRefreshRetryAtMs=System.currentTimeMillis()+120_000L
+            throw error
+        }
+        if (store.refreshToken!=usedToken && !store.needsRefresh()) return store.accessToken
+        val memberId=refreshed.memberId.ifBlank { store.memberId }
+        if (memberId!=store.memberId) error("FAMILY_SESSION_MEMBER_MISMATCH")
+        store.updateTokens(refreshed.accessToken,refreshed.refreshToken,refreshed.expiresAt)
+        lastRejectedRefreshToken=""
+        nextRefreshRetryAtMs=0L
         return refreshed.accessToken
     }
 
