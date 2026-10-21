@@ -66,6 +66,7 @@ class EmergencyService : Service() {
     // A single scheduled retry avoids reconnect storms after network changes.
     private var reconnectTask:Runnable? = null
     private var reconnectNotice:Runnable? = null
+    private var joinTimeout:Runnable? = null
     private var realtimeSubscribed = false
     private var lastProtectionText = ""
     private val refs = AtomicInteger(2)
@@ -192,6 +193,24 @@ class EmergencyService : Service() {
         reconnectNotice = null
     }
 
+    private fun cancelJoinTimeout(){
+        joinTimeout?.let(handler::removeCallbacks)
+        joinTimeout = null
+    }
+
+    private fun expectSubscriptionAck(webSocket:WebSocket){
+        cancelJoinTimeout()
+        val task=Runnable {
+            joinTimeout=null
+            if (socket === webSocket && !realtimeSubscribed) {
+                android.util.Log.w("FamiliaNoaRealtime", "Channel subscription timed out")
+                disconnectRealtime(webSocket)
+            }
+        }
+        joinTimeout=task
+        handler.postDelayed(task, 20_000L)
+    }
+
     private fun showReconnectOnlyWhenPersistent(){
         if (reconnectNotice != null || realtimeSubscribed) return
         reconnectNotice = Runnable {
@@ -271,7 +290,10 @@ class EmergencyService : Service() {
                     connecting = false
                     // An open TCP/WebSocket connection is not proof that the
                     // private family's Realtime channel was subscribed.
-                    try{sendJoin(webSocket, accessToken)}catch(error:Throwable){
+                    try{
+                        sendJoin(webSocket, accessToken)
+                        expectSubscriptionAck(webSocket)
+                    }catch(error:Throwable){
                         android.util.Log.w("FamiliaNoaRealtime", "Realtime join failed", error)
                         disconnectRealtime(webSocket)
                     }
@@ -306,6 +328,7 @@ class EmergencyService : Service() {
         realtimeSubscribed = false
         connecting = false
         cancelHeartbeat()
+        cancelJoinTimeout()
         refreshTask?.let(handler::removeCallbacks)
         refreshTask = null
         runCatching { webSocket.cancel() }
@@ -319,6 +342,7 @@ class EmergencyService : Service() {
         reconnectAttempt = 0 // reset only after Phoenix confirms subscription
         cancelReconnect()
         cancelReconnectNotice()
+        cancelJoinTimeout()
         updateProtection("Conectado · AYUDA vigilada en tiempo real")
         scheduleHeartbeat(webSocket)
         scheduleTokenRefresh()
@@ -346,7 +370,8 @@ class EmergencyService : Service() {
             .put("payload", payload)
             .put("ref", "1")
             .put("join_ref", "1")
-        webSocket.send(message.toString())
+        if (!webSocket.send(message.toString()))
+            error("Could not send Realtime subscription")
     }
 
     private fun scheduleHeartbeat(webSocket:WebSocket) {
