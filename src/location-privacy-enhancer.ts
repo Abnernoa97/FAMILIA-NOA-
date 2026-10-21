@@ -70,9 +70,18 @@ function ensureStyles(){
 function isOptionalLocationPage(page:HTMLElement){
   const gated=!!page.querySelector('#sharelocation')?.textContent?.toLowerCase().includes('continuar')
   const memberId=getIdentity()?.memberId||''
-  const member=latestState?.members.find(item=>item.id===memberId)
-  // Mandatory profiles must not offer a stop action the server rejects.
-  return !gated&&!!page.querySelector('#back')&&!!member&&!member.must_share_location
+  let member=latestState?.members.find(item=>item.id===memberId)
+  // The GPS must remain switchable OFF while offline; the usual server member
+  // list may be absent after a cold restart without Internet.
+  if(!member){
+    try{
+      const cached=JSON.parse(localStorage.getItem('familia-noa-home-bootstrap-v1')||'null')
+      member=cached?.members?.find((item:{id:string})=>item.id===memberId)
+    }catch{}
+  }
+  // Mandatory screens have a different heading even when no list is cached.
+  const mandatoryHeading=page.querySelector('.locationbox h2')?.textContent?.includes('Mantener ubicación al día')===true
+  return !gated&&!!page.querySelector('#back')&&!mandatoryHeading&&member?.must_share_location===false
 }
 
 function ownLocation(state:LocationState){
