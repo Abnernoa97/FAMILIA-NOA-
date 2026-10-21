@@ -123,6 +123,16 @@ function clearHomeBootstrap(){
   try{localStorage.removeItem(HOME_BOOTSTRAP_KEY)}catch{}
 }
 
+async function loadMembers(force = false) {
+  if (membersLoaded && !force) return
+  const { data } = await supabase.from('family_members').select('id,name,active,must_share_location').eq('active', true).order('created_at')
+  const loaded=(data || []) as Member[]
+  if(loaded.length)members=loaded
+  else if(!members.length)members = FALLBACK.map((name, index) => ({ id:String(index), name, active:true, must_share_location:name === 'Mamá' || name === 'Papá' }))
+  membersLoaded = true
+  saveHomeBootstrap()
+}
+
 function currentMember(){
   return members.find(member=>member.id===memberId)||null
 }
