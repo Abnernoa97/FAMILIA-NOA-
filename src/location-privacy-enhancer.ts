@@ -1,12 +1,28 @@
 import { getIdentity } from './core/identity'
 import { stopSharingOwnLocation, subscribeLocationState, type LocationState } from './core/location-store'
-import { hasNativeLocationCapability, isDeviceLocationEnabled, isNativeLocationSharingEnabled, stopOwnLocationRealtime } from './core/location-device-sync'
+import { hasNativeLocationCapability, isDeviceLocationEnabled, isNativeLocationSharingEnabled, getNativeLocationStatus, stopOwnLocationRealtime, isLocationStopPending, markLocationStopPending, clearLocationStopPending } from './core/location-device-sync'
 
 let latestState:LocationState|null=null
 let busy=false
 let observer:MutationObserver|null=null
 let unsubscribe:(()=>void)|null=null
 let activePage:HTMLElement|null=null
+let deletionRetrying=false
+
+// Persist a pending remote deletion if network access is unavailable, but
+// never delete a newly resumed stream automatically.
+async function retryPendingDeletion(){
+  const memberId=getIdentity()?.memberId||''
+  if(deletionRetrying||!memberId||!isLocationStopPending(memberId)||navigator.onLine===false||
+    (hasNativeLocationCapability()&&isNativeLocationSharingEnabled()))return
+  deletionRetrying=true
+  try{
+    await stopSharingOwnLocation()
+    clearLocationStopPending(memberId)
+    apply()
+  }catch(error){console.warn('Family GPS server deletion is pending',error)}
+  finally{deletionRetrying=false}
+}
 
 function ensureStyles(){
   if(document.querySelector('#location-sharing-ui-css'))return
@@ -53,7 +69,10 @@ function ensureStyles(){
 
 function isOptionalLocationPage(page:HTMLElement){
   const gated=!!page.querySelector('#sharelocation')?.textContent?.toLowerCase().includes('continuar')
-  return !gated&&!!page.querySelector('#back')
+  const memberId=getIdentity()?.memberId||''
+  const member=latestState?.members.find(item=>item.id===memberId)
+  // Mandatory profiles must not offer a stop action the server rejects.
+  return !gated&&!!page.querySelector('#back')&&!!member&&!member.must_share_location
 }
 
 function ownLocation(state:LocationState){
@@ -94,14 +113,22 @@ function ensureStopControl(page:HTMLElement){
       button.disabled=true
       button.textContent='Desactivando…'
       try{
+        const memberId=getIdentity()?.memberId||''
+        if(!memberId||!stopOwnLocationRealtime())throw new Error('NATIVE_GPS_STOP_UNCONFIRMED')
+        // Stop native/WebView tracking before depending on a network request.
+        markLocationStopPending(memberId)
+        apply()
         await stopSharingOwnLocation()
-        stopOwnLocationRealtime()
+        clearLocationStopPending(memberId)
       }catch(error){
         console.error('Stop family location sharing failed',error)
-        button.disabled=false
-        button.textContent='Dejar de compartir ubicación'
+        button.textContent=isLocationStopPending(getIdentity()?.memberId||'')
+          ?'Reintentar eliminación de ubicación'
+          :'No se pudo confirmar la detención · reintentar'
       }finally{
         busy=false
+        button.disabled=false
+        apply()
       }
     })()
   })
@@ -112,28 +139,38 @@ function apply(){
   activePage=page
   if(!page||!latestState||!isOptionalLocationPage(page))return
 
+  const memberId=getIdentity()?.memberId||''
   const row=ownLocation(latestState)
   const nativeRequired=hasNativeLocationCapability()
-  const sharing=!!row&&(!nativeRequired||isNativeLocationSharingEnabled())
+  const status=getNativeLocationStatus()
+  const nativeRequested=isNativeLocationSharingEnabled()
+  const pendingStop=isLocationStopPending(memberId)
+  const tracking=status?.tracking??nativeRequested
   const deviceLocationOff=nativeRequired&&!isDeviceLocationEnabled()
   const age=row?Date.now()-Date.parse(row.updated_at):NaN
-  const stalled=sharing&&Number.isFinite(age)&&age>120_000
-  // An Android sharing preference means the user requested tracking, not that
-  // system GPS is on or that the server is currently receiving new positions.
-  // Always expose the existing activation button if either condition fails.
-  const needsRecovery=sharing&&(deviceLocationOff||stalled)
+  const serverRecent=!!row&&Number.isFinite(age)&&age>=-30_000&&age<=120_000
+  const sharing=!!row&&(!nativeRequired||tracking)&&!pendingStop
+  const needsRecovery=!pendingStop&&nativeRequired&&nativeRequested&&
+    (deviceLocationOff||!tracking||!serverRecent)
   page.classList.toggle('location-sharing-active',sharing&&!needsRecovery)
 
-  if(sharing){
+  // A stale row or Android tracker which is requested but stopped must still
+  // allow an optional profile to turn sharing off.
+  if(row||nativeRequested||pendingStop){
     ensureStopControl(page)
     const notice=page.querySelector<HTMLElement>('[data-location-native-stale]')
     if(notice){
-      notice.classList.toggle('visible',needsRecovery)
-      notice.textContent=deviceLocationOff
-        ?'La ubicación del teléfono está apagada. Reactívala para volver a compartir en tiempo real.'
-        :stalled
-          ?'No hemos recibido una posición nueva. Puedes volver a intentar el seguimiento.'
-          :''
+      const message=pendingStop
+        ?'Seguimiento detenido en este teléfono. La eliminación de la última posición del servidor está pendiente de conexión.'
+        :deviceLocationOff&&nativeRequested
+          ?'La ubicación del teléfono está apagada. Reactívala para volver a compartir en tiempo real.'
+          :nativeRequested&&!tracking
+            ?'El seguimiento está solicitado, pero el rastreador Android no está activo.'
+            :nativeRequested&&!serverRecent
+              ?'Android está activado, pero Supabase todavía no confirma una posición reciente.'
+              :''
+      notice.classList.toggle('visible',!!message)
+      notice.textContent=message
     }
   }else removeStopControl(page)
 
@@ -146,7 +183,7 @@ function apply(){
     if(description){
       description.textContent=deviceLocationOff
         ?'El GPS general del teléfono está apagado. Toca el botón para abrir los ajustes de Android.'
-        :'Tu última ubicación ya no está actualizada. Toca el botón para obtener una posición nueva.'
+        :'La posición todavía no está confirmada por el servidor. Toca para reintentar.'
     }
   }
 }
@@ -171,8 +208,17 @@ if(app){
 }
 
 window.addEventListener('familia-noa:native-location-state',apply)
-window.addEventListener('familia-noa:android-resumed',apply)
-window.addEventListener('focus',apply)
+window.addEventListener('familia-noa:android-resumed',()=>{
+  apply()
+  void retryPendingDeletion()
+})
+window.addEventListener('focus',()=>{
+  apply()
+  void retryPendingDeletion()
+})
+window.addEventListener('online',()=>void retryPendingDeletion())
+window.addEventListener('pageshow',()=>void retryPendingDeletion())
+window.addEventListener('familia-noa:identity-changed',()=>void retryPendingDeletion())
 const staleRefresh=window.setInterval(()=>{if(!document.hidden)apply()},30_000)
 
 window.addEventListener('beforeunload',()=>{
@@ -184,3 +230,4 @@ window.addEventListener('beforeunload',()=>{
 },{once:true})
 
 apply()
+void retryPendingDeletion()
