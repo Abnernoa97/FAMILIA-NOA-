@@ -196,7 +196,23 @@ function scheduleCapture(delay=160){
   captureTimer=window.setTimeout(captureAll,delay)
 }
 
-const observer=new MutationObserver(()=>{
+// This observer runs throughout the app lifetime. Avoid cloning and persisting
+// snapshots for unrelated changes on the home page, map controls, or global UI.
+// Still observe every change within cached views and newly mounted view roots.
+const SNAPSHOT_ROOTS='[data-photo-page],.chat-page,.location-page,.presume-screen'
+function affectsSnapshotView(record:MutationRecord){
+  const target=record.target
+  if(target instanceof Element&&
+    (target.matches(SNAPSHOT_ROOTS)||target.closest(SNAPSHOT_ROOTS)))return true
+  if(record.type!=='childList')return false
+  return Array.from(record.addedNodes).some(node=>
+    node instanceof Element&&
+    (node.matches(SNAPSHOT_ROOTS)||!!node.querySelector(SNAPSHOT_ROOTS))
+  )
+}
+
+const observer=new MutationObserver(records=>{
+  if(!records.some(affectsSnapshotView))return
   restoreAll()
   scheduleCapture()
 })
