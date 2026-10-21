@@ -13,7 +13,7 @@ let deletionRetrying=false
 // never delete a newly resumed stream automatically.
 async function retryPendingDeletion(){
   const memberId=getIdentity()?.memberId||''
-  if(deletionRetrying||!memberId||!isLocationStopPending(memberId)||navigator.onLine===false||
+  if(busy||deletionRetrying||!memberId||!isLocationStopPending(memberId)||navigator.onLine===false||
     (hasNativeLocationCapability()&&isNativeLocationSharingEnabled()))return
   deletionRetrying=true
   try{
