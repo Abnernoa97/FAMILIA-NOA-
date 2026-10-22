@@ -24,6 +24,10 @@ class FamilyLocationTracker(
 ) : LocationListener {
     companion object {
         private const val MIN_UPDATE_MS = 10_000L
+        // Higher acquisition frequency is temporary, only until a verified
+        // first upload succeeds. After that, restore the normal battery budget.
+        private const val ACQUISITION_UPDATE_MS = 1_000L
+        private const val MAX_ACQUISITION_BURST_MS = 30_000L
         private const val MAX_SILENCE_MS = 20_000L
         private const val HEARTBEAT_MS = 30_000L
         private const val MAX_FIX_AGE_MS = 12_000L
@@ -57,6 +61,8 @@ class FamilyLocationTracker(
     private var firstNetworkCandidate: Location? = null
     @Volatile private var lastUploadAt = 0L
     @Volatile private var startedElapsedNanos = 0L
+    // LocationManager listener callbacks are on the main looper.
+    @Volatile private var acquiringFirstLocation = false
 
     fun start(): Boolean {
         if (running) return true
@@ -80,13 +86,14 @@ class FamilyLocationTracker(
             providers.forEach { provider ->
                 locationManager.requestLocationUpdates(
                     provider,
-                    MIN_UPDATE_MS,
-                    0f, // Keep receiving fixes while stationary; upload() still filters movement.
+                    ACQUISITION_UPDATE_MS,
+                    0f, // Capture enough independent fixes for a trustworthy first position.
                     this,
                     Looper.getMainLooper()
                 )
             }
 
+            acquiringFirstLocation = true
             trackingGeneration.incrementAndGet()
             running = true
             beginHeartbeat()
@@ -115,6 +122,37 @@ class FamilyLocationTracker(
         firstNetworkCandidate = null
         lastUploadAt = 0L
         startedElapsedNanos = 0L
+        acquiringFirstLocation = false
+    }
+
+    private fun restoreNormalUpdateRate(generation: Int) {
+        if (!running || generation != trackingGeneration.get() ||
+            !store.locationSharingEnabled || !acquiringFirstLocation) return
+        // Only re-register after server ACK, not merely a local GPS callback.
+        // Never change the source or the timestamps of the accepted fix.
+        val providers = buildList {
+            if (appContext.checkSelfPermission(Manifest.permission.ACCESS_FINE_LOCATION) == PackageManager.PERMISSION_GRANTED &&
+                runCatching { locationManager.isProviderEnabled(LocationManager.GPS_PROVIDER) }.getOrDefault(false)) {
+                add(LocationManager.GPS_PROVIDER)
+            }
+            if (runCatching { locationManager.isProviderEnabled(LocationManager.NETWORK_PROVIDER) }.getOrDefault(false)) {
+                add(LocationManager.NETWORK_PROVIDER)
+            }
+        }
+        if (providers.isEmpty()) return
+        try {
+            locationManager.removeUpdates(this)
+            providers.forEach { provider ->
+                locationManager.requestLocationUpdates(
+                    provider, MIN_UPDATE_MS, 0f, this, Looper.getMainLooper()
+                )
+            }
+            acquiringFirstLocation = false
+        } catch (error: Throwable) {
+            // Do not suppress an already accepted server location. The
+            // heartbeat can retry registration after a transient provider error.
+            Log.w("FamiliaNoaGPS", "Unable to restore steady GPS interval", error)
+        }
     }
 
     fun refreshNow() {
@@ -231,9 +269,19 @@ class FamilyLocationTracker(
                     accuracy = if (location.hasAccuracy()) location.accuracy else null,
                 )
                 if (running && store.locationSharingEnabled && generation == trackingGeneration.get()) {
+                    val firstConfirmedUpload = lastUploadedLocation == null
                     lastUploadedLocation = Location(location)
                     lastUploadAt = System.currentTimeMillis()
                     store.recordLocationUpload()
+                    if (firstConfirmedUpload) {
+                        val latencyMs = TimeUnit.NANOSECONDS.toMillis(
+                            SystemClock.elapsedRealtimeNanos() - startedElapsedNanos
+                        )
+                        Log.i("FamiliaNoaGPS", "First fresh position uploaded in ${latencyMs}ms (accuracy: ${location.accuracy.toInt()}m)")
+                    }
+                    if (acquiringFirstLocation) {
+                        heartbeatHandler.post { restoreNormalUpdateRate(generation) }
+                    }
                 }
             } catch (error: Throwable) {
                 Log.w("FamiliaNoaGPS", "Upload failed; the next sample will retry", error)
@@ -257,12 +305,18 @@ class FamilyLocationTracker(
         val task = object:Runnable {
             override fun run() {
                 if (!running) return
-                val acquiringFirstFix = lastUploadedLocation == null
+                // A 1s acquisition interval is useful briefly, but must not
+                // drain battery indefinitely when there is no GPS or Internet.
+                if (acquiringFirstLocation &&
+                    TimeUnit.NANOSECONDS.toMillis(
+                        SystemClock.elapsedRealtimeNanos() - startedElapsedNanos
+                    ) >= MAX_ACQUISITION_BURST_MS) {
+                    restoreNormalUpdateRate(trackingGeneration.get())
+                }
+                val acquiringFirstFix = lastUploadedLocation == null && acquiringFirstLocation
                 if (acquiringFirstFix || System.currentTimeMillis() - lastUploadAt >= MAX_SILENCE_MS) {
                     requestFreshFix()
                 }
-                // Quick acquisition retries only until the first confirmed
-                // upload; background heartbeat returns to 30s thereafter.
                 heartbeatHandler.postDelayed(this, if (acquiringFirstFix) 8_000L else HEARTBEAT_MS)
             }
         }

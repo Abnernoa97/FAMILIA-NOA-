@@ -127,6 +127,57 @@ function scheduleRealtimeRefresh(){
   },90)
 }
 
+// Supabase Realtime delivers the server-confirmed row in the UPDATE/INSERT.
+// Render that row immediately, rather than waiting for three parallel REST
+// queries (members, locations and photos) just to position one marker.
+// The scheduled refresh below still reconciles membership and missed events.
+function showRealtimeLocationChange(event:{
+  eventType:string
+  new:Record<string,unknown>
+  old:Record<string,unknown>
+}){
+  if(event.eventType==='DELETE'){
+    const id=event.old?.member_id
+    if(typeof id!=='string'||!id)return
+    if(!state.locations.some(row=>row.member_id===id))return
+    state={
+      ...state,
+      locations:state.locations.filter(row=>row.member_id!==id),
+      revision:state.revision+1,
+    }
+    publish()
+    return
+  }
+  const data=event.new
+  if(!data||typeof data.member_id!=='string'||typeof data.latitude!=='number'||
+    typeof data.longitude!=='number'||typeof data.updated_at!=='string')return
+  if(data.accuracy!==null&&typeof data.accuracy!=='number')return
+  if(!state.members.some(member=>member.id===data.member_id))return
+  const incoming:FamilyLocation={
+    member_id:data.member_id,latitude:data.latitude,longitude:data.longitude,
+    accuracy:typeof data.accuracy==='number'?data.accuracy:null,
+    updated_at:data.updated_at,
+  }
+  if(!validCoordinate(incoming)||!Number.isFinite(Date.parse(incoming.updated_at)))return
+  const existing=state.locations.find(row=>row.member_id===incoming.member_id)
+  if(existing&&Date.parse(existing.updated_at)>Date.parse(incoming.updated_at))return
+  state={
+    ...state,
+    locations:[...state.locations.filter(row=>row.member_id!==incoming.member_id),incoming],
+    revision:state.revision+1,
+  }
+  publish()
+}
+
+function onRealtimeLocationChange(event:{
+  eventType:string
+  new:Record<string,unknown>
+  old:Record<string,unknown>
+}){
+  showRealtimeLocationChange(event)
+  scheduleRealtimeRefresh()
+}
+
 function teardownRealtime(){
   if(channel){
     try{void channel.unsubscribe()}catch{}
@@ -158,7 +209,7 @@ function startRealtime(){
   }
   setSyncStatus(reconnectAttempt?'reconnecting':'connecting')
   channel=supabase.channel('familia-noa-location-state')
-    .on('postgres_changes',{event:'*',schema:'public',table:'locations'},scheduleRealtimeRefresh)
+    .on('postgres_changes',{event:'*',schema:'public',table:'locations'},onRealtimeLocationChange)
     .on('postgres_changes',{event:'*',schema:'public',table:'family_members'},scheduleRealtimeRefresh)
     .on('postgres_changes',{event:'*',schema:'public',table:'family_profiles'},scheduleRealtimeRefresh)
     .subscribe(status=>{
