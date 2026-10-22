@@ -33,8 +33,8 @@ class FamilyLocationTracker(
         private const val MAX_FIX_AGE_MS = 12_000L
         private const val MAX_ACCURACY_M = 65f
         private const val MAX_NETWORK_ACCURACY_M = 45f
-        // Network fixes must be newly observed, precise and independently
-        // corroborated. Do not add an extra fixed 3s delay after that.
+        // Do not artificially hold precise fresh network fixes for 15 seconds.
+        private const val FIRST_NETWORK_SETTLE_MS = 3_000L
         private const val NETWORK_CONFIRM_SEPARATION_MS = 1_200L
         private const val MIN_DISTANCE_M = 2.5f
     }
@@ -186,13 +186,14 @@ class FamilyLocationTracker(
         if (previous == null && location.provider == LocationManager.NETWORK_PROVIDER &&
             appContext.checkSelfPermission(Manifest.permission.ACCESS_FINE_LOCATION) == PackageManager.PERMISSION_GRANTED &&
             runCatching { locationManager.isProviderEnabled(LocationManager.GPS_PROVIDER) }.getOrDefault(false)) {
+            val elapsed = TimeUnit.NANOSECONDS.toMillis(
+                SystemClock.elapsedRealtimeNanos() - startedElapsedNanos
+            )
             val candidate = firstNetworkCandidate
             val independent = candidate != null &&
                 location.elapsedRealtimeNanos - candidate.elapsedRealtimeNanos >=
                 TimeUnit.MILLISECONDS.toNanos(NETWORK_CONFIRM_SEPARATION_MS)
-            // The first candidate never reaches the server. Only a second
-            // independently timed, corroborating and accurate NEW fix can do so.
-            if (candidate == null || !fresh(candidate) ||
+            if (elapsed < FIRST_NETWORK_SETTLE_MS || candidate == null || !fresh(candidate) ||
                 !independent || location.accuracy > 30f || candidate.accuracy > 30f ||
                 candidate.distanceTo(location) > 35f) {
                 firstNetworkCandidate = Location(location)
