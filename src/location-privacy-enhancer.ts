@@ -1,5 +1,5 @@
 import { getIdentity } from './core/identity'
-import { stopSharingOwnLocation, subscribeLocationState, isCurrentFamilyLocation, type LocationState } from './core/location-store'
+import { stopSharingOwnLocation, subscribeLocationState, isCurrentFamilyLocation, notifyFamilyLocationPrivacyChanged, type LocationState } from './core/location-store'
 import {
   hasNativeLocationCapability, isDeviceLocationEnabled,
   isNativeLocationSharingEnabled, getNativeLocationStatus,
@@ -124,6 +124,7 @@ function ensureControls(page:HTMLElement){
         if(!memberId||!stopOwnLocationRealtime())throw new Error('NATIVE_GPS_STOP_UNCONFIRMED')
         // Native and browser tracking stop BEFORE any network activity.
         markLocationStopPending(memberId)
+        notifyFamilyLocationPrivacyChanged()
         apply()
         await stopSharingOwnLocation()
         clearLocationStopPending(memberId)
