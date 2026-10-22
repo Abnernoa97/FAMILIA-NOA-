@@ -20,13 +20,8 @@ export type FamilyLocation={
 // window. Keep older coordinates in storage for controlled retention only.
 export const LIVE_LOCATION_WINDOW_MS=75_000
 export const MAX_LIVE_ACCURACY_M=65
-// Foreground map sessions require a newly confirmed server observation
-// instead of showing an older coordinate just because it is <75s old.
-let currentViewStartedAt=0
-export function requireNewFamilyLocationFix(){
-  currentViewStartedAt=Date.now()-2_000
-  publish()
-}
+// A recent server-confirmed point can stay visible across app reopen/resume.
+// Positions still expire automatically after the freshness window.
 export function isLiveFamilyLocation(updatedAt:string, now=Date.now()){
   const age=now-Date.parse(updatedAt)
   return Number.isFinite(age)&&age>=-15_000&&age<LIVE_LOCATION_WINDOW_MS
@@ -35,7 +30,6 @@ export function isCurrentFamilyLocation(row:FamilyLocation, now=Date.now()){
   return isLiveFamilyLocation(row.updated_at,now)&&
     typeof row.accuracy==='number'&&Number.isFinite(row.accuracy)&&
     row.accuracy>=0&&row.accuracy<=MAX_LIVE_ACCURACY_M&&
-    Date.parse(row.updated_at)>=currentViewStartedAt&&
     Number.isFinite(row.latitude)&&Number.isFinite(row.longitude)&&
     row.latitude>=-90&&row.latitude<=90&&row.longitude>=-180&&row.longitude<=180
 }
@@ -258,7 +252,6 @@ export async function stopSharingOwnLocation(){
 
 document.addEventListener('visibilitychange',()=>{
   if(!document.hidden&&listeners.size){
-    requireNewFamilyLocationFix()
     startRealtime()
     void refreshLocationState({force:true})
   }
@@ -266,7 +259,6 @@ document.addEventListener('visibilitychange',()=>{
 
 window.addEventListener('familia-noa:android-resumed',()=>{
   if(!listeners.size)return
-  requireNewFamilyLocationFix()
   void refreshLocationState({force:true})
 })
 
