@@ -1,4 +1,5 @@
 import { getMemberId } from './core/identity'
+import { noteFamilyMarkerUpdated, noteFamilyMapOpened, noteFamilyMapReady } from './core/location-performance'
 import { mediaUrl, primeMedia } from './core/private-media'
 import { getLocationState, refreshLocationState, subscribeLocationState, isCurrentFamilyLocation, type LocationState } from './core/location-store'
 import { hasNativeLocationCapability, isDeviceLocationEnabled, refreshMemberLocation } from './core/location-device-sync'
@@ -375,6 +376,14 @@ function renderMarkers(MapLibre:any){
     }
   }
   syncMarkerViewport()
+  // Local performance counters only: no names, positions or identifiers
+  // leave this WebView. Paint timing is captured after the next two frames.
+  currentLocations.forEach(item=>{
+    const marker=markers.get(item.member_id)
+    if(marker && (marker.getElement() as HTMLElement).style.visibility!=='hidden'){
+      noteFamilyMarkerUpdated(item.member_id,item.updated_at)
+    }
+  })
 }
 
 function showOverlay(shell:HTMLElement,kind:'loading'|'empty'|'error'){
@@ -489,6 +498,7 @@ async function applyState(state:LocationState){
       instance.on('load',()=>{
         if(map!==instance||run!==generation||!document.contains(shell))return
         mapLoaded=true
+        noteFamilyMapReady()
         add3dBuildings(instance)
         renderMarkers(MapLibre)
         // Update visibility only once the new MapLibre camera has rendered.
@@ -553,6 +563,7 @@ window.addEventListener('familia-noa:android-resumed',()=>{
 })
 
 function attachPage(page:HTMLElement){
+  noteFamilyMapOpened()
   ensurePanel(page)
   if(liveRefreshTimer!==null)window.clearInterval(liveRefreshTimer)
   // Positions expire from the live map automatically, even without a new
