@@ -91,6 +91,14 @@ let reconnectTimer:number|null=null
 let reconnectAttempt=0
 const listeners=new Set<Listener>()
 const CACHE_TTL_MS=10_000
+// Realtime is authoritative for the moving marker. A slower REST refresh
+// must not overwrite a newer event or resurrect a row just deleted.
+const REALTIME_RECONCILE_MS=12_000
+let realtimeSequence=0
+const realtimeMutations=new Map<string,{
+  sequence:number
+  location:FamilyLocation|null
+}>()
 
 function publish(){
   const snapshot=getLocationState()
@@ -139,6 +147,7 @@ function showRealtimeLocationChange(event:{
   if(event.eventType==='DELETE'){
     const id=event.old?.member_id
     if(typeof id!=='string'||!id)return
+    realtimeMutations.set(id,{sequence:++realtimeSequence,location:null})
     if(!state.locations.some(row=>row.member_id===id))return
     state={
       ...state,
@@ -152,7 +161,6 @@ function showRealtimeLocationChange(event:{
   if(!data||typeof data.member_id!=='string'||typeof data.latitude!=='number'||
     typeof data.longitude!=='number'||typeof data.updated_at!=='string')return
   if(data.accuracy!==null&&typeof data.accuracy!=='number')return
-  if(!state.members.some(member=>member.id===data.member_id))return
   const incoming:FamilyLocation={
     member_id:data.member_id,latitude:data.latitude,longitude:data.longitude,
     accuracy:typeof data.accuracy==='number'?data.accuracy:null,
@@ -161,6 +169,12 @@ function showRealtimeLocationChange(event:{
   if(!validCoordinate(incoming)||!Number.isFinite(Date.parse(incoming.updated_at)))return
   const existing=state.locations.find(row=>row.member_id===incoming.member_id)
   if(existing&&Date.parse(existing.updated_at)>Date.parse(incoming.updated_at))return
+  realtimeMutations.set(incoming.member_id,{
+    sequence:++realtimeSequence,location:incoming,
+  })
+  // Before the initial family membership fetch, retain the verified event
+  // for reconciliation rather than exposing an unidentified member on screen.
+  if(!state.members.some(member=>member.id===incoming.member_id))return
   state={
     ...state,
     locations:[...state.locations.filter(row=>row.member_id!==incoming.member_id),incoming],
@@ -175,7 +189,12 @@ function onRealtimeLocationChange(event:{
   old:Record<string,unknown>
 }){
   showRealtimeLocationChange(event)
-  scheduleRealtimeRefresh()
+  // Each Realtime change already carries the server row. A full triple-table
+  // reload for every GPS sample slows the WebView and can race newer events.
+  // Keep occasional reconciliation for dropped events or changing profiles.
+  if(!state.updatedAt||Date.now()-state.updatedAt>=REALTIME_RECONCILE_MS){
+    scheduleRealtimeRefresh()
+  }
 }
 
 function teardownRealtime(){
@@ -245,6 +264,7 @@ export async function refreshLocationState(options:{force?:boolean}={}):Promise<
   if(inflight)return inflight
   if(!force&&state.updatedAt&&Date.now()-state.updatedAt<CACHE_TTL_MS)return getLocationState()
 
+  const realtimeAtRequestStart=realtimeSequence
   state={...state,loading:true,error:null}
   publish()
 
@@ -260,8 +280,25 @@ export async function refreshLocationState(options:{force?:boolean}={}):Promise<
 
       const members=((membersResult.data||[]) as LocationMember[]).filter(member=>member.active!==false)
       const memberIds=new Set(members.map(member=>member.id))
-      const locations=((locationsResult.data||[]) as FamilyLocation[])
+      const serverLocations=((locationsResult.data||[]) as FamilyLocation[])
         .filter(row=>memberIds.has(row.member_id)&&validCoordinate(row))
+      const byMember=new Map(serverLocations.map(row=>[row.member_id,row]))
+      // Merge Realtime events that arrived while the REST request was in
+      // flight. Older REST responses must never move a family member back.
+      for(const [memberId,mutation] of realtimeMutations){
+        if(!memberIds.has(memberId))continue
+        if(mutation.location===null){
+          if(mutation.sequence>realtimeAtRequestStart)byMember.delete(memberId)
+          continue
+        }
+        const fetched=byMember.get(memberId)
+        const newerThanRest=!fetched||
+          Date.parse(mutation.location.updated_at)>Date.parse(fetched.updated_at)
+        if((mutation.sequence>realtimeAtRequestStart||fetched)&&newerThanRest){
+          byMember.set(memberId,mutation.location)
+        }
+      }
+      const locations=[...byMember.values()]
       const profiles=profilesResult.error
         ? state.profiles
         : ((profilesResult.data||[]) as LocationProfile[]).filter(profile=>memberIds.has(profile.member_id))
