@@ -29,6 +29,9 @@ class FamilyLocationTracker(
         private const val MAX_FIX_AGE_MS = 12_000L
         private const val MAX_ACCURACY_M = 65f
         private const val MAX_NETWORK_ACCURACY_M = 45f
+        // Do not artificially hold precise fresh network fixes for 15 seconds.
+        private const val FIRST_NETWORK_SETTLE_MS = 3_000L
+        private const val NETWORK_CONFIRM_SEPARATION_MS = 1_200L
         private const val MIN_DISTANCE_M = 2.5f
     }
 
@@ -39,7 +42,10 @@ class FamilyLocationTracker(
     private val trackingGeneration = AtomicInteger(0)
     private val heartbeatHandler = Handler(Looper.getMainLooper())
     private var heartbeat:Runnable? = null
-    private var currentFix:CancellationSignal? = null
+    // GPS and NETWORK one-shot requests can run in parallel: a slow satellite
+    // lock must not block a fast, independently corroborated network fix.
+    // Confined to main looper together with provider callbacks.
+    private val currentFixes = mutableMapOf<String,CancellationSignal>()
 
     @Volatile
     var running: Boolean = false
@@ -57,7 +63,8 @@ class FamilyLocationTracker(
         if (!store.configured || store.memberId.isBlank() || !store.locationSharingEnabled || !hasLocationPermission()) return false
 
         val providers = buildList {
-            if (runCatching { locationManager.isProviderEnabled(LocationManager.GPS_PROVIDER) }.getOrDefault(false)) {
+            if (appContext.checkSelfPermission(Manifest.permission.ACCESS_FINE_LOCATION) == PackageManager.PERMISSION_GRANTED &&
+                runCatching { locationManager.isProviderEnabled(LocationManager.GPS_PROVIDER) }.getOrDefault(false)) {
                 add(LocationManager.GPS_PROVIDER)
             }
             if (runCatching { locationManager.isProviderEnabled(LocationManager.NETWORK_PROVIDER) }.getOrDefault(false)) {
@@ -97,8 +104,8 @@ class FamilyLocationTracker(
     fun stop() {
         heartbeat?.let(heartbeatHandler::removeCallbacks)
         heartbeat = null
-        currentFix?.cancel()
-        currentFix = null
+        currentFixes.values.forEach { it.cancel() }
+        currentFixes.clear()
         // Clear partially registered providers too, even if start() failed.
         trackingGeneration.incrementAndGet()
         runCatching { locationManager.removeUpdates(this) }
@@ -145,8 +152,11 @@ class FamilyLocationTracker(
                 SystemClock.elapsedRealtimeNanos() - startedElapsedNanos
             )
             val candidate = firstNetworkCandidate
-            if (elapsed < 15_000L || candidate == null || !fresh(candidate) ||
-                location.accuracy > 30f || candidate.accuracy > 30f ||
+            val independent = candidate != null &&
+                location.elapsedRealtimeNanos - candidate.elapsedRealtimeNanos >=
+                TimeUnit.MILLISECONDS.toNanos(NETWORK_CONFIRM_SEPARATION_MS)
+            if (elapsed < FIRST_NETWORK_SETTLE_MS || candidate == null || !fresh(candidate) ||
+                !independent || location.accuracy > 30f || candidate.accuracy > 30f ||
                 candidate.distanceTo(location) > 35f) {
                 firstNetworkCandidate = Location(location)
                 uploading.set(false)
@@ -258,32 +268,42 @@ class FamilyLocationTracker(
     }
 
     private fun requestFreshFix() {
-        if (!running || Build.VERSION.SDK_INT < 30 || currentFix != null) return
-        // Prefer satellite fixes; network-only estimates frequently jump
-        // between blocks without a real movement by the family member.
-        val provider = listOf(LocationManager.GPS_PROVIDER, LocationManager.NETWORK_PROVIDER)
-            .firstOrNull { runCatching { locationManager.isProviderEnabled(it) }.getOrDefault(false) }
-            ?: return
-        val signal = CancellationSignal()
-        currentFix = signal
-        val timeout = Runnable {
-            if (currentFix === signal) {
-                currentFix = null
-                signal.cancel()
+        if (!running || Build.VERSION.SDK_INT < 30) return
+        val providers = listOf(LocationManager.GPS_PROVIDER, LocationManager.NETWORK_PROVIDER)
+            .filter { provider ->
+                // Fine permission is required to request the satellite provider.
+                (provider != LocationManager.GPS_PROVIDER ||
+                    appContext.checkSelfPermission(Manifest.permission.ACCESS_FINE_LOCATION) == PackageManager.PERMISSION_GRANTED) &&
+                    runCatching { locationManager.isProviderEnabled(provider) }.getOrDefault(false)
             }
-        }
-        heartbeatHandler.postDelayed(timeout, 15_000L)
-        try {
-            locationManager.getCurrentLocation(provider, signal, { task -> heartbeatHandler.post(task) }) { location ->
+
+        providers.forEach { provider ->
+            if (currentFixes.containsKey(provider)) return@forEach
+            val signal = CancellationSignal()
+            currentFixes[provider] = signal
+            val timeout = Runnable {
+                if (currentFixes[provider] === signal) {
+                    currentFixes.remove(provider)
+                    signal.cancel()
+                }
+            }
+            // The continuous listener stays active if the one-shot times out.
+            // Parallel requests are not serialized behind a satellite timeout.
+            val timeoutMs = if (provider == LocationManager.NETWORK_PROVIDER) 6_000L else 9_000L
+            heartbeatHandler.postDelayed(timeout, timeoutMs)
+            try {
+                locationManager.getCurrentLocation(provider, signal, { task -> heartbeatHandler.post(task) }) { location ->
+                    heartbeatHandler.removeCallbacks(timeout)
+                    if (currentFixes[provider] !== signal) return@getCurrentLocation
+                    currentFixes.remove(provider)
+                    if (running && location != null) upload(location, force = true)
+                }
+            } catch (error: Throwable) {
                 heartbeatHandler.removeCallbacks(timeout)
-                if (currentFix !== signal) return@getCurrentLocation
-                currentFix = null
-                if (running && location != null) upload(location, force = true)
+                currentFixes.remove(provider)
+                signal.cancel()
+                Log.w("FamiliaNoaGPS", "Current position request failed for $provider", error)
             }
-        } catch (error: Throwable) {
-            heartbeatHandler.removeCallbacks(timeout)
-            currentFix = null
-            Log.w("FamiliaNoaGPS", "Fresh position request failed", error)
         }
     }
 
