@@ -84,18 +84,26 @@ function waitForNativeFix(memberId:string,previousUpdatedAt:string,startedAt:num
 function resumeAndroidLocationSettings(){
   if(!awaitingAndroidLocationSettings||document.hidden)return
   awaitingAndroidLocationSettings=false
-  window.setTimeout(()=>{
+  let checks=0
+  const resume=()=>{
     const label=document.querySelector<HTMLElement>('#locationtext')
     const button=document.querySelector<HTMLButtonElement>('#sharelocation')
     if(!label||!button)return
     if(hasNativeLocationCapability()&&!isDeviceLocationEnabled()){
+      // Some Android devices need a short moment to report the new system
+      // location switch. Try immediately first; only wait if still OFF.
+      if(++checks<4){
+        window.setTimeout(resume,75)
+        return
+      }
       label.textContent='La ubicación general del teléfono sigue apagada. Actívala en los ajustes de Android.'
       button.disabled=false
       button.textContent='Abrir ajustes de ubicación'
       return
     }
     void shareLocation()
-  },400)
+  }
+  window.setTimeout(resume,0)
 }
 window.addEventListener('familia-noa:android-resumed',resumeAndroidLocationSettings)
 document.addEventListener('visibilitychange',()=>{
