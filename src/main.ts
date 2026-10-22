@@ -7,7 +7,7 @@ import { startHomeChatUnread, stopHomeChatUnread } from './chat-features'
 import { initNavigation, enterView, replaceView, backView, type AppView } from './core/navigation'
 import { closeMediaViewer, isMediaViewerOpen } from './core/media-viewer'
 import { clearPrivateMediaCache } from './core/private-media'
-import { getLocationState, refreshLocationState, saveOwnLocation, subscribeLocationState, isCurrentFamilyLocation, requireNewFamilyLocationFix, type LocationState } from './core/location-store'
+import { getLocationState, refreshLocationState, saveOwnLocation, subscribeLocationState, isCurrentFamilyLocation, type LocationState } from './core/location-store'
 import { activateNativeLocationSharing, ensureOwnLocationRealtime, hasNativeLocationCapability, isDeviceLocationEnabled, isNativeLocationSharingEnabled, openDeviceLocationSettings, refreshMemberLocation, startOwnLocationRealtime } from './core/location-device-sync'
 
 type Member = { id: string; name: string; active: boolean; must_share_location: boolean }
@@ -378,7 +378,6 @@ async function renderPhotos(push = true) {
 }
 
 function renderMandatoryLocation(){
-  requireNewFamilyLocationFix()
   mandatoryLocationGateActive=true
   replaceView('location')
   stopHomeChatUnread()
@@ -393,7 +392,6 @@ function renderMandatoryLocation(){
 
 async function renderLocation(push = true) {
   if (requiresMandatoryLocation()) { renderMandatoryLocation(); return }
-  requireNewFamilyLocationFix()
   mandatoryLocationGateActive=false
   if (push) enterView('location')
   stopHomeChatUnread()
