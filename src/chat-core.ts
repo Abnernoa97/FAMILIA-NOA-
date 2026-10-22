@@ -618,22 +618,71 @@ export async function openChat(options:OpenChatOptions){
     finally{synchronizing=false}
   }
 
-  const onConnectivityReturn=()=>{if(!closed)void synchronizeLatest()}
-  const onVisibilityReturn=()=>{if(document.visibilityState==='visible')void synchronizeLatest()}
+  // Keep the current PWA chat channel healthy when Android backgrounds the
+  // WebView or the network changes. Supabase remains the source of truth.
+  let coreReconnectTimer:number|null=null
+  let reconnectAttempts=0
+  const cancelCoreReconnect=()=>{
+    if(coreReconnectTimer!==null)window.clearTimeout(coreReconnectTimer)
+    coreReconnectTimer=null
+  }
+  const detachCoreChannel=()=>{
+    const old=coreChannel
+    coreChannel=null
+    if(old)void supabase.removeChannel(old)
+  }
+  const scheduleCoreReconnect=()=>{
+    if(closed||coreReconnectTimer!==null||!navigator.onLine)return
+    const delay=Math.min(1000*2**Math.min(reconnectAttempts++,4),15000)
+    coreReconnectTimer=window.setTimeout(()=>{
+      coreReconnectTimer=null
+      if(closed||!navigator.onLine)return
+      subscribeCore()
+    },delay)
+  }
   const subscribeCore=()=>{
-    coreChannel=supabase.channel(`familia-noa-chat-core-${memberId}`)
+    if(closed||coreChannel||!navigator.onLine)return
+    const next=supabase.channel(`familia-noa-chat-core-${memberId}`)
+    coreChannel=next
+    next
       .on('postgres_changes',{event:'INSERT',schema:'public',table:'messages'},payload=>{
         const row=payload.new as RawChatRow
-        if(!row?.id||byId.has(row.id)||closed)return
-        void(async()=>{if(row.attachment_path){try{await signMedia(row.attachment_path)}catch(error){console.error('Chat media authorization failed',error)}}await appendMessage(nameRow(row),false)})()
+        if(!row?.id||byId.has(row.id)||closed||coreChannel!==next)return
+        void(async()=>{if(row.attachment_path){try{await signMedia(row.attachment_path)}catch(error){console.error('Chat media authorization failed',error)}}if(!closed)await appendMessage(nameRow(row),false)})()
       })
       .on('postgres_changes',{event:'UPDATE',schema:'public',table:'messages'},payload=>{
         const row=payload.new as RawChatRow
-        if(!row?.id||!byId.has(row.id)||closed)return
-        const current=byId.get(row.id)!,next={...current,...row,sender:current.sender}
-        byId.set(row.id,next);const index=all.findIndex(message=>message.id===row.id);if(index>=0)all[index]=next;replaceMessageElement(row.id)
+        if(!row?.id||!byId.has(row.id)||closed||coreChannel!==next)return
+        const current=byId.get(row.id)!,updated={...current,...row,sender:current.sender}
+        byId.set(row.id,updated);const index=all.findIndex(message=>message.id===row.id);if(index>=0)all[index]=updated;replaceMessageElement(row.id)
       })
-      .subscribe(status=>{if(status==='SUBSCRIBED')void synchronizeLatest()})
+      .subscribe(status=>{
+        if(closed||coreChannel!==next)return
+        if(status==='SUBSCRIBED'){
+          reconnectAttempts=0
+          cancelCoreReconnect()
+          // Reconcile any messages missed during the interruption.
+          void synchronizeLatest()
+        }else if(status==='CHANNEL_ERROR'||status==='TIMED_OUT'||status==='CLOSED'){
+          detachCoreChannel()
+          scheduleCoreReconnect()
+        }
+      })
+  }
+  const onConnectivityReturn=()=>{
+    if(closed)return
+    cancelCoreReconnect()
+    if(!coreChannel)subscribeCore()
+    void synchronizeLatest()
+  }
+  const onConnectivityLost=()=>{
+    cancelCoreReconnect()
+    detachCoreChannel()
+  }
+  const onVisibilityReturn=()=>{
+    if(closed||document.visibilityState!=='visible')return
+    if(!coreChannel)subscribeCore()
+    void synchronizeLatest()
   }
 
   back.addEventListener('click',backView)
@@ -655,15 +704,19 @@ export async function openChat(options:OpenChatOptions){
   list.addEventListener('ended',onAudioState,true)
   document.addEventListener('pointerdown',onDocumentPointer)
   window.addEventListener('online',onConnectivityReturn)
+  window.addEventListener('offline',onConnectivityLost)
   document.addEventListener('visibilitychange',onVisibilityReturn)
 
   activeCleanup=()=>{
     closed=true;stopVoiceClock()
     if(voiceSession){const session=voiceSession;voiceSession=null;void session.cancel()}
     window.removeEventListener('online',onConnectivityReturn)
+    window.removeEventListener('offline',onConnectivityLost)
     document.removeEventListener('visibilitychange',onVisibilityReturn)
     document.removeEventListener('pointerdown',onDocumentPointer)
-    features?.cleanup();features=null;void coreChannel?.unsubscribe();coreChannel=null
+    cancelCoreReconnect()
+    detachCoreChannel()
+    features?.cleanup();features=null
     back.removeEventListener('click',backView)
     list.removeEventListener('scroll',onScroll)
     composer.removeEventListener('submit',onSubmit)
