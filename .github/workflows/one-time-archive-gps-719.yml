@@ -1,0 +1,66 @@
+name: Archive signed GPS 7.1.9 and clean duplicate work branches
+
+on:
+  push:
+    branches: [main]
+    paths:
+      - '.github/workflows/one-time-archive-gps-719.yml'
+
+permissions:
+  contents: write
+  actions: read
+
+jobs:
+  archive:
+    runs-on: ubuntu-latest
+    env:
+      GH_TOKEN: ${{ github.token }}
+      GH_REPO: ${{ github.repository }}
+      RELEASE_SHA: 9fa0a44a439497f5e372986c63c3fdb22a004877
+      FEATURE_SHA: 28814e67cde40d1a5a36cb3bfa6477b2f98c03f9
+      DUPLICATE_SHA: efac65674e92eb3a5ef722ab0a6c93b82f4e0b8e
+    steps:
+      - uses: actions/checkout@v4
+        with:
+          fetch-depth: 0
+      - name: Verify and preserve permanent signed Android 7.1.9
+        shell: bash
+        run: |
+          set -euo pipefail
+          git merge-base --is-ancestor "$RELEASE_SHA" HEAD
+          test "$(git show "$RELEASE_SHA:android-emergency/app/build.gradle.kts" | grep -c 'versionName = "7.1.9"')" -eq 1
+          test "$(git show "$RELEASE_SHA:android-emergency/app/build.gradle.kts" | grep -c 'versionCode = 18')" -eq 1
+          mkdir -p "$RUNNER_TEMP/gps-719"
+          gh run download 39713494174 -n familia-noa-permanent-signed-apk -D "$RUNNER_TEMP/gps-719"
+          mapfile -t apks < <(find "$RUNNER_TEMP/gps-719" -type f -name app-release.apk)
+          test "${#apks[@]}" -eq 1
+          apk="${apks[0]}"
+          test -s "$apk"
+          test -s "$apk.sha256"
+          expected="$(awk 'NR==1 {print $1}' "$apk.sha256")"
+          actual="$(sha256sum "$apk" | cut -d' ' -f1)"
+          test "$actual" = "$expected"
+          destination="$RUNNER_TEMP/familia-noa-7.1.9.apk"
+          cp "$apk" "$destination"
+          printf '%s  familia-noa-7.1.9.apk\n' "$actual" > "$destination.sha256"
+          gh release create v7.1.9 "$destination" "$destination.sha256" --target "$RELEASE_SHA" --title "FAMILIA NOA 7.1.9 · Primera ubicación más rápida" --notes "Instalable encima de 7.1.8, Android versionCode 18, mismo paquete/certificado permanente. Sin esperas artificiales de 400ms al regresar de Ajustes Android ni 3s de espera redundante de red. Continúan las dos muestras independientes y los filtros GPS de precisión y frescura. Supabase Realtime y mapa sin cambios funcionales. La velocidad real debe verificarse en dos teléfonos. Build firmado GitHub Actions 39713494174."
+          test "$(gh api "repos/$GH_REPO/git/ref/tags/v7.1.9" --jq '.object.sha')" = "$RELEASE_SHA"
+          gh release view v7.1.9 --json assets --jq '.assets[].name' | grep -qx familia-noa-7.1.9.apk
+          gh release view v7.1.9 --json assets --jq '.assets[].name' | grep -qx familia-noa-7.1.9.apk.sha256
+      - name: Remove only proven redundant GPS work branches
+        shell: bash
+        run: |
+          set -euo pipefail
+          git merge-base --is-ancestor "$FEATURE_SHA" HEAD
+          branch='perf/gps-first-activation-719'
+          test "$(gh api "repos/$GH_REPO/git/ref/heads/$branch" --jq '.object.sha')" = "$FEATURE_SHA"
+          gh api --method DELETE "repos/$GH_REPO/git/refs/heads/$branch" >/dev/null
+          # This was an auxiliary PR with the SAME native files; ensure
+          # their exact blob content is already present in the release SHA.
+          for path in android-emergency/app/src/main/java/com/familianoa/emergency/FamilyLocationTracker.kt android-emergency/app/build.gradle.kts; do
+            test "$(git rev-parse "$DUPLICATE_SHA:$path")" = "$(git rev-parse "$RELEASE_SHA:$path")"
+          done
+          branch='perf/gps-first-fix-native-only-719'
+          test "$(gh api "repos/$GH_REPO/git/ref/heads/$branch" --jq '.object.sha')" = "$DUPLICATE_SHA"
+          gh api --method DELETE "repos/$GH_REPO/git/refs/heads/$branch" >/dev/null
+          echo 'Both temporary GPS branches deleted. main and HAVANA QUOTES experiment preserved.'
