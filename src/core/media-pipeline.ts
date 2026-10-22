@@ -70,7 +70,7 @@ export async function optimizeAvatar(file:File,maxSide=256,quality=.78):Promise<
 export async function optimizePhoto(file:File,maxSide=1200,quality=.78):Promise<OptimizedPhoto>{
   if(file.type==='image/gif')throw new Error('GIF_NOT_SUPPORTED')
 
-  if((file.type==='image/jpeg'||file.type==='image/webp')&&file.size<=220*1024){
+  if((file.type==='image/jpeg'||file.type==='image/webp')&&file.size<=440*1024){
     const ext=file.type==='image/webp'?'webp':'jpg'
     return{blob:file,type:file.type,name:file.name||`foto.${ext}`,ext,width:0,height:0}
   }
