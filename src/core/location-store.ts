@@ -20,22 +20,36 @@ export type FamilyLocation={
 // window. Keep older coordinates in storage for controlled retention only.
 export const LIVE_LOCATION_WINDOW_MS=75_000
 export const MAX_LIVE_ACCURACY_M=65
-// Foreground map sessions require a newly confirmed server observation
-// instead of showing an older coordinate just because it is <75s old.
-let currentViewStartedAt=0
-export function requireNewFamilyLocationFix(){
-  currentViewStartedAt=Date.now()-2_000
-  publish()
-}
+// A recent server-confirmed point can stay visible across app reopen/resume.
+// Positions still expire automatically after the freshness window.
 export function isLiveFamilyLocation(updatedAt:string, now=Date.now()){
   const age=now-Date.parse(updatedAt)
   return Number.isFinite(age)&&age>=-15_000&&age<LIVE_LOCATION_WINDOW_MS
 }
+const PENDING_STOP_KEY='familia-noa-gps-stop-pending-v1'
+const ACTIVATION_KEY='familia-noa-gps-activation-v1'
+
+// A voluntary OFF action must conceal this phone's former marker immediately,
+// even if the network is unavailable or a refresh races the server deletion.
+function locationAllowedByLocalConsent(row:FamilyLocation){
+  try{
+    const stop=JSON.parse(localStorage.getItem(PENDING_STOP_KEY)||'null')
+    if(stop?.memberId===row.member_id)return false
+    const activation=JSON.parse(localStorage.getItem(ACTIVATION_KEY)||'null')
+    if(activation?.memberId===row.member_id && Number.isFinite(activation?.at) &&
+       Date.parse(row.updated_at)<activation.at-3_000)return false
+  }catch{}
+  return true
+}
+
+export function notifyFamilyLocationPrivacyChanged(){
+  publish()
+}
+
 export function isCurrentFamilyLocation(row:FamilyLocation, now=Date.now()){
-  return isLiveFamilyLocation(row.updated_at,now)&&
+  return locationAllowedByLocalConsent(row)&&isLiveFamilyLocation(row.updated_at,now)&&
     typeof row.accuracy==='number'&&Number.isFinite(row.accuracy)&&
     row.accuracy>=0&&row.accuracy<=MAX_LIVE_ACCURACY_M&&
-    Date.parse(row.updated_at)>=currentViewStartedAt&&
     Number.isFinite(row.latitude)&&Number.isFinite(row.longitude)&&
     row.latitude>=-90&&row.latitude<=90&&row.longitude>=-180&&row.longitude<=180
 }
@@ -258,7 +272,6 @@ export async function stopSharingOwnLocation(){
 
 document.addEventListener('visibilitychange',()=>{
   if(!document.hidden&&listeners.size){
-    requireNewFamilyLocationFix()
     startRealtime()
     void refreshLocationState({force:true})
   }
@@ -266,7 +279,6 @@ document.addEventListener('visibilitychange',()=>{
 
 window.addEventListener('familia-noa:android-resumed',()=>{
   if(!listeners.size)return
-  requireNewFamilyLocationFix()
   void refreshLocationState({force:true})
 })
 

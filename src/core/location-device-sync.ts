@@ -1,5 +1,5 @@
 import { getMemberId } from './identity'
-import { getLocationState, refreshLocationState, saveOwnLocation } from './location-store'
+import { getLocationState, refreshLocationState, saveOwnLocation, notifyFamilyLocationPrivacyChanged } from './location-store'
 
 const MIN_WRITE_GAP_MS=4_000
 const MAX_SILENCE_MS=20_000
@@ -231,8 +231,17 @@ function useNativeIfAlreadyEnabled(memberId:string){
 
 export function startOwnLocationRealtime(memberId=getMemberId(),activateNative=true){
   if(!memberId)return
-  // Only explicit activation calls this path after a pending server deletion.
+  // When sharing is explicitly re-enabled, wait for a position published
+  // AFTER that decision; the last row from the previous session isn't live.
+  if(activateNative&&nativeBridge()&&!isNativeLocationSharingEnabled()){
+    try{
+      localStorage.setItem('familia-noa-gps-activation-v1',JSON.stringify({
+        memberId,at:Date.now(),
+      }))
+    }catch{}
+  }
   clearLocationStopPending(memberId)
+  notifyFamilyLocationPrivacyChanged()
   activeMemberId=memberId
 
   const bridge=nativeBridge()
