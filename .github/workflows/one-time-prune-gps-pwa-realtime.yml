@@ -1,0 +1,31 @@
+name: Remove verified merged GPS PWA optimization branch
+
+on:
+  push:
+    branches: [main]
+    paths:
+      - '.github/workflows/one-time-prune-gps-pwa-realtime.yml'
+
+permissions:
+  contents: write
+
+jobs:
+  prune:
+    runs-on: ubuntu-latest
+    env:
+      GH_TOKEN: ${{ github.token }}
+      GH_REPO: ${{ github.repository }}
+      VERIFIED_HEAD: 4969713ef12b5daa157123d8d1f72a411f1b3a1a
+      STALE_BRANCH: perf/gps-web-realtime-consistency-20261021
+    steps:
+      - uses: actions/checkout@v4
+        with:
+          fetch-depth: 0
+      - name: Verify merged head and remove exactly one temporary branch
+        shell: bash
+        run: |
+          set -euo pipefail
+          git merge-base --is-ancestor "$VERIFIED_HEAD" HEAD
+          test "$(gh api "repos/$GH_REPO/git/ref/heads/$STALE_BRANCH" --jq '.object.sha')" = "$VERIFIED_HEAD"
+          gh api --method DELETE "repos/$GH_REPO/git/refs/heads/$STALE_BRANCH" >/dev/null
+          echo "Deleted only merged GPS PWA branch. main and HAVANA QUOTES experiment untouched."
