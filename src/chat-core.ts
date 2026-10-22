@@ -459,7 +459,9 @@ export async function openChat(options:OpenChatOptions){
       const alreadySent=await existingMessage(job.id)
       if(alreadySent){await finishPendingMedia(job,alreadySent);return}
       const prepared=await prepareJobMedia(job)
-      const posterPromise=job.mediaKind==='video'?createVideoPoster(job.file):Promise.resolve<Blob|null>(null)
+      // Do not hold up message delivery for up to eight seconds waiting for a
+      // video poster: the original video is the canonical attachment.
+      const posterPromise=job.mediaKind==='video'?createVideoPoster(job.file,640,.76,2500):Promise.resolve<Blob|null>(null)
       path=`chat/${memberId}/${job.id}.${prepared.ext}`
       await uploadChatMedia(path,prepared.blob,{
         contentType:prepared.type,

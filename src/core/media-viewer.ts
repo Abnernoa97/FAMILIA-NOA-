@@ -9,6 +9,9 @@ let index=0
 let closeHandler:(()=>void)|null=null
 let previousHtmlOverflow=''
 let previousBodyOverflow=''
+let imageScale=1
+let imageOffsetX=0
+let imageOffsetY=0
 
 function installRuntimeStyles(){
   if(document.getElementById(STYLE_ID))return
@@ -33,6 +36,10 @@ function installRuntimeStyles(){
       max-width:100vw!important;max-height:100dvh!important;object-fit:contain!important;background:#000!important;
     }
     .family-media-image[hidden],.family-media-video[hidden]{display:none!important}
+    .family-media-image{touch-action:none!important;transform-origin:center center!important;will-change:transform!important}
+    .family-media-open-video{position:fixed!important;z-index:2147483100!important;bottom:max(20px,calc(env(safe-area-inset-bottom) + 12px))!important;left:50%!important;transform:translateX(-50%)!important;max-width:calc(100vw - 30px)!important;padding:10px 16px!important;border:1px solid #ffffff66!important;border-radius:999px!important;background:#151515de!important;color:white!important;font:500 12px system-ui,sans-serif!important;text-decoration:none!important;text-align:center!important;white-space:normal!important}
+    .family-media-open-video[hidden]{display:none!important}
+    .family-media-video{touch-action:manipulation!important}
     .family-media-close,.family-media-prev,.family-media-next{
       position:fixed!important;z-index:2147483100!important;width:46px!important;height:46px!important;border:0!important;border-radius:50%!important;
       background:rgba(0,0,0,.58)!important;color:#fff!important;display:grid!important;place-items:center!important;padding:0!important;
@@ -85,7 +92,7 @@ function ensure(){
   overlay.hidden=true
   overlay.setAttribute('role','dialog')
   overlay.setAttribute('aria-modal','true')
-  overlay.innerHTML='<div class="family-media-stage"><button type="button" class="family-media-close" aria-label="Cerrar">×</button><button type="button" class="family-media-prev" aria-label="Anterior">‹</button><img class="family-media-image" alt=""><video class="family-media-video" playsinline preload="metadata" hidden></video><button type="button" class="family-media-next" aria-label="Siguiente">›</button><div class="family-media-count"></div></div>'
+  overlay.innerHTML='<div class="family-media-stage"><button type="button" class="family-media-close" aria-label="Cerrar">×</button><button type="button" class="family-media-prev" aria-label="Anterior">‹</button><img class="family-media-image" alt=""><video class="family-media-video" playsinline controls preload="metadata" hidden></video><button type="button" class="family-media-next" aria-label="Siguiente">›</button><div class="family-media-count"></div><a class="family-media-open-video" href="#" hidden>¿Solo escuchas audio? Abrir fuera de la app ↗</a></div>'
   document.body.appendChild(overlay)
 
   overlay.querySelector('.family-media-close')?.addEventListener('click',()=>{
@@ -101,15 +108,108 @@ function ensure(){
   })
 
   const viewerVideo=overlay.querySelector<HTMLVideoElement>('.family-media-video')!
-  viewerVideo.addEventListener('click',event=>{
-    event.stopPropagation()
-    if(viewerVideo.ended)viewerVideo.currentTime=0
-    if(viewerVideo.paused){
-      pauseOtherMedia(viewerVideo)
-      void viewerVideo.play().catch(()=>{})
-    }else viewerVideo.pause()
-  })
+  // Native controls own tap/play/pause/seek interactions. A second click
+  // handler here would fight with platform controls on Android WebView.
   viewerVideo.addEventListener('play',()=>pauseOtherMedia(viewerVideo))
+  // An MP4 container does not guarantee the video codec can be decoded by
+  // Android WebView. Keep native player controls and an external-player route.
+  viewerVideo.addEventListener('error',()=>{ 
+    const external=overlay?.querySelector<HTMLElement>('.family-media-open-video')
+    if(external&&!external.hasAttribute('hidden'))external.textContent='No se pudo reproducir · Abrir fuera de la app ↗'
+  })
+
+  const viewerImage=overlay.querySelector<HTMLImageElement>('.family-media-image')!
+  let pinching=false
+  let startDistance=0
+  let startScale=1
+  let startX=0
+  let startY=0
+  let panX=0
+  let panY=0
+  let lastTapAt=0
+  let lastTapX=0
+  let lastTapY=0
+  const distance=(a:Touch,b:Touch)=>Math.hypot(a.clientX-b.clientX,a.clientY-b.clientY)
+  const applyImageZoom=()=>{
+    const imgW=viewerImage.naturalWidth||1, imgH=viewerImage.naturalHeight||1
+    const frameW=viewerImage.clientWidth||window.innerWidth
+    const frameH=viewerImage.clientHeight||window.innerHeight
+    const fit=Math.min(frameW/imgW,frameH/imgH)
+    const maxX=Math.max(0,(imgW*fit*imageScale-frameW)/2)
+    const maxY=Math.max(0,(imgH*fit*imageScale-frameH)/2)
+    imageOffsetX=Math.max(-maxX,Math.min(maxX,imageOffsetX))
+    imageOffsetY=Math.max(-maxY,Math.min(maxY,imageOffsetY))
+    viewerImage.style.transform=`translate3d(${imageOffsetX}px,${imageOffsetY}px,0) scale(${imageScale})`
+  }
+  viewerImage.addEventListener('touchstart',event=>{
+    if(viewerImage.hidden)return
+    if(event.touches.length>=2){
+      pinching=true
+      startDistance=Math.max(1,distance(event.touches[0],event.touches[1]))
+      startScale=imageScale
+      event.preventDefault()
+      event.stopPropagation()
+    }else if(imageScale>1&&event.touches.length===1){
+      startX=event.touches[0].clientX
+      startY=event.touches[0].clientY
+      panX=imageOffsetX
+      panY=imageOffsetY
+      event.stopPropagation()
+    }
+  },{passive:false})
+  viewerImage.addEventListener('touchmove',event=>{
+    if(viewerImage.hidden)return
+    if(pinching&&event.touches.length>=2){
+      imageScale=Math.max(1,Math.min(5,startScale*distance(event.touches[0],event.touches[1])/startDistance))
+      if(imageScale<=1.01){imageScale=1;imageOffsetX=0;imageOffsetY=0}
+      applyImageZoom()
+      event.preventDefault()
+      event.stopPropagation()
+    }else if(imageScale>1&&event.touches.length===1){
+      imageOffsetX=panX+event.touches[0].clientX-startX
+      imageOffsetY=panY+event.touches[0].clientY-startY
+      applyImageZoom()
+      event.preventDefault()
+      event.stopPropagation()
+    }
+  },{passive:false})
+  viewerImage.addEventListener('touchend',event=>{
+    if(viewerImage.hidden)return
+    if(pinching){
+      if(event.touches.length<2){
+        pinching=false
+        if(event.touches.length===1){
+          startX=event.touches[0].clientX
+          startY=event.touches[0].clientY
+          panX=imageOffsetX
+          panY=imageOffsetY
+        }
+      }
+      event.stopPropagation() // Never turn a pinch into a swipe to another photo.
+      return
+    }
+    if(imageScale>1){
+      if(event.touches.length===0&&event.changedTouches.length){
+        const tap=event.changedTouches[0]
+        const now=performance.now()
+        if(now-lastTapAt<320&&Math.hypot(tap.clientX-lastTapX,tap.clientY-lastTapY)<32){
+          imageScale=1;imageOffsetX=0;imageOffsetY=0;applyImageZoom()
+          lastTapAt=0
+        }else{lastTapAt=now;lastTapX=tap.clientX;lastTapY=tap.clientY}
+      }
+      event.stopPropagation() // While zoomed, horizontal drag pans, not changes photo.
+      return
+    }
+    if(event.changedTouches.length&&event.touches.length===0){
+      const tap=event.changedTouches[0],now=performance.now()
+      if(now-lastTapAt<320&&Math.hypot(tap.clientX-lastTapX,tap.clientY-lastTapY)<32){
+        imageScale=2.5;imageOffsetX=0;imageOffsetY=0;applyImageZoom()
+        lastTapAt=0
+        event.preventDefault()
+        event.stopPropagation()
+      }else{lastTapAt=now;lastTapX=tap.clientX;lastTapY=tap.clientY}
+    }
+  },{passive:false})
 
   let sx=0,sy=0
   overlay.addEventListener('touchstart',event=>{const touch=event.changedTouches[0];sx=touch.clientX;sy=touch.clientY},{passive:true})
@@ -121,6 +221,9 @@ function ensure(){
 }
 
 function resetViewerMedia(root:HTMLElement){
+  imageScale=1
+  imageOffsetX=0
+  imageOffsetY=0
   const image=root.querySelector<HTMLImageElement>('.family-media-image')!
   const video=root.querySelector<HTMLVideoElement>('.family-media-video')!
   try{video.pause()}catch{}
@@ -129,7 +232,9 @@ function resetViewerMedia(root:HTMLElement){
   video.load()
   video.hidden=true
   image.removeAttribute('src')
+  image.style.transform=''
   image.hidden=true
+  root.querySelector<HTMLElement>('.family-media-open-video')?.setAttribute('hidden','')
 }
 
 function show(next:number){
@@ -141,6 +246,14 @@ function show(next:number){
   resetViewerMedia(root)
 
   if(item.type==='video'){
+    const external=root.querySelector<HTMLAnchorElement>('.family-media-open-video')!
+    // Only permit original signed HTTPS links. Blob URLs cannot be opened
+    // outside the WebView and signed URLs are deliberately short-lived.
+    if(/^https:\/\//i.test(item.src)){
+      external.href=item.src
+      external.textContent='¿Solo escuchas audio? Abrir fuera de la app ↗'
+      external.removeAttribute('hidden')
+    }
     video.src=item.src
     if(item.poster)video.poster=item.poster
     video.setAttribute('aria-label',item.alt||'Video')
