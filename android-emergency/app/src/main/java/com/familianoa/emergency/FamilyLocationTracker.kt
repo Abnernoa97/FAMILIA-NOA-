@@ -269,14 +269,15 @@ class FamilyLocationTracker(
                     accuracy = if (location.hasAccuracy()) location.accuracy else null,
                 )
                 if (running && store.locationSharingEnabled && generation == trackingGeneration.get()) {
+                    val firstConfirmedUpload = lastUploadedLocation == null
                     lastUploadedLocation = Location(location)
                     lastUploadAt = System.currentTimeMillis()
                     store.recordLocationUpload()
-                    if (lastUploadedLocation != null && lastUploadAt > 0L) {
-                        Log.i("FamiliaNoaGPS", "Fresh position uploaded, accuracy=${location.accuracy.toInt()}m, " +
-                            "first fix latency=${TimeUnit.NANOSECONDS.toMillis(
-                                SystemClock.elapsedRealtimeNanos() - startedElapsedNanos
-                            )}ms")
+                    if (firstConfirmedUpload) {
+                        val latencyMs = TimeUnit.NANOSECONDS.toMillis(
+                            SystemClock.elapsedRealtimeNanos() - startedElapsedNanos
+                        )
+                        Log.i("FamiliaNoaGPS", "First fresh position uploaded in ${latencyMs}ms (accuracy: ${location.accuracy.toInt()}m)")
                     }
                     if (acquiringFirstLocation) {
                         heartbeatHandler.post { restoreNormalUpdateRate(generation) }
