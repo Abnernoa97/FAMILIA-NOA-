@@ -275,37 +275,27 @@ export async function activateNativeLocationSharing(memberId=getMemberId()):Prom
   const bridge=nativeBridge()
   if(!bridge||!memberId)return false
 
-  const alreadyTracking=getNativeLocationStatus()?.tracking===true
   startOwnLocationRealtime(memberId,true)
   let stableChecks=0
-  // Android 7.1.8 exposes whether the GPS listener actually started.
-  // Await that real acknowledgement rather than two fixed 200ms preference
-  // checks; do not mistake a queued service request for active tracking.
-  for(let attempt=0;attempt<32;attempt++){
+  for(let attempt=0;attempt<16;attempt++){
     if(activeMemberId!==memberId)return false
-    const status=getNativeLocationStatus()
     if(nativeSharingEnabled(bridge)){
-      if(status?.tracking===true){
+      stableChecks++
+      if(stableChecks>=2){
         stopWebWatch()
         publishNativeLocationState()
-        // Only a tracker that was ALREADY running needs an explicit refresh:
-        // a newly started tracker requests its first fresh fix immediately.
-        if(alreadyTracking){
-          try{bridge.refreshLocationSharing?.()}
-          catch(error){console.warn('Native location refresh unavailable',error)}
+        try{
+          if(bridge.refreshLocationSharing?.()===false)return false
+        }catch(error){
+          console.warn('Native family location refresh failed',error)
+          return false
         }
-        return true
-      }
-      // Graceful fallback for older signed Android APKs without status.
-      if(!status && ++stableChecks>=2){
-        stopWebWatch()
-        publishNativeLocationState()
         return true
       }
     }else{
       stableChecks=0
     }
-    await new Promise<void>(resolve=>window.setTimeout(resolve,75))
+    await new Promise<void>(resolve=>window.setTimeout(resolve,200))
   }
   return false
 }
