@@ -92,7 +92,7 @@ function ensure(){
   overlay.hidden=true
   overlay.setAttribute('role','dialog')
   overlay.setAttribute('aria-modal','true')
-  overlay.innerHTML='<div class="family-media-stage"><button type="button" class="family-media-close" aria-label="Cerrar">×</button><button type="button" class="family-media-prev" aria-label="Anterior">‹</button><img class="family-media-image" alt=""><video class="family-media-video" playsinline controls preload="metadata" hidden></video><button type="button" class="family-media-next" aria-label="Siguiente">›</button><div class="family-media-count"></div><a class="family-media-open-video" href="#" hidden>¿Solo escuchas audio? Abrir video con otra app ↗</a></div>'
+  overlay.innerHTML='<div class="family-media-stage"><button type="button" class="family-media-close" aria-label="Cerrar">×</button><button type="button" class="family-media-prev" aria-label="Anterior">‹</button><img class="family-media-image" alt=""><video class="family-media-video" playsinline controls preload="metadata" hidden></video><button type="button" class="family-media-next" aria-label="Siguiente">›</button><div class="family-media-count"></div><a class="family-media-open-video" href="#" hidden>¿Solo escuchas audio? Abrir fuera de la app ↗</a></div>'
   document.body.appendChild(overlay)
 
   overlay.querySelector('.family-media-close')?.addEventListener('click',()=>{
@@ -108,20 +108,14 @@ function ensure(){
   })
 
   const viewerVideo=overlay.querySelector<HTMLVideoElement>('.family-media-video')!
-  viewerVideo.addEventListener('click',event=>{
-    event.stopPropagation()
-    if(viewerVideo.ended)viewerVideo.currentTime=0
-    if(viewerVideo.paused){
-      pauseOtherMedia(viewerVideo)
-      void viewerVideo.play().catch(()=>{})
-    }else viewerVideo.pause()
-  })
+  // Native controls own tap/play/pause/seek interactions. A second click
+  // handler here would fight with platform controls on Android WebView.
   viewerVideo.addEventListener('play',()=>pauseOtherMedia(viewerVideo))
   // An MP4 container does not guarantee the video codec can be decoded by
   // Android WebView. Keep native player controls and an external-player route.
   viewerVideo.addEventListener('error',()=>{ 
     const external=overlay?.querySelector<HTMLElement>('.family-media-open-video')
-    if(external&&!external.hasAttribute('hidden'))external.textContent='No se pudo reproducir · Abrir con otra app ↗'
+    if(external&&!external.hasAttribute('hidden'))external.textContent='No se pudo reproducir · Abrir fuera de la app ↗'
   })
 
   const viewerImage=overlay.querySelector<HTMLImageElement>('.family-media-image')!
@@ -182,7 +176,15 @@ function ensure(){
   viewerImage.addEventListener('touchend',event=>{
     if(viewerImage.hidden)return
     if(pinching){
-      if(event.touches.length<2)pinching=false
+      if(event.touches.length<2){
+        pinching=false
+        if(event.touches.length===1){
+          startX=event.touches[0].clientX
+          startY=event.touches[0].clientY
+          panX=imageOffsetX
+          panY=imageOffsetY
+        }
+      }
       event.stopPropagation() // Never turn a pinch into a swipe to another photo.
       return
     }
@@ -249,7 +251,7 @@ function show(next:number){
     // outside the WebView and signed URLs are deliberately short-lived.
     if(/^https:\/\//i.test(item.src)){
       external.href=item.src
-      external.textContent='¿Solo escuchas audio? Abrir video con otra app ↗'
+      external.textContent='¿Solo escuchas audio? Abrir fuera de la app ↗'
       external.removeAttribute('hidden')
     }
     video.src=item.src
