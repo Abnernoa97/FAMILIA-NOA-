@@ -1,0 +1,31 @@
+name: Prune merged GPS diagnostics branch
+
+on:
+  push:
+    branches: [main]
+    paths:
+      - '.github/workflows/one-time-prune-gps-diagnostics.yml'
+
+permissions:
+  contents: write
+
+jobs:
+  prune:
+    runs-on: ubuntu-latest
+    env:
+      GH_TOKEN: ${{ github.token }}
+      GH_REPO: ${{ github.repository }}
+      VERIFIED_HEAD: 5d33d9869dcf02cbe8e69bb4314d0babd4d6f986
+    steps:
+      - uses: actions/checkout@v4
+        with:
+          fetch-depth: 0
+      - name: Verify merge and delete only temporary diagnostic branch
+        shell: bash
+        run: |
+          set -euo pipefail
+          git merge-base --is-ancestor "$VERIFIED_HEAD" HEAD
+          branch='perf/gps-pwa-latency-diagnostics-20261021'
+          test "$(gh api "repos/$GH_REPO/git/ref/heads/$branch" --jq '.object.sha')" = "$VERIFIED_HEAD"
+          gh api --method DELETE "repos/$GH_REPO/git/refs/heads/$branch" >/dev/null
+          echo 'Only merged GPS diagnostic branch deleted. main and HAVANA QUOTES retained.'
