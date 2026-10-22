@@ -1,4 +1,5 @@
 import { supabase } from '../supabase'
+import { noteFamilyLocationArrived, forgetFamilyLocationTiming } from './location-performance'
 
 export type LocationMember={
   id:string
@@ -148,6 +149,7 @@ function showRealtimeLocationChange(event:{
     const id=event.old?.member_id
     if(typeof id!=='string'||!id)return
     realtimeMutations.set(id,{sequence:++realtimeSequence,location:null})
+    forgetFamilyLocationTiming(id)
     if(!state.locations.some(row=>row.member_id===id))return
     state={
       ...state,
@@ -172,6 +174,7 @@ function showRealtimeLocationChange(event:{
   realtimeMutations.set(incoming.member_id,{
     sequence:++realtimeSequence,location:incoming,
   })
+  noteFamilyLocationArrived(incoming.member_id,incoming.updated_at,'realtime')
   // Before the initial family membership fetch, retain the verified event
   // for reconciliation rather than exposing an unidentified member on screen.
   if(!state.members.some(member=>member.id===incoming.member_id))return
@@ -299,6 +302,11 @@ export async function refreshLocationState(options:{force?:boolean}={}):Promise<
         }
       }
       const locations=[...byMember.values()]
+      // Record anonymous timing for a snapshot only when an event for that
+      // same server timestamp was not already received through Realtime.
+      locations.forEach(location=>
+        noteFamilyLocationArrived(location.member_id,location.updated_at,'snapshot')
+      )
       const profiles=profilesResult.error
         ? state.profiles
         : ((profilesResult.data||[]) as LocationProfile[]).filter(profile=>memberIds.has(profile.member_id))
