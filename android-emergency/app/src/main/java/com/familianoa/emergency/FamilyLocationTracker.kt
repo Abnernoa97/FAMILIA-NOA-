@@ -27,6 +27,7 @@ class FamilyLocationTracker(
         // Higher acquisition frequency is temporary, only until a verified
         // first upload succeeds. After that, restore the normal battery budget.
         private const val ACQUISITION_UPDATE_MS = 1_000L
+        private const val MAX_ACQUISITION_BURST_MS = 30_000L
         private const val MAX_SILENCE_MS = 20_000L
         private const val HEARTBEAT_MS = 30_000L
         private const val MAX_FIX_AGE_MS = 12_000L
@@ -61,7 +62,7 @@ class FamilyLocationTracker(
     @Volatile private var lastUploadAt = 0L
     @Volatile private var startedElapsedNanos = 0L
     // LocationManager listener callbacks are on the main looper.
-    private var acquiringFirstLocation = false
+    @Volatile private var acquiringFirstLocation = false
 
     fun start(): Boolean {
         if (running) return true
@@ -271,6 +272,12 @@ class FamilyLocationTracker(
                     lastUploadedLocation = Location(location)
                     lastUploadAt = System.currentTimeMillis()
                     store.recordLocationUpload()
+                    if (lastUploadedLocation != null && lastUploadAt > 0L) {
+                        Log.i("FamiliaNoaGPS", "Fresh position uploaded, accuracy=${location.accuracy.toInt()}m, " +
+                            "first fix latency=${TimeUnit.NANOSECONDS.toMillis(
+                                SystemClock.elapsedRealtimeNanos() - startedElapsedNanos
+                            )}ms")
+                    }
                     if (acquiringFirstLocation) {
                         heartbeatHandler.post { restoreNormalUpdateRate(generation) }
                     }
@@ -297,12 +304,18 @@ class FamilyLocationTracker(
         val task = object:Runnable {
             override fun run() {
                 if (!running) return
-                val acquiringFirstFix = lastUploadedLocation == null
+                // A 1s acquisition interval is useful briefly, but must not
+                // drain battery indefinitely when there is no GPS or Internet.
+                if (acquiringFirstLocation &&
+                    TimeUnit.NANOSECONDS.toMillis(
+                        SystemClock.elapsedRealtimeNanos() - startedElapsedNanos
+                    ) >= MAX_ACQUISITION_BURST_MS) {
+                    restoreNormalUpdateRate(trackingGeneration.get())
+                }
+                val acquiringFirstFix = lastUploadedLocation == null && acquiringFirstLocation
                 if (acquiringFirstFix || System.currentTimeMillis() - lastUploadAt >= MAX_SILENCE_MS) {
                     requestFreshFix()
                 }
-                // Quick acquisition retries only until the first confirmed
-                // upload; background heartbeat returns to 30s thereafter.
                 heartbeatHandler.postDelayed(this, if (acquiringFirstFix) 8_000L else HEARTBEAT_MS)
             }
         }
