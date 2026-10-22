@@ -1,0 +1,31 @@
+name: Clean merged chat recovery branch
+
+on:
+  push:
+    branches: [main]
+    paths:
+      - '.github/workflows/one-time-prune-chat-recovery.yml'
+
+permissions:
+  contents: write
+
+jobs:
+  prune:
+    runs-on: ubuntu-latest
+    env:
+      GH_TOKEN: ${{ github.token }}
+      GH_REPO: ${{ github.repository }}
+      VERIFIED_HEAD: 1f2a23708ada50575761f856ac34171bb47b567d
+    steps:
+      - uses: actions/checkout@v4
+        with:
+          fetch-depth: 0
+      - name: Remove only merged chat recovery branch
+        shell: bash
+        run: |
+          set -euo pipefail
+          git merge-base --is-ancestor "$VERIFIED_HEAD" HEAD
+          branch='fix/chat-pwa-realtime-recovery'
+          test "$(gh api "repos/$GH_REPO/git/ref/heads/$branch" --jq '.object.sha')" = "$VERIFIED_HEAD"
+          gh api --method DELETE "repos/$GH_REPO/git/refs/heads/$branch" >/dev/null
+          echo 'Removed only the merged temporary chat branch.'
