@@ -1,0 +1,31 @@
+name: Clean verified merged chat media branch
+
+on:
+  push:
+    branches: [main]
+    paths:
+      - '.github/workflows/one-time-prune-chat-media-20261022.yml'
+
+permissions:
+  contents: write
+
+jobs:
+  prune:
+    runs-on: ubuntu-latest
+    env:
+      GH_TOKEN: ${{ github.token }}
+      GH_REPO: ${{ github.repository }}
+      VERIFIED_HEAD: cc5fef5a1a9aec152cacf481bd66b8a7053323ec
+    steps:
+      - uses: actions/checkout@v4
+        with:
+          fetch-depth: 0
+      - name: Verify merge and remove only temporary chat branch
+        shell: bash
+        run: |
+          set -euo pipefail
+          git merge-base --is-ancestor "$VERIFIED_HEAD" HEAD
+          branch='fix/chat-photo-zoom-video-playback-20261022'
+          test "$(gh api "repos/$GH_REPO/git/ref/heads/$branch" --jq '.object.sha')" = "$VERIFIED_HEAD"
+          gh api --method DELETE "repos/$GH_REPO/git/refs/heads/$branch" >/dev/null
+          echo 'Removed only merged temporary media branch; main and stories experiment untouched.'
