@@ -1,5 +1,5 @@
 import { getMemberId } from './identity'
-import { getLocationState, refreshLocationState, saveOwnLocation } from './location-store'
+import { getLocationState, refreshLocationState, saveOwnLocation, notifyFamilyLocationPrivacyChanged } from './location-store'
 
 const MIN_WRITE_GAP_MS=4_000
 const MAX_SILENCE_MS=20_000
@@ -233,7 +233,7 @@ export function startOwnLocationRealtime(memberId=getMemberId(),activateNative=t
   if(!memberId)return
   // When sharing is explicitly re-enabled, wait for a position published
   // AFTER that decision; the last row from the previous session isn't live.
-  if(activateNative&&!isNativeLocationSharingEnabled()){
+  if(activateNative&&nativeBridge()&&!isNativeLocationSharingEnabled()){
     try{
       localStorage.setItem('familia-noa-gps-activation-v1',JSON.stringify({
         memberId,at:Date.now(),
@@ -241,6 +241,7 @@ export function startOwnLocationRealtime(memberId=getMemberId(),activateNative=t
     }catch{}
   }
   clearLocationStopPending(memberId)
+  notifyFamilyLocationPrivacyChanged()
   activeMemberId=memberId
 
   const bridge=nativeBridge()
