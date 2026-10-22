@@ -231,7 +231,15 @@ function useNativeIfAlreadyEnabled(memberId:string){
 
 export function startOwnLocationRealtime(memberId=getMemberId(),activateNative=true){
   if(!memberId)return
-  // Only explicit activation calls this path after a pending server deletion.
+  // When sharing is explicitly re-enabled, wait for a position published
+  // AFTER that decision; the last row from the previous session isn't live.
+  if(activateNative&&!isNativeLocationSharingEnabled()){
+    try{
+      localStorage.setItem('familia-noa-gps-activation-v1',JSON.stringify({
+        memberId,at:Date.now(),
+      }))
+    }catch{}
+  }
   clearLocationStopPending(memberId)
   activeMemberId=memberId
 
