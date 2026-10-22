@@ -257,14 +257,17 @@ class FamilyLocationTracker(
         val task = object:Runnable {
             override fun run() {
                 if (!running) return
-                if (System.currentTimeMillis() - lastUploadAt >= MAX_SILENCE_MS) {
+                val acquiringFirstFix = lastUploadedLocation == null
+                if (acquiringFirstFix || System.currentTimeMillis() - lastUploadAt >= MAX_SILENCE_MS) {
                     requestFreshFix()
                 }
-                heartbeatHandler.postDelayed(this, HEARTBEAT_MS)
+                // Quick acquisition retries only until the first confirmed
+                // upload; background heartbeat returns to 30s thereafter.
+                heartbeatHandler.postDelayed(this, if (acquiringFirstFix) 8_000L else HEARTBEAT_MS)
             }
         }
         heartbeat = task
-        heartbeatHandler.postDelayed(task, HEARTBEAT_MS)
+        heartbeatHandler.postDelayed(task, 8_000L)
     }
 
     private fun requestFreshFix() {
