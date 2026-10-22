@@ -26,8 +26,28 @@ export function isLiveFamilyLocation(updatedAt:string, now=Date.now()){
   const age=now-Date.parse(updatedAt)
   return Number.isFinite(age)&&age>=-15_000&&age<LIVE_LOCATION_WINDOW_MS
 }
+const PENDING_STOP_KEY='familia-noa-gps-stop-pending-v1'
+const ACTIVATION_KEY='familia-noa-gps-activation-v1'
+
+// A voluntary OFF action must conceal this phone's former marker immediately,
+// even if the network is unavailable or a refresh races the server deletion.
+function locationAllowedByLocalConsent(row:FamilyLocation){
+  try{
+    const stop=JSON.parse(localStorage.getItem(PENDING_STOP_KEY)||'null')
+    if(stop?.memberId===row.member_id)return false
+    const activation=JSON.parse(localStorage.getItem(ACTIVATION_KEY)||'null')
+    if(activation?.memberId===row.member_id && Number.isFinite(activation?.at) &&
+       Date.parse(row.updated_at)<activation.at-3_000)return false
+  }catch{}
+  return true
+}
+
+export function notifyFamilyLocationPrivacyChanged(){
+  publish()
+}
+
 export function isCurrentFamilyLocation(row:FamilyLocation, now=Date.now()){
-  return isLiveFamilyLocation(row.updated_at,now)&&
+  return locationAllowedByLocalConsent(row)&&isLiveFamilyLocation(row.updated_at,now)&&
     typeof row.accuracy==='number'&&Number.isFinite(row.accuracy)&&
     row.accuracy>=0&&row.accuracy<=MAX_LIVE_ACCURACY_M&&
     Number.isFinite(row.latitude)&&Number.isFinite(row.longitude)&&
